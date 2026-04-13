@@ -323,14 +323,17 @@ def parse_status_update(pane_text: str) -> str | None:
     keep the old spinner/status-line behavior as a fallback.
     """
     status_line = parse_status_line(pane_text)
+    if not status_line:
+        return None
+
     progress_block = parse_public_progress_block(pane_text)
 
-    if progress_block and status_line:
+    if progress_block:
         if status_line not in progress_block:
             return f"{progress_block}\n\n⏳ {status_line}"
         return progress_block
 
-    return progress_block or status_line
+    return status_line
 
 
 # ── Pane chrome stripping & bash output extraction ─────────────────────
