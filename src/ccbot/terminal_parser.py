@@ -316,6 +316,18 @@ def parse_public_progress_block(pane_text: str) -> str | None:
     return None
 
 
+def _is_active_progress_block(progress_block: str | None) -> bool:
+    if not progress_block:
+        return False
+
+    normalized = progress_block.lower()
+    return (
+        normalized.startswith("• working")
+        or normalized.startswith("◦ working")
+        or "esc to interrupt" in normalized
+    )
+
+
 def parse_status_update(pane_text: str) -> str | None:
     """Build the best Telegram status text from a tmux pane capture.
 
@@ -323,10 +335,13 @@ def parse_status_update(pane_text: str) -> str | None:
     keep the old spinner/status-line behavior as a fallback.
     """
     status_line = parse_status_line(pane_text)
+    progress_block = parse_public_progress_block(pane_text)
+
+    if not status_line and _is_active_progress_block(progress_block):
+        return progress_block
+
     if not status_line:
         return None
-
-    progress_block = parse_public_progress_block(pane_text)
 
     if progress_block:
         if status_line not in progress_block:

@@ -86,6 +86,17 @@ class TestParseStatusUpdate:
         pane = f"output\n✻ Reading file src/main.py\n{chrome}"
         assert parse_status_update(pane) == "Reading file src/main.py"
 
+    def test_keeps_codex_working_bullet_status(self, chrome: str):
+        pane = (
+            "• Working (3m 08s • esc to interrupt) · "
+            "1 background terminal running · /ps to …\n"
+            f"{chrome}"
+        )
+        assert parse_status_update(pane) == (
+            "• Working (3m 08s • esc to interrupt) · "
+            "1 background terminal running · /ps to …"
+        )
+
     def test_ignores_final_answer_bullet_when_idle(self, chrome: str):
         """A completed final answer in the pane should not be sent as status."""
         pane = (
