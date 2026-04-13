@@ -116,7 +116,14 @@ async def update_status_message(
             status_text,
             thread_id=thread_id,
         )
-    # If no status line, keep existing status message (don't clear on transient state)
+    else:
+        await enqueue_status_update(
+            bot,
+            user_id,
+            window_id,
+            None,
+            thread_id=thread_id,
+        )
 
 
 async def status_poll_loop(bot: Bot) -> None:

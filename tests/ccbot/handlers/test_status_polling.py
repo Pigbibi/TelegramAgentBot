@@ -103,6 +103,47 @@ class TestStatusPollerSettingsDetection:
             mock_handle_ui.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_idle_pane_clears_stale_status(self, mock_bot: AsyncMock):
+        """Idle panes clear any old Working status message."""
+        window_id = "@5"
+        mock_window = MagicMock()
+        mock_window.window_id = window_id
+        idle_pane = (
+            "─ Worked for 2m 04s ─────────────────────────\n\n"
+            "• Final answer already rendered\n\n"
+            "› Run /review on my current changes\n"
+            "──────────────────────────────────────\n"
+            "  [Opus 4.6] Context: 50%\n"
+        )
+
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch(
+                "ccbot.handlers.status_polling.handle_interactive_ui",
+                new_callable=AsyncMock,
+            ) as mock_handle_ui,
+            patch(
+                "ccbot.handlers.status_polling.enqueue_status_update",
+                new_callable=AsyncMock,
+            ) as mock_enqueue_status,
+        ):
+            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.capture_pane = AsyncMock(return_value=idle_pane)
+
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+
+            mock_handle_ui.assert_not_called()
+            mock_enqueue_status.assert_awaited_once_with(
+                mock_bot,
+                1,
+                window_id,
+                None,
+                thread_id=42,
+            )
+
+    @pytest.mark.asyncio
     async def test_public_progress_block_is_sent_as_status(self, mock_bot: AsyncMock):
         """Recent public progress should show up in Telegram status updates."""
         window_id = "@5"
