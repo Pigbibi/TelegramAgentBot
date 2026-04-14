@@ -203,7 +203,7 @@ CC_COMMANDS: dict[str, str] = {
 
 def _default_directory_browser_path() -> str:
     """Choose a generic starting directory for the project browser."""
-    projects_dir = Path.home() / "Projects"
+    projects_dir = config.default_projects_path.expanduser()
     if projects_dir.is_dir():
         return str(projects_dir)
     return str(Path.home())
