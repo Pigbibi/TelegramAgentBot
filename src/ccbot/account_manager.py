@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -136,6 +137,14 @@ def _disable_codex_update_prompt(config_file: Path) -> None:
         config_file.write_text(new_text, encoding="utf-8")
 
 
+def disable_codex_update_prompt(codex_home: Path | None = None) -> None:
+    """Disable Codex's startup update prompt for the selected CODEX_HOME."""
+    if codex_home is None:
+        env_home = os.getenv("CODEX_HOME")
+        codex_home = Path(env_home).expanduser() if env_home else CODEX_DIR
+    _disable_codex_update_prompt(codex_home / "config.toml")
+
+
 def ensure_account_home(name: str) -> Path:
     """Ensure a dedicated CODEX_HOME exists for one saved snapshot."""
     snapshot_dir = SNAPSHOT_DIR / name
@@ -149,7 +158,7 @@ def ensure_account_home(name: str) -> Path:
         _copy_if_different(snapshot_auth, account_home / "auth.json")
     _copy_if_different(CODEX_DIR / "config.toml", account_home / "config.toml")
     _copy_if_different(CODEX_DIR / "hooks.json", account_home / "hooks.json")
-    _disable_codex_update_prompt(account_home / "config.toml")
+    disable_codex_update_prompt(account_home)
 
     for child in ("memories", "tmp"):
         (account_home / child).mkdir(parents=True, exist_ok=True)

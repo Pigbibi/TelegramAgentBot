@@ -23,7 +23,7 @@ from pathlib import Path
 
 import libtmux
 
-from .account_manager import ensure_account_home
+from .account_manager import disable_codex_update_prompt, ensure_account_home
 from .config import SENSITIVE_ENV_VARS, config
 
 logger = logging.getLogger(__name__)
@@ -474,6 +474,8 @@ class TmuxManager:
 
                 # Start Codex if requested
                 if start_codex:
+                    if not account_name:
+                        disable_codex_update_prompt()
                     pane = window.active_pane
                     if pane:
                         cmd = config.codex_command

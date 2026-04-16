@@ -82,3 +82,19 @@ def test_ensure_account_home_writes_update_check_before_tables(
         "[notice]\n"
         "hide_full_access_warning = true\n"
     )
+
+
+def test_disable_codex_update_prompt_uses_default_codex_home(
+    tmp_path, monkeypatch
+) -> None:
+    codex_dir = tmp_path / "codex"
+    codex_dir.mkdir(parents=True)
+
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.setattr(account_manager, "CODEX_DIR", codex_dir)
+
+    account_manager.disable_codex_update_prompt()
+
+    assert (codex_dir / "config.toml").read_text(encoding="utf-8") == (
+        "check_for_update_on_startup = false\n"
+    )

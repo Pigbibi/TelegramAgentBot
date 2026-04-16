@@ -56,6 +56,7 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
                     manager, "find_window_by_name", AsyncMock(return_value=None)
                 ),
                 patch.object(manager, "get_or_create_session", return_value=session),
+                patch("ccbot.tmux_manager.disable_codex_update_prompt"),
                 patch.object(
                     tmux_manager_module.config,
                     "codex_command",
@@ -100,6 +101,7 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
                     manager, "find_window_by_name", AsyncMock(return_value=None)
                 ),
                 patch.object(manager, "get_or_create_session", return_value=session),
+                patch("ccbot.tmux_manager.disable_codex_update_prompt") as disable_mock,
                 patch.object(
                     tmux_manager_module.config,
                     "codex_command",
@@ -116,6 +118,7 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertTrue(ok)
+        disable_mock.assert_called_once_with()
         self.assertEqual(
             pane.commands,
             [
