@@ -75,12 +75,17 @@ UI_PATTERNS: list[UIPattern] = [
     UIPattern(
         name="PermissionPrompt",
         top=(
+            re.compile(r"^\s*Field\s+\d+/\d+\s*$"),
+            re.compile(r"^\s*Allow .+\?$"),
             re.compile(r"^\s*Do you want to proceed\?"),
             re.compile(r"^\s*Do you want to make this edit"),
             re.compile(r"^\s*Do you want to create \S"),
             re.compile(r"^\s*Do you want to delete \S"),
         ),
-        bottom=(re.compile(r"^\s*Esc to cancel"),),
+        bottom=(
+            re.compile(r"^\s*Esc to cancel", re.IGNORECASE),
+            re.compile(r"^\s*enter to submit\s*\|\s*esc to cancel", re.IGNORECASE),
+        ),
     ),
     UIPattern(
         # Permission menu with numbered choices (no "Esc to cancel" line)

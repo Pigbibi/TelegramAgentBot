@@ -149,6 +149,27 @@ class TestExtractInteractiveContent:
         assert result.name == "PermissionPrompt"
         assert "Do you want to proceed?" in result.content
 
+    def test_codex_field_permission_prompt(self):
+        pane = (
+            "  Field 1/1\n"
+            "  Allow GitHub to create a pull request?\n"
+            "\n"
+            "  Title: [codex] Require explicit strategy profile selection\n"
+            "  Head branch: codex/live-profile-runtime-updates\n"
+            "  Base branch: main\n"
+            "\n"
+            "  › 1. Allow\n"
+            "    2. Allow for this session\n"
+            "    3. Always allow\n"
+            "    4. Cancel\n"
+            "  enter to submit | esc to cancel\n"
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "PermissionPrompt"
+        assert "Allow GitHub to create a pull request?" in result.content
+        assert "enter to submit" in result.content
+
     def test_restore_checkpoint(self):
         pane = (
             "  Restore the code to a previous state?\n"
