@@ -12,6 +12,7 @@ def _base_env(monkeypatch, tmp_path):
     # chdir to tmp_path so load_dotenv won't find the real .env in repo root
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("CCBOT_CODEX_PROJECTS_PATH", raising=False)
+    monkeypatch.delenv("CCBOT_DEFAULT_PROJECTS_PATH", raising=False)
     monkeypatch.delenv("CODEX_HOME", raising=False)
     monkeypatch.delenv("CCBOT_CODEX_COMMAND", raising=False)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test:token")
@@ -98,6 +99,19 @@ class TestConfigCodexProjectsPath:
         monkeypatch.setenv("CODEX_HOME", "/lower/priority")
         cfg = Config()
         assert cfg.codex_projects_path == Path("/priority/path")
+
+
+@pytest.mark.usefixtures("_base_env")
+class TestConfigDefaultProjectsPath:
+    def test_default_projects_path(self, monkeypatch):
+        monkeypatch.delenv("CCBOT_DEFAULT_PROJECTS_PATH", raising=False)
+        cfg = Config()
+        assert cfg.default_projects_path == Path.home() / "Projects"
+
+    def test_custom_default_projects_path(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_DEFAULT_PROJECTS_PATH", "/srv/projects")
+        cfg = Config()
+        assert cfg.default_projects_path == Path("/srv/projects")
 
 
 @pytest.mark.usefixtures("_base_env")

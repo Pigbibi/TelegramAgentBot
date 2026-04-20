@@ -32,9 +32,18 @@ class BrandingStringTests(unittest.TestCase):
         self.assertEqual(bot.USAGE_COMMAND_DESCRIPTION, "Show Codex usage remaining")
 
     def test_default_directory_browser_path_is_not_machine_specific(self) -> None:
-        projects_dir = Path.home() / "Projects"
+        projects_dir = bot.config.default_projects_path
         expected = projects_dir if projects_dir.is_dir() else Path.home()
         self.assertEqual(bot._default_directory_browser_path(), str(expected))
+
+    def test_default_directory_browser_path_uses_configured_projects_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original = bot.config.default_projects_path
+            try:
+                bot.config.default_projects_path = Path(tmpdir)
+                self.assertEqual(bot._default_directory_browser_path(), tmpdir)
+            finally:
+                bot.config.default_projects_path = original
 
 
 if __name__ == "__main__":

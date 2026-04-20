@@ -203,7 +203,7 @@ CC_COMMANDS: dict[str, str] = {
 
 def _default_directory_browser_path() -> str:
     """Choose a generic starting directory for the project browser."""
-    projects_dir = Path.home() / "Projects"
+    projects_dir = config.default_projects_path.expanduser()
     if projects_dir.is_dir():
         return str(projects_dir)
     return str(Path.home())
@@ -1172,7 +1172,6 @@ async def _rotate_thread_after_usage_limit(
         window_name=created_wname,
         account_name=next_account,
     )
-    await session_manager.wait_for_session_map_entry(created_wid, timeout=5.0)
     session_manager.bind_thread(
         user_id,
         thread_id,
@@ -1190,7 +1189,9 @@ async def _rotate_thread_after_usage_limit(
     except Exception as e:
         logger.debug("Failed to rename topic after auto-switch: %s", e)
 
-    send_ok, send_msg = await session_manager.send_to_window(created_wid, text)
+    send_ok, send_msg = await _send_to_window_when_codex_ready(created_wid, text)
+    if send_ok:
+        await _refresh_session_map_after_first_prompt(created_wid)
     if send_ok:
         await safe_send(
             context.bot,
@@ -1209,6 +1210,51 @@ async def _rotate_thread_after_usage_limit(
             message_thread_id=thread_id,
         )
     return True
+
+
+async def _send_to_window_when_codex_ready(
+    window_id: str,
+    text: str,
+    *,
+    timeout: float = 20.0,
+    interval: float = 0.5,
+) -> tuple[bool, str]:
+    """Send text once the new Codex TUI is ready to accept input."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    last_message = ""
+    while asyncio.get_event_loop().time() < deadline:
+        pane_text = await tmux_manager.capture_pane(window_id)
+        if not pane_text or "OpenAI Codex" not in pane_text or "›" not in pane_text:
+            last_message = "Codex UI is still starting"
+            await asyncio.sleep(interval)
+            continue
+        send_ok, send_msg = await session_manager.send_to_window(window_id, text)
+        if send_ok:
+            return True, send_msg
+        last_message = send_msg
+        if "Window is not running Codex" not in send_msg:
+            return False, send_msg
+        await asyncio.sleep(interval)
+    return False, last_message or "Codex did not become ready"
+
+
+async def _refresh_session_map_after_first_prompt(
+    window_id: str,
+    *,
+    timeout: float = 20.0,
+) -> bool:
+    """Load the session_map entry that Codex writes after the first prompt starts."""
+    if session_manager.get_window_state(window_id).session_id:
+        return True
+    hook_ok = await session_manager.wait_for_session_map_entry(
+        window_id, timeout=timeout
+    )
+    if not hook_ok:
+        logger.warning(
+            "Codex window %s accepted input but did not register session_map",
+            window_id,
+        )
+    return hook_ok
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1402,6 +1448,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
+    await _refresh_session_map_after_first_prompt(wid)
 
     # Start background capture for ! bash command output
     if text.startswith("!") and len(text) > 1:
@@ -1465,18 +1512,14 @@ async def _create_and_bind_window(
             resume_session_id,
             launch_account,
         )
-        # Wait for Codex's SessionStart hook to register in session_map.
-        # Resume sessions take longer to start (loading session state), so use
-        # a longer timeout to avoid silently dropping messages.
-        #
-        # Even when session_map.json does not exist yet, the hook may create it
-        # a few seconds later during startup. Falling back to an immediate 0.1s
-        # timeout makes first-message delivery race with Codex startup and can
-        # leave a freshly created window bound before its session is discoverable.
-        hook_timeout = 15.0 if resume_session_id else 5.0
-        hook_ok = await session_manager.wait_for_session_map_entry(
-            created_wid, timeout=hook_timeout
-        )
+        # Current Codex CLIs run SessionStart hooks when the first turn starts,
+        # not when an empty TUI first appears.  Fresh sessions therefore cannot
+        # wait for session_map before forwarding the initial prompt.
+        hook_ok = False
+        if resume_session_id:
+            hook_ok = await session_manager.wait_for_session_map_entry(
+                created_wid, timeout=15.0
+            )
 
         # --resume creates a new session_id in the hook, but messages continue
         # writing to the resumed session's JSONL file. Override window_state to
@@ -1547,10 +1590,12 @@ async def _create_and_bind_window(
                 if context.user_data is not None:
                     context.user_data.pop("_pending_thread_text", None)
                     context.user_data.pop("_pending_thread_id", None)
-                send_ok, send_msg = await session_manager.send_to_window(
+                send_ok, send_msg = await _send_to_window_when_codex_ready(
                     created_wid,
                     pending_text,
                 )
+                if send_ok:
+                    await _refresh_session_map_after_first_prompt(created_wid)
                 if not send_ok:
                     logger.warning("Failed to forward pending text: %s", send_msg)
                     await safe_send(

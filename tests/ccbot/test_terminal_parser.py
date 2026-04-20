@@ -86,6 +86,30 @@ class TestParseStatusUpdate:
         pane = f"output\n✻ Reading file src/main.py\n{chrome}"
         assert parse_status_update(pane) == "Reading file src/main.py"
 
+    def test_keeps_codex_working_bullet_status(self, chrome: str):
+        pane = (
+            "• Working (3m 08s • esc to interrupt) · "
+            "1 background terminal running · /ps to …\n"
+            f"{chrome}"
+        )
+        assert parse_status_update(pane) == (
+            "• Working (3m 08s • esc to interrupt) · "
+            "1 background terminal running · /ps to …"
+        )
+
+    def test_ignores_final_answer_bullet_when_idle(self, chrome: str):
+        """A completed final answer in the pane should not be sent as status."""
+        pane = (
+            "─ Worked for 2m 04s ─────────────────────────\n\n"
+            "• 可以，那我已经按这个范围收住了：\n\n"
+            "  - 后端接口演示环境：已部署到 Azure App Service\n"
+            "    https://gdeiassistant.azurewebsites.net\n\n"
+            "› Run /review on my current changes\n"
+            f"{chrome}"
+        )
+        assert parse_public_progress_block(pane) is not None
+        assert parse_status_update(pane) is None
+
 
 # ── extract_interactive_content ──────────────────────────────────────────
 

@@ -82,6 +82,13 @@ class Config:
         else:
             self.codex_projects_path = Path.home() / ".codex"
 
+        default_projects_path = os.getenv("CCBOT_DEFAULT_PROJECTS_PATH")
+        self.default_projects_path = (
+            Path(default_projects_path).expanduser()
+            if default_projects_path
+            else Path.home() / "Projects"
+        )
+
         self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "2.0"))
 
         # Display user messages in history and real-time notifications
@@ -102,6 +109,12 @@ class Config:
             os.getenv("CCBOT_SHOW_TOOL_CALLS", "true").lower() != "false"
         )
 
+        # Show Codex sessions created outside ccbot in the Telegram resume picker.
+        # Keep this opt-in so local VSCode/CLI history does not clutter Telegram.
+        self.show_external_resume_sessions = (
+            os.getenv("CCBOT_SHOW_EXTERNAL_RESUME_SESSIONS", "").lower() == "true"
+        )
+
         # Show hidden (dot) directories in directory browser
         self.show_hidden_dirs = (
             os.getenv("CCBOT_SHOW_HIDDEN_DIRS", "").lower() == "true"
@@ -120,13 +133,15 @@ class Config:
 
         logger.debug(
             "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
-            "tmux_socket=%s, tmux_session=%s, codex_projects_path=%s",
+            "tmux_socket=%s, tmux_session=%s, codex_projects_path=%s, "
+            "default_projects_path=%s",
             self.config_dir,
             self.telegram_bot_token[:8],
             len(self.allowed_users),
             self.tmux_socket_name,
             self.tmux_session_name,
             self.codex_projects_path,
+            self.default_projects_path,
         )
 
     def is_user_allowed(self, user_id: int) -> bool:

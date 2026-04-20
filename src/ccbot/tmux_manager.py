@@ -23,7 +23,7 @@ from pathlib import Path
 
 import libtmux
 
-from .account_manager import ensure_account_home
+from .account_manager import disable_codex_update_prompt, ensure_account_home
 from .config import SENSITIVE_ENV_VARS, config
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,21 @@ class TmuxManager:
         if config.tmux_socket_name:
             cmd.extend(["-L", config.tmux_socket_name])
         return cmd
+
+    @staticmethod
+    def _literal_submit_delay(text: str) -> float:
+        """Return a small settle delay before submitting literal pasted text.
+
+        Codex's TUI can accept long or multiline Telegram messages more slowly
+        than tmux reports the paste as delivered. If Enter arrives too early it
+        may be interpreted as an input newline instead of prompt submission.
+        """
+        if len(text) <= 512 and "\n" not in text:
+            return 0.5
+
+        char_delay = min(len(text) / 1800.0, 2.0)
+        line_delay = min(text.count("\n") * 0.035, 2.5)
+        return min(max(0.5, 0.5 + char_delay + line_delay), 5.0)
 
     def get_session(self) -> libtmux.Session | None:
         """Get the tmux session if it exists."""
@@ -270,8 +285,8 @@ class TmuxManager:
             # Split into text + delay + Enter via libtmux.
             # Codex's TUI sometimes interprets a rapid-fire Enter
             # (arriving in the same input batch as the text) as a newline
-            # rather than submit.  A 500ms gap lets the TUI process the
-            # text before receiving Enter.
+            # rather than submit.  Long pasted tracebacks need a longer gap
+            # so the TUI can process all text before receiving Enter.
             def _send_literal(chars: str) -> bool:
                 session = self.get_session()
                 if not session:
@@ -351,7 +366,7 @@ class TmuxManager:
             else:
                 if not await asyncio.to_thread(_send_literal, text):
                     return False
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(self._literal_submit_delay(text))
             return await asyncio.to_thread(_send_enter)
 
         # Other cases: special keys (literal=False) or no-enter
@@ -474,6 +489,8 @@ class TmuxManager:
 
                 # Start Codex if requested
                 if start_codex:
+                    if not account_name:
+                        disable_codex_update_prompt()
                     pane = window.active_pane
                     if pane:
                         cmd = config.codex_command

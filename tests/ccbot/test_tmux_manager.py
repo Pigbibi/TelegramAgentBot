@@ -56,6 +56,7 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
                     manager, "find_window_by_name", AsyncMock(return_value=None)
                 ),
                 patch.object(manager, "get_or_create_session", return_value=session),
+                patch("ccbot.tmux_manager.disable_codex_update_prompt"),
                 patch.object(
                     tmux_manager_module.config,
                     "codex_command",
@@ -100,6 +101,7 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
                     manager, "find_window_by_name", AsyncMock(return_value=None)
                 ),
                 patch.object(manager, "get_or_create_session", return_value=session),
+                patch("ccbot.tmux_manager.disable_codex_update_prompt") as disable_mock,
                 patch.object(
                     tmux_manager_module.config,
                     "codex_command",
@@ -116,6 +118,7 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertTrue(ok)
+        disable_mock.assert_called_once_with()
         self.assertEqual(
             pane.commands,
             [
@@ -132,9 +135,7 @@ class _SendKeysDummyPane:
     def __init__(self) -> None:
         self.commands: list[tuple[str, bool, bool]] = []
 
-    def send_keys(
-        self, cmd: str, enter: bool = False, literal: bool = False
-    ) -> None:
+    def send_keys(self, cmd: str, enter: bool = False, literal: bool = False) -> None:
         self.commands.append((cmd, enter, literal))
 
 
@@ -160,6 +161,16 @@ class _SendKeysDummySession:
 
 
 class SendKeysTests(unittest.IsolatedAsyncioTestCase):
+    def test_literal_submit_delay_increases_for_long_multiline_text(self) -> None:
+        short_delay = tmux_manager_module.TmuxManager._literal_submit_delay("hello")
+        long_delay = tmux_manager_module.TmuxManager._literal_submit_delay(
+            "Traceback\n" + ("line\n" * 80) + ("x" * 4000)
+        )
+
+        self.assertEqual(short_delay, 0.5)
+        self.assertGreater(long_delay, short_delay)
+        self.assertLessEqual(long_delay, 5.0)
+
     async def test_send_keys_uses_tmux_cli_for_enter_after_literal_text(self) -> None:
         pane = _SendKeysDummyPane()
         window = _SendKeysDummyWindow(pane)
@@ -180,7 +191,7 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok)
         self.assertEqual(pane.commands, [("hello", False, True)])
         run_mock.assert_called_once_with(
-            ["tmux", "send-keys", "-t", "@9", "Enter"],
+            [*manager._tmux_cli_prefix(), "send-keys", "-t", "@9", "Enter"],
             capture_output=True,
             text=True,
             check=False,

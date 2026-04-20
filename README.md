@@ -210,6 +210,7 @@ For most setups, this is the only file you need to edit.
 | `TMUX_SESSION_NAME` | `ccbot` | tmux session name used by the bot |
 | `CCBOT_CODEX_COMMAND` | `codex` | Command used when creating a new window |
 | `CCBOT_CODEX_PROJECTS_PATH` | `~/.codex` | Transcript root to scan |
+| `CCBOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
 | `MONITOR_POLL_INTERVAL` | `2.0` | Poll interval in seconds |
 | `CCBOT_SHOW_COMMENTARY_MESSAGES` | `false` | Forward Codex commentary/thinking messages |
 | `CCBOT_SHOW_HIDDEN_DIRS` | `false` | Show dot-directories in the directory picker |
