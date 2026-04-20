@@ -161,6 +161,16 @@ class _SendKeysDummySession:
 
 
 class SendKeysTests(unittest.IsolatedAsyncioTestCase):
+    def test_literal_submit_delay_increases_for_long_multiline_text(self) -> None:
+        short_delay = tmux_manager_module.TmuxManager._literal_submit_delay("hello")
+        long_delay = tmux_manager_module.TmuxManager._literal_submit_delay(
+            "Traceback\n" + ("line\n" * 80) + ("x" * 4000)
+        )
+
+        self.assertEqual(short_delay, 0.5)
+        self.assertGreater(long_delay, short_delay)
+        self.assertLessEqual(long_delay, 5.0)
+
     async def test_send_keys_uses_tmux_cli_for_enter_after_literal_text(self) -> None:
         pane = _SendKeysDummyPane()
         window = _SendKeysDummyWindow(pane)
@@ -181,7 +191,7 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok)
         self.assertEqual(pane.commands, [("hello", False, True)])
         run_mock.assert_called_once_with(
-            ["tmux", "send-keys", "-t", "@9", "Enter"],
+            [*manager._tmux_cli_prefix(), "send-keys", "-t", "@9", "Enter"],
             capture_output=True,
             text=True,
             check=False,
