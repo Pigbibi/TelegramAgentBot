@@ -234,7 +234,9 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(manager, "get_session", return_value=session),
-            patch.object(manager, "_paste_buffer_literal", return_value=True) as paste_mock,
+            patch.object(
+                manager, "_paste_buffer_literal", return_value=True
+            ) as paste_mock,
             patch(
                 "ccbot.tmux_manager.subprocess.run",
                 return_value=subprocess.CompletedProcess(
@@ -269,17 +271,25 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok)
         self.assertEqual(run_mock.call_count, 2)
         load_cmd = run_mock.call_args_list[0].args[0]
-        self.assertEqual(load_cmd[: len(manager._tmux_cli_prefix())], manager._tmux_cli_prefix())
         self.assertEqual(
-            load_cmd[len(manager._tmux_cli_prefix()) : len(manager._tmux_cli_prefix()) + 2],
+            load_cmd[: len(manager._tmux_cli_prefix())], manager._tmux_cli_prefix()
+        )
+        self.assertEqual(
+            load_cmd[
+                len(manager._tmux_cli_prefix()) : len(manager._tmux_cli_prefix()) + 2
+            ],
             ["load-buffer", "-b"],
         )
         self.assertEqual(load_cmd[-1], "-")
         self.assertEqual(run_mock.call_args_list[0].kwargs["input"], text)
         paste_cmd = run_mock.call_args_list[1].args[0]
-        self.assertEqual(paste_cmd[: len(manager._tmux_cli_prefix())], manager._tmux_cli_prefix())
         self.assertEqual(
-            paste_cmd[len(manager._tmux_cli_prefix()) : len(manager._tmux_cli_prefix()) + 3],
+            paste_cmd[: len(manager._tmux_cli_prefix())], manager._tmux_cli_prefix()
+        )
+        self.assertEqual(
+            paste_cmd[
+                len(manager._tmux_cli_prefix()) : len(manager._tmux_cli_prefix()) + 3
+            ],
             ["paste-buffer", "-p", "-d"],
         )
         self.assertEqual(paste_cmd[-2:], ["-t", "@9"])
