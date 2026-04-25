@@ -436,9 +436,7 @@ class TmuxManager:
                 rest = text[1:]
                 if rest:
                     await asyncio.sleep(1.0)
-                    use_paste_buffer = (
-                        len(rest) > 512 or "\n" in rest or "\r" in rest
-                    )
+                    use_paste_buffer = len(rest) > 512 or "\n" in rest or "\r" in rest
                     if use_paste_buffer:
                         if not await asyncio.to_thread(
                             self._paste_buffer_literal, window_id, rest
