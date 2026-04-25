@@ -18,6 +18,7 @@ import logging
 import re
 import shlex
 import subprocess
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -103,6 +104,78 @@ class TmuxManager:
             return self.server.sessions.get(session_name=self.session_name)
         except Exception:
             return None
+
+    def _paste_buffer_literal(self, window_id: str, text: str) -> bool:
+        """Paste literal text via a temporary tmux buffer using bracketed paste."""
+        buffer_name = f"ccbot-paste-{uuid.uuid4().hex}"
+        load_cmd = [*self._tmux_cli_prefix(), "load-buffer", "-b", buffer_name, "-"]
+        paste_cmd = [
+            *self._tmux_cli_prefix(),
+            "paste-buffer",
+            "-p",
+            "-d",
+            "-b",
+            buffer_name,
+            "-t",
+            window_id,
+        ]
+        delete_cmd = [*self._tmux_cli_prefix(), "delete-buffer", "-b", buffer_name]
+
+        loaded = False
+        pasted = False
+        try:
+            load_result = subprocess.run(
+                load_cmd,
+                input=text,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if load_result.returncode != 0:
+                stderr = load_result.stderr.strip() or f"exit {load_result.returncode}"
+                logger.error(
+                    "Failed to load tmux paste buffer for window %s: %s",
+                    window_id,
+                    stderr,
+                )
+                return False
+            loaded = True
+
+            paste_result = subprocess.run(
+                paste_cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if paste_result.returncode == 0:
+                pasted = True
+                return True
+
+            stderr = paste_result.stderr.strip() or f"exit {paste_result.returncode}"
+            logger.error(
+                "Failed to bracket-paste text to window %s: %s",
+                window_id,
+                stderr,
+            )
+            return False
+        except Exception as e:
+            logger.error(
+                "Failed to bracket-paste text to window %s: %s",
+                window_id,
+                e,
+            )
+            return False
+        finally:
+            if loaded and not pasted:
+                try:
+                    subprocess.run(
+                        delete_cmd,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                except Exception:
+                    pass
 
     def get_or_create_session(self) -> libtmux.Session:
         """Get existing session or create a new one."""
@@ -287,6 +360,8 @@ class TmuxManager:
             # (arriving in the same input batch as the text) as a newline
             # rather than submit.  Long pasted tracebacks need a longer gap
             # so the TUI can process all text before receiving Enter.
+            use_paste_buffer = len(text) > 512 or "\n" in text or "\r" in text
+
             def _send_literal(chars: str) -> bool:
                 session = self.get_session()
                 if not session:
@@ -361,10 +436,23 @@ class TmuxManager:
                 rest = text[1:]
                 if rest:
                     await asyncio.sleep(1.0)
-                    if not await asyncio.to_thread(_send_literal, rest):
+                    use_paste_buffer = (
+                        len(rest) > 512 or "\n" in rest or "\r" in rest
+                    )
+                    if use_paste_buffer:
+                        if not await asyncio.to_thread(
+                            self._paste_buffer_literal, window_id, rest
+                        ):
+                            return False
+                    elif not await asyncio.to_thread(_send_literal, rest):
                         return False
             else:
-                if not await asyncio.to_thread(_send_literal, text):
+                if use_paste_buffer:
+                    if not await asyncio.to_thread(
+                        self._paste_buffer_literal, window_id, text
+                    ):
+                        return False
+                elif not await asyncio.to_thread(_send_literal, text):
                     return False
             await asyncio.sleep(self._literal_submit_delay(text))
             return await asyncio.to_thread(_send_enter)

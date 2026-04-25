@@ -225,6 +225,65 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_send_keys_uses_bracketed_paste_for_multiline_text(self) -> None:
+        pane = _SendKeysDummyPane()
+        window = _SendKeysDummyWindow(pane)
+        session = _SendKeysDummySession(window)
+        manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
+        text = "line 1\nline 2\nline 3"
+
+        with (
+            patch.object(manager, "get_session", return_value=session),
+            patch.object(manager, "_paste_buffer_literal", return_value=True) as paste_mock,
+            patch(
+                "ccbot.tmux_manager.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    args=["tmux", "send-keys"], returncode=0
+                ),
+            ) as run_mock,
+        ):
+            ok = await manager.send_keys("@9", text)
+
+        self.assertTrue(ok)
+        self.assertEqual(pane.commands, [])
+        paste_mock.assert_called_once_with("@9", text)
+        self.assertEqual(
+            run_mock.call_args_list[0].args[0],
+            [*manager._tmux_cli_prefix(), "send-keys", "-t", "@9", "Enter"],
+        )
+
+    def test_paste_buffer_literal_uses_tmux_bracketed_paste(self) -> None:
+        manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
+        text = "line 1\nline 2\nline 3"
+        run_results = [
+            subprocess.CompletedProcess(args=["tmux", "load-buffer"], returncode=0),
+            subprocess.CompletedProcess(args=["tmux", "paste-buffer"], returncode=0),
+        ]
+
+        with patch(
+            "ccbot.tmux_manager.subprocess.run",
+            side_effect=run_results,
+        ) as run_mock:
+            ok = manager._paste_buffer_literal("@9", text)
+
+        self.assertTrue(ok)
+        self.assertEqual(run_mock.call_count, 2)
+        load_cmd = run_mock.call_args_list[0].args[0]
+        self.assertEqual(load_cmd[: len(manager._tmux_cli_prefix())], manager._tmux_cli_prefix())
+        self.assertEqual(
+            load_cmd[len(manager._tmux_cli_prefix()) : len(manager._tmux_cli_prefix()) + 2],
+            ["load-buffer", "-b"],
+        )
+        self.assertEqual(load_cmd[-1], "-")
+        self.assertEqual(run_mock.call_args_list[0].kwargs["input"], text)
+        paste_cmd = run_mock.call_args_list[1].args[0]
+        self.assertEqual(paste_cmd[: len(manager._tmux_cli_prefix())], manager._tmux_cli_prefix())
+        self.assertEqual(
+            paste_cmd[len(manager._tmux_cli_prefix()) : len(manager._tmux_cli_prefix()) + 3],
+            ["paste-buffer", "-p", "-d"],
+        )
+        self.assertEqual(paste_cmd[-2:], ["-t", "@9"])
+
 
 if __name__ == "__main__":
     unittest.main()
