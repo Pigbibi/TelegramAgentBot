@@ -157,3 +157,47 @@ class TestSessionPickerIsolation:
         create.assert_not_called()
         safe_edit.assert_called_once()
         assert "already active" in safe_edit.await_args.args[1]
+
+    @pytest.mark.asyncio
+    async def test_create_and_bind_window_does_not_rename_topic(self):
+        """Creating a session should preserve the Telegram topic name."""
+
+        class DummyCallbackQuery:
+            def __init__(self) -> None:
+                self.answer = AsyncMock()
+
+        class DummyUser:
+            id = 12345
+
+        query = DummyCallbackQuery()
+        context = _make_context()
+        user = DummyUser()
+
+        with (
+            patch("telegram.CallbackQuery", DummyCallbackQuery),
+            patch("telegram.User", DummyUser),
+            patch("ccbot.bot.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.session_manager") as mock_sm,
+            patch("ccbot.bot.safe_edit", new_callable=AsyncMock) as safe_edit,
+            patch("ccbot.bot.get_default_account_name", return_value=""),
+        ):
+            mock_tmux.create_window = AsyncMock(
+                return_value=(True, "Created window 'project'", "project", "@1")
+            )
+            mock_sm.resolve_chat_id.return_value = -1001234567890
+
+            from ccbot.bot import _create_and_bind_window
+
+            await _create_and_bind_window(
+                query,
+                context,
+                user,
+                "/tmp/project",
+                42,
+            )
+
+        context.bot.edit_forum_topic.assert_not_called()
+        mock_sm.bind_thread.assert_called_once_with(
+            12345, 42, "@1", window_name="project"
+        )
+        safe_edit.assert_awaited_once()

@@ -6,6 +6,7 @@ import pytest
 from telegram.error import TelegramError
 
 from ccbot.handlers.callback_data import CB_WIN_BIND
+from ccbot.session import WindowState
 
 
 def _make_text_update(text: str, user_id: int = 12345, thread_id: int = 42):
@@ -114,6 +115,42 @@ class TestExistingWindowBinding:
             "This window has no tracked Codex session yet. Please choose New Session instead.",
         )
         assert query.answer.await_args.kwargs["show_alert"] is True
+
+    @pytest.mark.asyncio
+    async def test_window_picker_bind_does_not_rename_topic(self):
+        update, query = _make_callback_update(f"{CB_WIN_BIND}0")
+        context = _make_context()
+        context.user_data = {
+            "unbound_windows": ["@1"],
+            "_pending_thread_id": 42,
+        }
+
+        fake_window = MagicMock()
+        fake_window.window_id = "@1"
+        fake_window.window_name = "Projects"
+
+        with (
+            patch("ccbot.bot.is_user_allowed", return_value=True),
+            patch("ccbot.bot._get_thread_id", return_value=42),
+            patch("ccbot.bot.session_manager") as mock_sm,
+            patch("ccbot.bot.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.safe_edit", new_callable=AsyncMock),
+        ):
+            mock_tmux.find_window_by_id = AsyncMock(return_value=fake_window)
+            mock_sm.window_states = {
+                "@1": WindowState(session_id="session-1", cwd="/tmp/project")
+            }
+            mock_sm.resolve_chat_id.return_value = -1001234567890
+
+            from ccbot.bot import callback_handler
+
+            await callback_handler(update, context)
+
+        context.bot.edit_forum_topic.assert_not_called()
+        mock_sm.bind_thread.assert_called_once_with(
+            12345, 42, "@1", window_name="Projects"
+        )
+        query.answer.assert_awaited_once_with("Bound")
 
     @pytest.mark.asyncio
     async def test_bound_topic_continues_when_typing_action_fails(self):
