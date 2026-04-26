@@ -42,6 +42,16 @@ STATUS_POLL_INTERVAL = 1.0  # seconds - faster response (rate limiting at send l
 # Topic existence probe interval
 TOPIC_CHECK_INTERVAL = 60.0  # seconds
 
+# Missing tmux windows are handled lazily by the next user message.  A Codex
+# pane can disappear during local restarts or tmux churn, and immediately
+# deleting the topic binding loses the session id needed to resume it.
+_missing_bound_windows: set[tuple[int, int, str]] = set()
+
+
+def forget_missing_bound_window(user_id: int, thread_id: int, window_id: str) -> None:
+    """Clear the missing-window marker after a binding is recovered or removed."""
+    _missing_bound_windows.discard((user_id, thread_id, window_id))
+
 
 async def update_status_message(
     bot: Bot,
@@ -180,24 +190,25 @@ async def status_poll_loop(bot: Bot) -> None:
 
             for user_id, thread_id, wid in list(session_manager.iter_thread_bindings()):
                 try:
-                    # Clean up stale bindings (window no longer exists)
+                    # Keep stale bindings around so the next user message can
+                    # recreate the tmux window and resume the previous session.
                     w = await tmux_manager.find_window_by_id(wid)
                     if not w:
-                        state = session_manager.window_states.get(wid)
-                        session_id = state.session_id if state else ""
-                        if session_id:
-                            session_manager.hide_session(session_id)
-                        session_manager.unbind_thread(user_id, thread_id)
-                        await session_manager.remove_session_map_entry(wid)
-                        session_manager.remove_window_state(wid)
-                        await clear_topic_state(user_id, thread_id, bot)
-                        logger.info(
-                            "Cleaned up stale binding: user=%d thread=%d window_id=%s",
-                            user_id,
-                            thread_id,
-                            wid,
+                        key = (user_id, thread_id, wid)
+                        if key not in _missing_bound_windows:
+                            _missing_bound_windows.add(key)
+                            logger.info(
+                                "Bound window missing; keeping binding for recovery: "
+                                "user=%d thread=%d window_id=%s",
+                                user_id,
+                                thread_id,
+                                wid,
+                            )
+                        await enqueue_status_update(
+                            bot, user_id, wid, None, thread_id=thread_id
                         )
                         continue
+                    _missing_bound_windows.discard((user_id, thread_id, wid))
 
                     # UI detection happens unconditionally in update_status_message.
                     # Status enqueue is skipped inside update_status_message when
