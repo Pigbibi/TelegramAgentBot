@@ -5,11 +5,12 @@ model picker renders in the terminal, and the status poller detects it
 on its next 1s tick.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ccbot.handlers.status_polling import update_status_message
+from ccbot.handlers.status_polling import status_poll_loop, update_status_message
 
 
 @pytest.fixture
@@ -221,3 +222,39 @@ class TestStatusPollerSettingsDetection:
             assert keyboard is not None
             # Verify the message text contains model picker content
             assert "Select model" in call_kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_missing_bound_window_is_kept_for_recovery(self, mock_bot: AsyncMock):
+        """A vanished tmux window should not immediately erase topic binding state."""
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch("ccbot.handlers.status_polling.session_manager") as mock_sm,
+            patch(
+                "ccbot.handlers.status_polling.enqueue_status_update",
+                new_callable=AsyncMock,
+            ) as mock_enqueue_status,
+            patch(
+                "ccbot.handlers.status_polling.clear_topic_state",
+                new_callable=AsyncMock,
+            ) as mock_clear_topic_state,
+            patch(
+                "ccbot.handlers.status_polling.asyncio.sleep",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError,
+            ),
+        ):
+            mock_sm.iter_thread_bindings.return_value = [(1, 42, "@2")]
+            mock_sm.resolve_chat_id.return_value = -100123
+            mock_tmux.find_window_by_id = AsyncMock(return_value=None)
+
+            with pytest.raises(asyncio.CancelledError):
+                await status_poll_loop(mock_bot)
+
+        mock_sm.unbind_thread.assert_not_called()
+        mock_sm.hide_session.assert_not_called()
+        mock_sm.remove_session_map_entry.assert_not_called()
+        mock_sm.remove_window_state.assert_not_called()
+        mock_clear_topic_state.assert_not_awaited()
+        mock_enqueue_status.assert_awaited_once_with(
+            mock_bot, 1, "@2", None, thread_id=42
+        )

@@ -137,7 +137,7 @@ from .handlers.message_sender import (
 )
 from .markdown_v2 import convert_markdown
 from .handlers.response_builder import build_response_parts
-from .handlers.status_polling import status_poll_loop
+from .handlers.status_polling import forget_missing_bound_window, status_poll_loop
 from .screenshot import text_to_image
 from .session import CodexSession, session_manager
 from .session_monitor import NewMessage, SessionMonitor
@@ -1249,6 +1249,93 @@ async def _refresh_session_map_after_first_prompt(
     return hook_ok
 
 
+async def _recover_missing_bound_window(
+    *,
+    user_id: int,
+    thread_id: int,
+    old_window_id: str,
+    text: str,
+) -> tuple[bool, str]:
+    """Recreate a missing bound tmux window and forward the pending text."""
+    state = session_manager.window_states.get(old_window_id)
+    if not state or not state.session_id or not state.cwd:
+        return False, "missing window has no resumable session state"
+
+    resume_session_id = state.session_id
+    selected_path = state.cwd
+    requested_window_name = state.window_name or session_manager.get_display_name(
+        old_window_id
+    )
+    account_name = state.account_name or None
+    old_offsets = {
+        uid: offsets[old_window_id]
+        for uid, offsets in session_manager.user_window_offsets.items()
+        if old_window_id in offsets
+    }
+
+    success, message, created_wname, created_wid = await tmux_manager.create_window(
+        selected_path,
+        window_name=requested_window_name,
+        resume_session_id=resume_session_id,
+        account_name=account_name,
+    )
+    if not success:
+        return False, message
+
+    session_manager.prepare_window_launch(
+        created_wid,
+        cwd=str(selected_path),
+        window_name=created_wname,
+        account_name=account_name or "",
+    )
+
+    hook_ok = await session_manager.wait_for_session_map_entry(
+        created_wid, timeout=15.0
+    )
+    ws = session_manager.get_window_state(created_wid)
+    if not hook_ok or ws.session_id != resume_session_id:
+        logger.info(
+            "Recovered missing window %s as %s; tracking resumed session_id=%s",
+            old_window_id,
+            created_wid,
+            resume_session_id,
+        )
+        ws.session_id = resume_session_id
+        ws.cwd = str(selected_path)
+        ws.window_name = created_wname
+        ws.account_name = account_name or ""
+        session_manager._save_state()
+
+    session_manager.unhide_session(resume_session_id)
+    session_manager.bind_thread(
+        user_id,
+        thread_id,
+        created_wid,
+        window_name=created_wname,
+    )
+
+    for offset_user_id, offset in old_offsets.items():
+        offsets = session_manager.user_window_offsets.setdefault(offset_user_id, {})
+        offsets[created_wid] = offset
+        offsets.pop(old_window_id, None)
+    if old_offsets:
+        session_manager._save_state()
+
+    await session_manager.remove_session_map_entry(old_window_id)
+    session_manager.remove_window_state(old_window_id)
+    forget_missing_bound_window(user_id, thread_id, old_window_id)
+
+    send_ok, send_msg = await _send_to_window_when_codex_ready(created_wid, text)
+    if send_ok:
+        await _refresh_session_map_after_first_prompt(created_wid)
+        return True, f"Recovered window `{created_wname}` and forwarded your message."
+    return (
+        False,
+        "recovered the tmux window, but forwarding failed: "
+        f"{send_msg}. Please send the message again.",
+    )
+
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -1390,6 +1477,29 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
         display = session_manager.get_display_name(wid)
+        state = session_manager.window_states.get(wid)
+        if state and state.session_id and state.cwd:
+            logger.info(
+                "Recovering missing bound window %s (user=%d, thread=%d)",
+                display,
+                user.id,
+                thread_id,
+            )
+            await safe_reply(
+                update.message,
+                f"♻️ Window `{display}` disappeared. Recreating it and resuming "
+                "the previous session...",
+            )
+            recovered, recovery_message = await _recover_missing_bound_window(
+                user_id=user.id,
+                thread_id=thread_id,
+                old_window_id=wid,
+                text=text,
+            )
+            if not recovered:
+                await safe_reply(update.message, f"❌ {recovery_message}")
+            return
+
         logger.info(
             "Stale binding: window %s gone, unbinding (user=%d, thread=%d)",
             display,

@@ -189,3 +189,69 @@ class TestExistingWindowBinding:
         enqueue_status_update.assert_awaited_once()
         mock_sm.send_to_window.assert_awaited_once_with("@1", "hi")
         safe_reply.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_bound_topic_recovers_missing_window_and_forwards_text(self):
+        update = _make_text_update("continue")
+        context = _make_context()
+        old_state = WindowState(
+            session_id="session-1",
+            cwd="/tmp/project",
+            window_name="Projects-2",
+        )
+        new_state = WindowState()
+
+        with (
+            patch("ccbot.bot.is_user_allowed", return_value=True),
+            patch("ccbot.bot._get_thread_id", return_value=42),
+            patch("ccbot.bot.session_manager") as mock_sm,
+            patch("ccbot.bot.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.safe_reply", new_callable=AsyncMock) as safe_reply,
+            patch(
+                "ccbot.bot._send_to_window_when_codex_ready",
+                new_callable=AsyncMock,
+                return_value=(True, "Sent"),
+            ) as send_when_ready,
+            patch(
+                "ccbot.bot._refresh_session_map_after_first_prompt",
+                new_callable=AsyncMock,
+            ) as refresh_session_map,
+        ):
+            mock_sm.get_window_for_thread.return_value = "@2"
+            mock_sm.get_display_name.return_value = "Projects-2"
+            mock_sm.window_states = {"@2": old_state}
+            mock_sm.user_window_offsets = {12345: {"@2": 99}}
+            mock_sm.wait_for_session_map_entry = AsyncMock(return_value=False)
+            mock_sm.get_window_state.return_value = new_state
+            mock_sm.remove_session_map_entry = AsyncMock()
+            mock_tmux.find_window_by_id = AsyncMock(return_value=None)
+            mock_tmux.create_window = AsyncMock(
+                return_value=(
+                    True,
+                    "Created window 'Projects-2'",
+                    "Projects-2",
+                    "@3",
+                )
+            )
+
+            from ccbot.bot import text_handler
+
+            await text_handler(update, context)
+
+        mock_tmux.create_window.assert_awaited_once_with(
+            "/tmp/project",
+            window_name="Projects-2",
+            resume_session_id="session-1",
+            account_name=None,
+        )
+        mock_sm.bind_thread.assert_called_once_with(
+            12345, 42, "@3", window_name="Projects-2"
+        )
+        mock_sm.remove_session_map_entry.assert_awaited_once_with("@2")
+        mock_sm.remove_window_state.assert_called_once_with("@2")
+        assert mock_sm.user_window_offsets == {12345: {"@3": 99}}
+        assert new_state.session_id == "session-1"
+        assert new_state.cwd == "/tmp/project"
+        send_when_ready.assert_awaited_once_with("@3", "continue")
+        refresh_session_map.assert_awaited_once_with("@3")
+        safe_reply.assert_awaited_once()
