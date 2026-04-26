@@ -247,6 +247,13 @@ class TestExistingWindowBinding:
         mock_sm.bind_thread.assert_called_once_with(
             12345, 42, "@3", window_name="Projects-2"
         )
+        mock_sm.register_session_to_window.assert_called_once_with(
+            "@3",
+            "session-1",
+            "/tmp/project",
+            window_name="Projects-2",
+            persist_session_map=True,
+        )
         mock_sm.remove_session_map_entry.assert_awaited_once_with("@2")
         mock_sm.remove_window_state.assert_called_once_with("@2")
         assert mock_sm.user_window_offsets == {12345: {"@3": 99}}
