@@ -1208,7 +1208,7 @@ async def _send_to_window_when_codex_ready(
     window_id: str,
     text: str,
     *,
-    timeout: float = 20.0,
+    timeout: float = 60.0,
     interval: float = 0.5,
 ) -> tuple[bool, str]:
     """Send text once the new Codex TUI is ready to accept input."""
@@ -1287,6 +1287,13 @@ async def _recover_missing_bound_window(
         cwd=str(selected_path),
         window_name=created_wname,
         account_name=account_name or "",
+    )
+    session_manager.register_session_to_window(
+        created_wid,
+        resume_session_id,
+        str(selected_path),
+        window_name=created_wname,
+        persist_session_map=True,
     )
 
     hook_ok = await session_manager.wait_for_session_map_entry(
@@ -1604,6 +1611,18 @@ async def _create_and_bind_window(
             window_name=created_wname,
             account_name=launch_account or "",
         )
+        if resume_session_id:
+            # A resumed Codex window continues writing to the original JSONL.
+            # Persist that expected session immediately so the transcript
+            # monitor cannot auto-bind an older same-cwd transcript while the
+            # TUI is still restoring.
+            session_manager.register_session_to_window(
+                created_wid,
+                resume_session_id,
+                str(selected_path),
+                window_name=created_wname,
+                persist_session_map=True,
+            )
         logger.info(
             "Window created: %s (id=%s) at %s (user=%d, thread=%s, resume=%s, account=%s)",
             created_wname,
