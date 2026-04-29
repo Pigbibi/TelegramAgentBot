@@ -190,6 +190,7 @@ tail -n 50 ~/.ccbot/logs/ccbot.err.log
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 ALLOWED_USERS=your_telegram_user_id
 CCBOT_CODEX_COMMAND=codex
+CCBOT_AUTO_UPDATE=true
 CCBOT_SHOW_COMMENTARY_MESSAGES=true
 ```
 
@@ -212,12 +213,59 @@ For most setups, this is the only file you need to edit.
 | `CCBOT_CODEX_PROJECTS_PATH` | `~/.codex` | Transcript root to scan |
 | `CCBOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
 | `MONITOR_POLL_INTERVAL` | `2.0` | Poll interval in seconds |
+| `CCBOT_AUTO_UPDATE` | `false` | On startup, check and fast-forward git source installs |
+| `CCBOT_UPDATE_INTERVAL_SECONDS` | `86400` | Minimum seconds between automatic update checks |
+| `CCBOT_UPDATE_REQUIRE_IDLE` | `true` | Apply automatic updates only when no Codex pane is active |
+| `CCBOT_UPDATE_BUSY_RETRY_SECONDS` | `300` | Retry delay when automatic update is deferred by active work |
+| `CCBOT_UPDATE_REMOTE` | upstream remote | Optional git remote override for updates |
+| `CCBOT_UPDATE_BRANCH` | upstream branch | Optional git branch override for updates |
+| `CCBOT_UPDATE_RUN_UV_SYNC` | `true` | Run `uv sync` after a successful git update |
+| `CCBOT_CODEX_UPDATE_CHECK` | `false` | Check npm for Codex CLI updates during the idle update loop |
+| `CCBOT_CODEX_AUTO_UPDATE` | `false` | Run `npm install -g @openai/codex@latest` when an idle Codex update exists |
 | `CCBOT_SHOW_COMMENTARY_MESSAGES` | `false` | Forward Codex commentary/thinking messages |
 | `CCBOT_SHOW_HIDDEN_DIRS` | `false` | Show dot-directories in the directory picker |
 | `OPENAI_API_KEY` | _(none)_ | Used for voice transcription |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Custom OpenAI-compatible endpoint |
 
 Telegram formatting uses MarkdownV2 with plain-text fallback when needed.
+
+### Updates
+
+For source-checkout installs created by the bootstrap scripts, set:
+
+```ini
+CCBOT_AUTO_UPDATE=true
+```
+
+While the bot keeps running, it checks the configured git upstream at most once
+per `CCBOT_UPDATE_INTERVAL_SECONDS`. With the default
+`CCBOT_UPDATE_REQUIRE_IDLE=true`, it first verifies that Telegram delivery queues
+are empty and that no Codex tmux pane is working or waiting for interactive
+input. If work is active, it waits `CCBOT_UPDATE_BUSY_RETRY_SECONDS` and tries
+again.
+
+If the checkout is clean and the update can be applied as a fast-forward, ccbot
+runs `git pull --ff-only`, runs `uv sync`, and restarts itself so the new code is
+loaded. Existing Codex tmux windows and conversations are not killed.
+
+Manual commands:
+
+```bash
+ccbot update --check
+ccbot update
+ccbot codex-update --check
+ccbot codex-update
+ccbot --version
+```
+
+Self-update intentionally skips non-git installs such as `pipx install` or
+`uv tool install`, and it also skips a checkout with local modifications.
+
+Codex CLI checks are separate from ccbot self-update. The example `.env` enables
+`CCBOT_CODEX_UPDATE_CHECK=true`, which only reports when a newer npm package is
+available. Set `CCBOT_CODEX_AUTO_UPDATE=true` only when the service user can
+update the global npm package; otherwise use the manual command with the right
+permissions.
 
 ### Non-interactive servers / VPS
 
