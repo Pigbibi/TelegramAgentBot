@@ -188,6 +188,7 @@ tail -n 50 ~/.ccbot/logs/ccbot.err.log
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 ALLOWED_USERS=your_telegram_user_id
 CCBOT_CODEX_COMMAND=codex
+CCBOT_AUTO_UPDATE=true
 CCBOT_SHOW_COMMENTARY_MESSAGES=true
 ```
 
@@ -210,12 +211,55 @@ CCBOT_SHOW_COMMENTARY_MESSAGES=true
 | `CCBOT_CODEX_PROJECTS_PATH` | `~/.codex` | transcript 扫描根目录 |
 | `CCBOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | 创建新会话时默认展示的目录 |
 | `MONITOR_POLL_INTERVAL` | `2.0` | 轮询间隔，单位秒 |
+| `CCBOT_AUTO_UPDATE` | `false` | 启动时自动检查并 fast-forward 更新 git 源码安装 |
+| `CCBOT_UPDATE_INTERVAL_SECONDS` | `86400` | 两次自动更新检查之间的最短间隔 |
+| `CCBOT_UPDATE_REQUIRE_IDLE` | `true` | 仅在没有活跃 Codex pane 时应用自动更新 |
+| `CCBOT_UPDATE_BUSY_RETRY_SECONDS` | `300` | 因正在工作而延后更新时，多久后再检查一次空闲状态 |
+| `CCBOT_UPDATE_REMOTE` | upstream remote | 可选：指定用于更新的 git remote |
+| `CCBOT_UPDATE_BRANCH` | upstream branch | 可选：指定用于更新的 git branch |
+| `CCBOT_UPDATE_RUN_UV_SYNC` | `true` | git 更新成功后是否执行 `uv sync` |
+| `CCBOT_CODEX_UPDATE_CHECK` | `false` | 在空闲更新循环里检查 Codex CLI 的 npm 新版本 |
+| `CCBOT_CODEX_AUTO_UPDATE` | `false` | 空闲且发现新版本时，执行 `npm install -g @openai/codex@latest` |
 | `CCBOT_SHOW_COMMENTARY_MESSAGES` | `false` | 是否把 Codex commentary/thinking 转发到 Telegram |
 | `CCBOT_SHOW_HIDDEN_DIRS` | `false` | 目录浏览器里是否显示点目录 |
 | `OPENAI_API_KEY` | _(空)_ | 语音转录使用 |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | 自定义 OpenAI 兼容接口 |
 
 消息格式默认走 MarkdownV2，并在需要时自动降级为纯文本。
+
+### 更新
+
+如果是通过 bootstrap 脚本部署的源码安装，可以在 `.env` 里开启：
+
+```ini
+CCBOT_AUTO_UPDATE=true
+```
+
+bot 运行期间会按 `CCBOT_UPDATE_INTERVAL_SECONDS` 周期检查 git upstream。
+默认 `CCBOT_UPDATE_REQUIRE_IDLE=true`，所以更新前会先确认 Telegram
+发送队列为空，并且没有 Codex tmux pane 正在工作或等待交互输入。如果还有任务，
+就按 `CCBOT_UPDATE_BUSY_RETRY_SECONDS` 延后再检查。
+
+如果工作区是干净的，并且可以 fast-forward，就执行 `git pull --ff-only`，
+随后执行 `uv sync` 并重启 ccbot 自身，让新代码生效。已有 Codex tmux
+窗口和对话不会被 kill。
+
+手动命令：
+
+```bash
+ccbot update --check
+ccbot update
+ccbot codex-update --check
+ccbot codex-update
+ccbot --version
+```
+
+自更新只处理 git checkout；`pipx install` 或 `uv tool install` 这类非源码安装会跳过。有本地改动的 checkout 也会跳过，避免覆盖你的修改。
+
+Codex CLI 检查和 ccbot 自更新是分开的。示例 `.env` 会开启
+`CCBOT_CODEX_UPDATE_CHECK=true`，它只会报告 npm 是否有新版本；只有你确认
+运行 ccbot 的用户有权限更新全局 npm 包时，才建议打开
+`CCBOT_CODEX_AUTO_UPDATE=true`。否则可以用手动命令在合适权限下更新。
 
 ### 非交互服务器 / VPS 场景
 

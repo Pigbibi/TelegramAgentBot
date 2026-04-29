@@ -2,7 +2,8 @@
 
 Handles two execution modes:
   1. `ccbot hook` — delegates to hook.hook_main() for Codex hook processing.
-  2. Default — configures logging, initializes tmux session, and starts the
+  2. `ccbot update` — checks and fast-forwards source-checkout installs.
+  3. Default — configures logging, initializes tmux session, and starts the
      Telegram bot polling loop via bot.create_bot().
 """
 
@@ -23,6 +24,11 @@ _INSTANCE_LOCK_HANDLE = None
 _USAGE = """Usage:
   ccbot               Start the Telegram bot
   ccbot hook [args]   Process or install the Codex hook
+  ccbot update [--check]
+                      Check for or apply source-checkout updates
+  ccbot codex-update [--check]
+                      Check for or apply Codex CLI updates
+  ccbot --version     Show version information
   ccbot --help        Show this help message
 """
 
@@ -64,7 +70,9 @@ def _print_usage(stream: TextIO) -> None:
     print(_USAGE, file=stream, end="")
 
 
-def _parse_cli_mode(argv: Sequence[str]) -> Literal["bot", "hook", "exit"]:
+def _parse_cli_mode(
+    argv: Sequence[str],
+) -> Literal["bot", "hook", "update", "codex-update", "version", "exit"]:
     """Parse top-level CLI arguments for ccbot."""
     if not argv:
         return "bot"
@@ -72,6 +80,12 @@ def _parse_cli_mode(argv: Sequence[str]) -> Literal["bot", "hook", "exit"]:
     command = argv[0]
     if command == "hook":
         return "hook"
+    if command == "update":
+        return "update"
+    if command == "codex-update":
+        return "codex-update"
+    if command in {"-V", "--version", "version"}:
+        return "version"
 
     if command in {"-h", "--help", "help"}:
         _print_usage(sys.stdout)
@@ -93,6 +107,19 @@ def main() -> None:
 
         hook_main()
         return
+    if mode == "update":
+        from .updater import update_main
+
+        raise SystemExit(update_main(sys.argv[2:]))
+    if mode == "codex-update":
+        from .updater import codex_update_main
+
+        raise SystemExit(codex_update_main(sys.argv[2:]))
+    if mode == "version":
+        from . import __version__
+
+        print(f"ccbot {__version__}")
+        return
     if mode == "exit":
         return
 
@@ -100,6 +127,10 @@ def main() -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         level=logging.WARNING,
     )
+
+    from .updater import maybe_auto_update
+
+    maybe_auto_update(sys.argv)
 
     # Import config before enabling DEBUG — avoid leaking debug logs on config errors
     try:

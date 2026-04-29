@@ -165,6 +165,7 @@ session_monitor: SessionMonitor | None = None
 
 # Status polling task
 _status_poll_task: asyncio.Task | None = None
+_auto_update_task: asyncio.Task | None = None
 
 PRODUCT_NAME = "Codex"
 WELCOME_MESSAGE = (
@@ -2499,7 +2500,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 
 
 async def post_init(application: Application) -> None:
-    global session_monitor, _status_poll_task
+    global session_monitor, _status_poll_task, _auto_update_task
 
     await application.bot.delete_my_commands()
 
@@ -2549,9 +2550,14 @@ async def post_init(application: Application) -> None:
     _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
     logger.info("Status polling task started")
 
+    from .updater import auto_update_loop
+
+    _auto_update_task = asyncio.create_task(auto_update_loop())
+    logger.info("Auto-update task initialized")
+
 
 async def post_shutdown(application: Application) -> None:
-    global _status_poll_task
+    global _status_poll_task, _auto_update_task
 
     # Stop status polling
     if _status_poll_task:
@@ -2562,6 +2568,15 @@ async def post_shutdown(application: Application) -> None:
             pass
         _status_poll_task = None
         logger.info("Status polling stopped")
+
+    if _auto_update_task:
+        _auto_update_task.cancel()
+        try:
+            await _auto_update_task
+        except asyncio.CancelledError:
+            pass
+        _auto_update_task = None
+        logger.info("Auto-update task stopped")
 
     # Stop all queue workers
     await shutdown_workers()

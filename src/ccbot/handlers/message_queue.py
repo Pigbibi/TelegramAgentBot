@@ -70,6 +70,7 @@ class MessageTask:
 _message_queues: dict[int, asyncio.Queue[MessageTask]] = {}
 _queue_workers: dict[int, asyncio.Task[None]] = {}
 _queue_locks: dict[int, asyncio.Lock] = {}  # Protect drain/refill operations
+_active_queue_users: set[int] = set()
 
 # Map (tool_use_id, user_id, thread_id_or_0) -> telegram message_id
 # for editing tool_use messages with results
@@ -88,6 +89,13 @@ FLOOD_CONTROL_MAX_WAIT = 10
 def get_message_queue(user_id: int) -> asyncio.Queue[MessageTask] | None:
     """Get the message queue for a user (if exists)."""
     return _message_queues.get(user_id)
+
+
+def has_pending_message_work() -> bool:
+    """Return whether Telegram message delivery has queued or active work."""
+    return bool(_active_queue_users) or any(
+        not queue.empty() for queue in _message_queues.values()
+    )
 
 
 def get_or_create_queue(bot: Bot, user_id: int) -> asyncio.Queue[MessageTask]:
@@ -206,6 +214,7 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
     while True:
         try:
             task = await queue.get()
+            _active_queue_users.add(user_id)
             try:
                 # Flood control: drop status, wait for content
                 flood_end = _flood_until.get(user_id, 0)
@@ -265,6 +274,7 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
             except Exception as e:
                 logger.error(f"Error processing message task for user {user_id}: {e}")
             finally:
+                _active_queue_users.discard(user_id)
                 queue.task_done()
         except asyncio.CancelledError:
             logger.info(f"Message queue worker cancelled for user {user_id}")
@@ -692,4 +702,5 @@ async def shutdown_workers() -> None:
     _queue_workers.clear()
     _message_queues.clear()
     _queue_locks.clear()
+    _active_queue_users.clear()
     logger.info("Message queue workers stopped")
