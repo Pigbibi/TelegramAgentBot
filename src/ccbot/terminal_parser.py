@@ -88,6 +88,17 @@ UI_PATTERNS: list[UIPattern] = [
         ),
     ),
     UIPattern(
+        # Codex command approval prompt shown by newer CLIs.
+        name="CommandApproval",
+        top=(re.compile(r"^\s*Would you like to run the following command\?"),),
+        bottom=(
+            re.compile(
+                r"^\s*Press enter to confirm or esc to cancel",
+                re.IGNORECASE,
+            ),
+        ),
+    ),
+    UIPattern(
         # Permission menu with numbered choices (no "Esc to cancel" line)
         name="PermissionPrompt",
         top=(re.compile(r"^\s*❯\s*1\.\s*Yes"),),

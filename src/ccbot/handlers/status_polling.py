@@ -53,6 +53,19 @@ def forget_missing_bound_window(user_id: int, thread_id: int, window_id: str) ->
     _missing_bound_windows.discard((user_id, thread_id, window_id))
 
 
+def _is_active_working_status(status_text: str | None) -> bool:
+    """Return whether a status is important enough to show while queue is busy."""
+    if not status_text:
+        return False
+    normalized = status_text.strip().lower()
+    return (
+        "esc to interrupt" in normalized
+        or normalized.startswith("• working")
+        or normalized.startswith("◦ working")
+        or normalized.startswith("working")
+    )
+
+
 async def update_status_message(
     bot: Bot,
     user_id: int,
@@ -112,11 +125,20 @@ async def update_status_message(
         await handle_interactive_ui(bot, user_id, window_id, thread_id)
         return
 
-    # Normal status line check — skip if queue is non-empty
-    if skip_status:
-        return
-
     status_text = parse_status_update(pane_text)
+
+    # Normal status line check.  If the queue is busy, still allow active
+    # "Working ... esc to interrupt" updates so the topic does not look idle.
+    if skip_status:
+        if _is_active_working_status(status_text):
+            await enqueue_status_update(
+                bot,
+                user_id,
+                window_id,
+                status_text,
+                thread_id=thread_id,
+            )
+        return
 
     if status_text:
         await enqueue_status_update(
