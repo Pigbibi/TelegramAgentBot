@@ -212,6 +212,7 @@ For most setups, this is the only file you need to edit.
 | `CCBOT_CODEX_COMMAND` | `codex` | Command used when creating a new window |
 | `CCBOT_CODEX_PROJECTS_PATH` | `~/.codex` | Transcript root to scan |
 | `CCBOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
+| `CCBOT_PROJECT_ROOTS` | _(none)_ | Optional named roots shown before directory browsing |
 | `MONITOR_POLL_INTERVAL` | `2.0` | Poll interval in seconds |
 | `CCBOT_AUTO_UPDATE` | `false` | On startup, check and fast-forward git source installs |
 | `CCBOT_UPDATE_INTERVAL_SECONDS` | `86400` | Minimum seconds between automatic update checks |
@@ -228,6 +229,21 @@ For most setups, this is the only file you need to edit.
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Custom OpenAI-compatible endpoint |
 
 Telegram formatting uses MarkdownV2 with plain-text fallback when needed.
+
+### Project Roots
+
+To choose a computer, VPS, or mounted workspace before browsing directories,
+configure named roots:
+
+```ini
+CCBOT_PROJECT_ROOTS=Local=~/Projects,Remote=/mnt/remote-projects
+```
+
+When `CCBOT_PROJECT_ROOTS` is set, a new Telegram topic first shows a
+computer/VPS picker, even if only one root is configured. After selecting one,
+the normal directory browser starts at that root and does not navigate above it.
+Other computers or VPSes must be reachable as local paths from the machine
+running ccbot, for example through SSHFS or NFS mounts.
 
 ### Updates
 

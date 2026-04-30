@@ -58,6 +58,7 @@ WorkingDirectory=$CCBOT_DIR
 ExecStart=$LAUNCHER_PATH
 Restart=always
 RestartSec=3
+KillMode=process
 Environment=PATH=$PATH_VALUE
 Environment=HOME=$HOME
 StandardOutput=append:$LOG_DIR/ccbot.out.log

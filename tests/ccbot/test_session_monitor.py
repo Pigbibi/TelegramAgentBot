@@ -1,8 +1,9 @@
 """Unit tests for SessionMonitor JSONL reading and offset handling."""
 
 import json
+import os
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from unittest.mock import patch
 
 import pytest
@@ -309,6 +310,51 @@ class TestReadNewLinesOffsetRecovery:
 
             await monitor._auto_bind_session_to_window(
                 "session-7",
+                "/tmp/project",
+                mock_sm,
+                session_file=jsonl_file,
+            )
+
+        mock_sm.register_session_to_window.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_old_transcript_for_pending_fresh_window(
+        self, monitor, tmp_path
+    ):
+        """A fresh bound window must not be claimed by an older same-cwd transcript."""
+        jsonl_file = tmp_path / "old-session.jsonl"
+        jsonl_file.write_text("{}\n", encoding="utf-8")
+        os.utime(jsonl_file, (1000, 1000))
+
+        state = SimpleNamespace(
+            session_id="",
+            cwd="/tmp/project",
+            window_name="project-1",
+            launch_started_at=2000.0,
+        )
+        mock_sm = SimpleNamespace(
+            iter_thread_bindings=lambda: [(100, 1, "@1")],
+            get_window_state=lambda _wid: state,
+            register_session_to_window=MagicMock(),
+        )
+
+        with (
+            patch("ccbot.session_monitor.list_account_homes", return_value=[]),
+            patch("ccbot.session_monitor.tmux_manager") as mock_tmux,
+        ):
+            mock_tmux.list_windows = AsyncMock(
+                return_value=[
+                    SimpleNamespace(
+                        window_id="@1",
+                        cwd="/tmp/project",
+                        window_name="project-1",
+                        pane_current_command="node",
+                    )
+                ]
+            )
+
+            await monitor._auto_bind_session_to_window(
+                "old-session",
                 "/tmp/project",
                 mock_sm,
                 session_file=jsonl_file,

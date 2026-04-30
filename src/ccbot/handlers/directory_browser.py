@@ -2,6 +2,7 @@
 
 Provides UIs in Telegram for:
   - Window picker: list unbound tmux windows for quick binding
+  - Project root picker: choose a named local/mounted computer or VPS root
   - Directory browser: navigate directory hierarchies to create new sessions
 
 Key components:
@@ -21,13 +22,15 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..session import CodexSession
 
-from ..config import config
+from ..config import ProjectRoot, config
 from .callback_data import (
     CB_DIR_CANCEL,
     CB_DIR_CONFIRM,
     CB_DIR_PAGE,
     CB_DIR_SELECT,
     CB_DIR_UP,
+    CB_ROOT_CANCEL,
+    CB_ROOT_SELECT,
     CB_SESSION_CANCEL,
     CB_SESSION_NEW,
     CB_SESSION_SELECT,
@@ -41,9 +44,13 @@ DIRS_PER_PAGE = 6
 
 # User state keys
 STATE_KEY = "state"
+STATE_SELECTING_ROOT = "selecting_root"
 STATE_BROWSING_DIRECTORY = "browsing_directory"
 STATE_SELECTING_WINDOW = "selecting_window"
+ROOTS_KEY = "project_roots"  # Cache of (label, path) tuples
 BROWSE_PATH_KEY = "browse_path"
+BROWSE_ROOT_LABEL_KEY = "browse_root_label"
+BROWSE_ROOT_PATH_KEY = "browse_root_path"
 BROWSE_PAGE_KEY = "browse_page"
 BROWSE_DIRS_KEY = "browse_dirs"  # Cache of subdirs for current path
 UNBOUND_WINDOWS_KEY = "unbound_windows"  # Cache of (name, cwd) tuples
@@ -55,9 +62,19 @@ def clear_browse_state(user_data: dict | None) -> None:
     """Clear directory browsing state keys from user_data."""
     if user_data is not None:
         user_data.pop(STATE_KEY, None)
+        user_data.pop(ROOTS_KEY, None)
         user_data.pop(BROWSE_PATH_KEY, None)
+        user_data.pop(BROWSE_ROOT_LABEL_KEY, None)
+        user_data.pop(BROWSE_ROOT_PATH_KEY, None)
         user_data.pop(BROWSE_PAGE_KEY, None)
         user_data.pop(BROWSE_DIRS_KEY, None)
+
+
+def clear_root_picker_state(user_data: dict | None) -> None:
+    """Clear project root picker state keys from user_data."""
+    if user_data is not None:
+        user_data.pop(STATE_KEY, None)
+        user_data.pop(ROOTS_KEY, None)
 
 
 def clear_window_picker_state(user_data: dict | None) -> None:
@@ -72,6 +89,39 @@ def clear_session_picker_state(user_data: dict | None) -> None:
     if user_data is not None:
         user_data.pop(STATE_KEY, None)
         user_data.pop(SESSIONS_KEY, None)
+
+
+def build_project_root_picker(
+    roots: list[ProjectRoot],
+) -> tuple[str, InlineKeyboardMarkup, list[tuple[str, str]]]:
+    """Build project root picker UI.
+
+    Args:
+        roots: Named root directories configured for the bot.
+
+    Returns: (text, keyboard, cached_roots).
+    """
+    cached_roots = [(root.label, str(root.path)) for root in roots]
+    lines = [
+        "*Select Computer / VPS*\n",
+        "Pick where this new Codex session should start.\n",
+    ]
+    buttons: list[list[InlineKeyboardButton]] = []
+    for i, root in enumerate(roots):
+        display_path = str(root.path).replace(str(Path.home()), "~")
+        lines.append(f"• `{root.label}` — {display_path}")
+        label = root.label[:18] + "…" if len(root.label) > 19 else root.label
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"🖥 {label}",
+                    callback_data=f"{CB_ROOT_SELECT}{i}",
+                )
+            ]
+        )
+
+    buttons.append([InlineKeyboardButton("Cancel", callback_data=CB_ROOT_CANCEL)])
+    return "\n".join(lines), InlineKeyboardMarkup(buttons), cached_roots
 
 
 def build_window_picker(
@@ -119,16 +169,42 @@ def build_window_picker(
     return text, InlineKeyboardMarkup(buttons), window_ids
 
 
+def _resolve_browser_paths(
+    current_path: str,
+    root_path: str | None,
+) -> tuple[Path, Path | None]:
+    """Resolve and clamp the browser path to an optional configured root."""
+
+    root = Path(root_path).expanduser().resolve() if root_path else None
+    path = Path(current_path).expanduser().resolve()
+
+    if root is not None:
+        if not root.exists() or not root.is_dir():
+            root = None
+        elif not (path == root or root in path.parents):
+            path = root
+
+    if not path.exists() or not path.is_dir():
+        if root is not None:
+            path = root
+        else:
+            path = Path.cwd()
+
+    return path, root
+
+
 def build_directory_browser(
-    current_path: str, page: int = 0
+    current_path: str,
+    page: int = 0,
+    *,
+    root_label: str | None = None,
+    root_path: str | None = None,
 ) -> tuple[str, InlineKeyboardMarkup, list[str]]:
     """Build directory browser UI.
 
     Returns: (text, keyboard, subdirs) where subdirs is the full list for caching.
     """
-    path = Path(current_path).expanduser().resolve()
-    if not path.exists() or not path.is_dir():
-        path = Path.cwd()
+    path, root = _resolve_browser_paths(current_path, root_path)
 
     try:
         subdirs = sorted(
@@ -178,17 +254,37 @@ def build_directory_browser(
 
     action_row: list[InlineKeyboardButton] = []
     # Allow going up unless at filesystem root
-    if path != path.parent:
+    if path != path.parent and (root is None or path != root):
         action_row.append(InlineKeyboardButton("..", callback_data=CB_DIR_UP))
     action_row.append(InlineKeyboardButton("Select", callback_data=CB_DIR_CONFIRM))
     action_row.append(InlineKeyboardButton("Cancel", callback_data=CB_DIR_CANCEL))
     buttons.append(action_row)
 
     display_path = str(path).replace(str(Path.home()), "~")
+    root_line = ""
+    if root_label:
+        display_root = (
+            str(root or Path(root_path or "")).replace(str(Path.home()), "~")
+            if root_path
+            else ""
+        )
+        root_line = f"Root: `{root_label}`"
+        if display_root:
+            root_line += f" — {display_root}"
+        root_line += "\n"
     if not subdirs:
-        text = f"*Select Working Directory*\n\nCurrent: `{display_path}`\n\n_(No subdirectories)_"
+        text = (
+            f"*Select Working Directory*\n\n"
+            f"{root_line}"
+            f"Current: `{display_path}`\n\n_(No subdirectories)_"
+        )
     else:
-        text = f"*Select Working Directory*\n\nCurrent: `{display_path}`\n\nTap a folder to enter, or select current directory"
+        text = (
+            f"*Select Working Directory*\n\n"
+            f"{root_line}"
+            f"Current: `{display_path}`\n\n"
+            "Tap a folder to enter, or select current directory"
+        )
 
     return text, InlineKeyboardMarkup(buttons), subdirs
 

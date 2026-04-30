@@ -13,6 +13,7 @@ def _base_env(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("CCBOT_CODEX_PROJECTS_PATH", raising=False)
     monkeypatch.delenv("CCBOT_DEFAULT_PROJECTS_PATH", raising=False)
+    monkeypatch.delenv("CCBOT_PROJECT_ROOTS", raising=False)
     monkeypatch.delenv("CODEX_HOME", raising=False)
     monkeypatch.delenv("CCBOT_CODEX_COMMAND", raising=False)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test:token")
@@ -112,6 +113,25 @@ class TestConfigDefaultProjectsPath:
         monkeypatch.setenv("CCBOT_DEFAULT_PROJECTS_PATH", "/srv/projects")
         cfg = Config()
         assert cfg.default_projects_path == Path("/srv/projects")
+
+    def test_default_project_roots_follow_default_path(self):
+        cfg = Config()
+        assert cfg.project_roots_configured is False
+        assert len(cfg.project_roots) == 1
+        assert cfg.project_roots[0].label == "Default"
+        assert cfg.project_roots[0].path == Path.home() / "Projects"
+
+    def test_named_project_roots(self, monkeypatch):
+        monkeypatch.setenv(
+            "CCBOT_PROJECT_ROOTS",
+            "Primary=/srv/projects,Secondary=/mnt/secondary-projects",
+        )
+        cfg = Config()
+        assert cfg.project_roots_configured is True
+        assert [(root.label, root.path) for root in cfg.project_roots] == [
+            ("Primary", Path("/srv/projects")),
+            ("Secondary", Path("/mnt/secondary-projects")),
+        ]
 
 
 @pytest.mark.usefixtures("_base_env")
