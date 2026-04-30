@@ -149,6 +149,25 @@ class TestExtractInteractiveContent:
         assert result.name == "PermissionPrompt"
         assert "Do you want to proceed?" in result.content
 
+    def test_codex_command_approval_prompt(self):
+        pane = (
+            "  Would you like to run the following command?\n"
+            "\n"
+            "  $ rm -rf /tmp/coin_recovered && mkdir -p /tmp/coin_recovered &&\n"
+            "  .venv/bin/uncompyle6 -o /tmp/coin_recovered script.pyc\n"
+            "\n"
+            "  › 1. Yes, proceed (y)\n"
+            "    2. Yes, and don't ask again for commands that start with `rm -rf /tmp/coin_recovered` (p)\n"
+            "    3. No, and tell Codex what to do differently (esc)\n"
+            "\n"
+            "  Press enter to confirm or esc to cancel\n"
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "CommandApproval"
+        assert "Would you like to run the following command?" in result.content
+        assert "Press enter to confirm" in result.content
+
     def test_codex_field_permission_prompt(self):
         pane = (
             "  Field 1/1\n"

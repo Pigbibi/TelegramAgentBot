@@ -186,6 +186,94 @@ class TestStatusPollerSettingsDetection:
             )
 
     @pytest.mark.asyncio
+    async def test_working_status_is_sent_even_when_queue_is_busy(
+        self, mock_bot: AsyncMock
+    ):
+        """Active Working status should still display while content is queued."""
+        window_id = "@5"
+        mock_window = MagicMock()
+        mock_window.window_id = window_id
+        pane = (
+            "• Working (1m 07s • esc to interrupt)\n"
+            "──────────────────────────────────────\n"
+            "❯ \n"
+            "──────────────────────────────────────\n"
+            "  [Opus 4.6] Context: 50%\n"
+        )
+
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch(
+                "ccbot.handlers.status_polling.handle_interactive_ui",
+                new_callable=AsyncMock,
+            ) as mock_handle_ui,
+            patch(
+                "ccbot.handlers.status_polling.enqueue_status_update",
+                new_callable=AsyncMock,
+            ) as mock_enqueue_status,
+        ):
+            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.capture_pane = AsyncMock(return_value=pane)
+
+            await update_status_message(
+                mock_bot,
+                user_id=1,
+                window_id=window_id,
+                thread_id=42,
+                skip_status=True,
+            )
+
+            mock_handle_ui.assert_not_called()
+            mock_enqueue_status.assert_awaited_once_with(
+                mock_bot,
+                1,
+                window_id,
+                "• Working (1m 07s • esc to interrupt)",
+                thread_id=42,
+            )
+
+    @pytest.mark.asyncio
+    async def test_non_working_status_is_skipped_when_queue_is_busy(
+        self, mock_bot: AsyncMock
+    ):
+        """Queue-busy suppression remains for less important status updates."""
+        window_id = "@5"
+        mock_window = MagicMock()
+        mock_window.window_id = window_id
+        pane = (
+            "✻ Reading file\n"
+            "──────────────────────────────────────\n"
+            "❯ \n"
+            "──────────────────────────────────────\n"
+            "  [Opus 4.6] Context: 50%\n"
+        )
+
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch(
+                "ccbot.handlers.status_polling.handle_interactive_ui",
+                new_callable=AsyncMock,
+            ) as mock_handle_ui,
+            patch(
+                "ccbot.handlers.status_polling.enqueue_status_update",
+                new_callable=AsyncMock,
+            ) as mock_enqueue_status,
+        ):
+            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.capture_pane = AsyncMock(return_value=pane)
+
+            await update_status_message(
+                mock_bot,
+                user_id=1,
+                window_id=window_id,
+                thread_id=42,
+                skip_status=True,
+            )
+
+            mock_handle_ui.assert_not_called()
+            mock_enqueue_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_settings_ui_end_to_end_sends_telegram_keyboard(
         self, mock_bot: AsyncMock, sample_pane_settings: str
     ):
