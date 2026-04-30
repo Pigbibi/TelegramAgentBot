@@ -38,6 +38,7 @@ import json
 import logging
 import time
 from pathlib import Path
+from typing import Any, TypedDict
 
 from telegram import (
     Bot,
@@ -84,6 +85,8 @@ from .handlers.callback_data import (
     CB_DIR_UP,
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
+    CB_ROOT_CANCEL,
+    CB_ROOT_SELECT,
     CB_SESSION_CANCEL,
     CB_SESSION_NEW,
     CB_SESSION_SELECT,
@@ -97,16 +100,22 @@ from .handlers.directory_browser import (
     BROWSE_DIRS_KEY,
     BROWSE_PAGE_KEY,
     BROWSE_PATH_KEY,
+    BROWSE_ROOT_LABEL_KEY,
+    BROWSE_ROOT_PATH_KEY,
+    ROOTS_KEY,
     SESSIONS_KEY,
     STATE_BROWSING_DIRECTORY,
     STATE_KEY,
+    STATE_SELECTING_ROOT,
     STATE_SELECTING_SESSION,
     STATE_SELECTING_WINDOW,
     UNBOUND_WINDOWS_KEY,
     build_directory_browser,
+    build_project_root_picker,
     build_session_picker,
     build_window_picker,
     clear_browse_state,
+    clear_root_picker_state,
     clear_session_picker_state,
     clear_window_picker_state,
 )
@@ -202,12 +211,89 @@ CC_COMMANDS: dict[str, str] = {
 }
 
 
-def _default_directory_browser_path() -> str:
+class _DirectoryBrowserKwargs(TypedDict, total=False):
+    root_label: str
+    root_path: str
+
+
+def _default_directory_browser_path(root_path: str | None = None) -> str:
     """Choose a generic starting directory for the project browser."""
+    if root_path:
+        root = Path(root_path).expanduser()
+        if root.is_dir():
+            return str(root)
     projects_dir = config.default_projects_path.expanduser()
     if projects_dir.is_dir():
         return str(projects_dir)
     return str(Path.home())
+
+
+def _browse_root_context(user_data: dict | None) -> tuple[str | None, str | None]:
+    """Return selected browser root label/path from user state."""
+    if not user_data:
+        return None, None
+    label = user_data.get(BROWSE_ROOT_LABEL_KEY)
+    path = user_data.get(BROWSE_ROOT_PATH_KEY)
+    return (
+        label if isinstance(label, str) and label else None,
+        path if isinstance(path, str) and path else None,
+    )
+
+
+def _directory_browser_kwargs(user_data: dict | None) -> _DirectoryBrowserKwargs:
+    """Build root kwargs for the directory browser from user state."""
+    label, path = _browse_root_context(user_data)
+    kwargs: _DirectoryBrowserKwargs = {}
+    if label:
+        kwargs["root_label"] = label
+    if path:
+        kwargs["root_path"] = path
+    return kwargs
+
+
+def _clamp_to_selected_root(path: str, user_data: dict | None) -> str:
+    """Keep selected paths inside the configured project root when present."""
+    _label, root_path = _browse_root_context(user_data)
+    if not root_path:
+        return path
+
+    root = Path(root_path).expanduser().resolve()
+    selected = Path(path).expanduser().resolve()
+    if selected == root or root in selected.parents:
+        return str(selected)
+    return str(root)
+
+
+async def _show_root_or_directory_picker(
+    target: Any,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    edit: bool = False,
+) -> None:
+    """Show the configured root picker or fall through to directory browsing."""
+
+    if getattr(config, "project_roots_configured", False):
+        msg_text, keyboard, roots = build_project_root_picker(config.project_roots)
+        if context.user_data is not None:
+            context.user_data[STATE_KEY] = STATE_SELECTING_ROOT
+            context.user_data[ROOTS_KEY] = roots
+        if edit:
+            await safe_edit(target, msg_text, reply_markup=keyboard)
+        else:
+            await safe_reply(target, msg_text, reply_markup=keyboard)
+        return
+
+    start_path = _default_directory_browser_path()
+    msg_text, keyboard, subdirs = build_directory_browser(start_path)
+    if context.user_data is not None:
+        context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
+        context.user_data[BROWSE_PATH_KEY] = start_path
+        context.user_data[BROWSE_PAGE_KEY] = 0
+        context.user_data[BROWSE_DIRS_KEY] = subdirs
+    if edit:
+        await safe_edit(target, msg_text, reply_markup=keyboard)
+    else:
+        await safe_reply(target, msg_text, reply_markup=keyboard)
 
 
 def _build_request(
@@ -1385,6 +1471,20 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         context.user_data.pop("_pending_thread_id", None)
         context.user_data.pop("_pending_thread_text", None)
 
+    # Ignore text in project root picker mode (only for the same thread)
+    if context.user_data and context.user_data.get(STATE_KEY) == STATE_SELECTING_ROOT:
+        pending_tid = context.user_data.get("_pending_thread_id")
+        if pending_tid == thread_id:
+            await safe_reply(
+                update.message,
+                "Please choose a computer/VPS above, or tap Cancel.",
+            )
+            return
+        # Stale root picker state from a different thread — clear it
+        clear_root_picker_state(context.user_data)
+        context.user_data.pop("_pending_thread_id", None)
+        context.user_data.pop("_pending_thread_text", None)
+
     # Ignore text in directory browsing mode (only for the same thread)
     if (
         context.user_data
@@ -1463,22 +1563,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await safe_reply(update.message, msg_text, reply_markup=keyboard)
             return
 
-        # No unbound windows — show directory browser to create a new session
+        # No unbound windows — show root/directory picker to create a new session
         logger.info(
-            "Unbound topic: showing directory browser (user=%d, thread=%d)",
+            "Unbound topic: showing project root or directory picker (user=%d, thread=%d)",
             user.id,
             thread_id,
         )
-        start_path = _default_directory_browser_path()
-        msg_text, keyboard, subdirs = build_directory_browser(start_path)
         if context.user_data is not None:
-            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-            context.user_data[BROWSE_PATH_KEY] = start_path
-            context.user_data[BROWSE_PAGE_KEY] = 0
-            context.user_data[BROWSE_DIRS_KEY] = subdirs
             context.user_data["_pending_thread_id"] = thread_id
             context.user_data["_pending_thread_text"] = text
-        await safe_reply(update.message, msg_text, reply_markup=keyboard)
+        await _show_root_or_directory_picker(update.message, context)
         return
 
     # Bound topic — forward to bound window
@@ -1795,6 +1889,59 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await safe_edit(query, "Window no longer exists.")
         await query.answer("Page updated")
 
+    # Project root picker handlers
+    elif data.startswith(CB_ROOT_SELECT):
+        pending_tid = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
+        if pending_tid is not None and _get_thread_id(update) != pending_tid:
+            await query.answer("Stale root picker (topic mismatch)", show_alert=True)
+            return
+        try:
+            idx = int(data[len(CB_ROOT_SELECT) :])
+        except ValueError:
+            await query.answer("Invalid data")
+            return
+
+        cached_roots: list[tuple[str, str]] = (
+            context.user_data.get(ROOTS_KEY, []) if context.user_data else []
+        )
+        if idx < 0 or idx >= len(cached_roots):
+            await query.answer("Root list changed, please retry", show_alert=True)
+            return
+
+        root_label, root_path = cached_roots[idx]
+        start_path = _default_directory_browser_path(root_path)
+        msg_text, keyboard, subdirs = build_directory_browser(
+            start_path,
+            root_label=root_label,
+            root_path=root_path,
+        )
+        if context.user_data is not None:
+            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
+            context.user_data[BROWSE_PATH_KEY] = start_path
+            context.user_data[BROWSE_ROOT_LABEL_KEY] = root_label
+            context.user_data[BROWSE_ROOT_PATH_KEY] = root_path
+            context.user_data[BROWSE_PAGE_KEY] = 0
+            context.user_data[BROWSE_DIRS_KEY] = subdirs
+            context.user_data.pop(ROOTS_KEY, None)
+        await safe_edit(query, msg_text, reply_markup=keyboard)
+        await query.answer()
+
+    elif data == CB_ROOT_CANCEL:
+        pending_tid = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
+        if pending_tid is not None and _get_thread_id(update) != pending_tid:
+            await query.answer("Stale root picker (topic mismatch)", show_alert=True)
+            return
+        clear_root_picker_state(context.user_data)
+        if context.user_data is not None:
+            context.user_data.pop("_pending_thread_id", None)
+            context.user_data.pop("_pending_thread_text", None)
+        await safe_edit(query, "Cancelled")
+        await query.answer("Cancelled")
+
     # Directory browser handlers
     elif data.startswith(CB_DIR_SELECT):
         # Validate: callback must come from the same topic that started browsing
@@ -1828,6 +1975,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if context.user_data
             else default_path
         )
+        current_path = _clamp_to_selected_root(current_path, context.user_data)
         new_path = (Path(current_path) / subdir_name).resolve()
 
         if not new_path.exists() or not new_path.is_dir():
@@ -1839,7 +1987,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[BROWSE_PATH_KEY] = new_path_str
             context.user_data[BROWSE_PAGE_KEY] = 0
 
-        msg_text, keyboard, subdirs = build_directory_browser(new_path_str)
+        msg_text, keyboard, subdirs = build_directory_browser(
+            new_path_str,
+            **_directory_browser_kwargs(context.user_data),
+        )
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -1860,14 +2011,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         current = Path(current_path).resolve()
         parent = current.parent
-        # No restriction - allow navigating anywhere
+        parent_path = _clamp_to_selected_root(str(parent), context.user_data)
 
-        parent_path = str(parent)
         if context.user_data is not None:
             context.user_data[BROWSE_PATH_KEY] = parent_path
             context.user_data[BROWSE_PAGE_KEY] = 0
 
-        msg_text, keyboard, subdirs = build_directory_browser(parent_path)
+        msg_text, keyboard, subdirs = build_directory_browser(
+            parent_path,
+            **_directory_browser_kwargs(context.user_data),
+        )
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -1894,7 +2047,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if context.user_data is not None:
             context.user_data[BROWSE_PAGE_KEY] = pg
 
-        msg_text, keyboard, subdirs = build_directory_browser(current_path, pg)
+        msg_text, keyboard, subdirs = build_directory_browser(
+            current_path,
+            pg,
+            **_directory_browser_kwargs(context.user_data),
+        )
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -1907,10 +2064,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if context.user_data
             else default_path
         )
+        selected_path = _clamp_to_selected_root(selected_path, context.user_data)
         # Check if this was initiated from a thread bind flow
         pending_thread_id: int | None = (
             context.user_data.get("_pending_thread_id") if context.user_data else None
         )
+        if pending_thread_id is None:
+            pending_thread_id = _get_thread_id(update)
 
         # Validate: confirm button must come from the same topic that started browsing
         confirm_thread_id = _get_thread_id(update)
@@ -2167,14 +2327,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         # Preserve pending thread info, clear only picker state
         clear_window_picker_state(context.user_data)
-        start_path = _default_directory_browser_path()
-        msg_text, keyboard, subdirs = build_directory_browser(start_path)
-        if context.user_data is not None:
-            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-            context.user_data[BROWSE_PATH_KEY] = start_path
-            context.user_data[BROWSE_PAGE_KEY] = 0
-            context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await safe_edit(query, msg_text, reply_markup=keyboard)
+        await _show_root_or_directory_picker(query, context, edit=True)
         await query.answer()
 
     # Window picker: cancel

@@ -210,6 +210,7 @@ CCBOT_SHOW_COMMENTARY_MESSAGES=true
 | `CCBOT_CODEX_COMMAND` | `codex` | 创建新窗口时运行的命令 |
 | `CCBOT_CODEX_PROJECTS_PATH` | `~/.codex` | transcript 扫描根目录 |
 | `CCBOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | 创建新会话时默认展示的目录 |
+| `CCBOT_PROJECT_ROOTS` | _(空)_ | 可选：进入目录浏览前展示的命名根目录 |
 | `MONITOR_POLL_INTERVAL` | `2.0` | 轮询间隔，单位秒 |
 | `CCBOT_AUTO_UPDATE` | `false` | 启动时自动检查并 fast-forward 更新 git 源码安装 |
 | `CCBOT_UPDATE_INTERVAL_SECONDS` | `86400` | 两次自动更新检查之间的最短间隔 |
@@ -226,6 +227,19 @@ CCBOT_SHOW_COMMENTARY_MESSAGES=true
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | 自定义 OpenAI 兼容接口 |
 
 消息格式默认走 MarkdownV2，并在需要时自动降级为纯文本。
+
+### 项目根目录
+
+如果想在目录浏览前先选择电脑、VPS 或已挂载的工作区，可以配置命名根目录：
+
+```ini
+CCBOT_PROJECT_ROOTS=Local=~/Projects,Remote=/mnt/remote-projects
+```
+
+只要设置了 `CCBOT_PROJECT_ROOTS`，新 Telegram topic 第一次发消息后都会先显示
+电脑/VPS 选择器，即使只配置了一个根目录。选中后才进入原来的目录浏览，并且不会
+浏览到该根目录之外。其他电脑或 VPS 需要先从运行 ccbot 的机器挂载成本地路径，
+例如 SSHFS 或 NFS。
 
 ### 更新
 

@@ -10,6 +10,7 @@ Key class: Config (singleton instantiated as `config`).
 
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,6 +21,48 @@ logger = logging.getLogger(__name__)
 
 # Env vars that must not leak to child processes (e.g. Codex via tmux)
 SENSITIVE_ENV_VARS = {"TELEGRAM_BOT_TOKEN", "ALLOWED_USERS", "OPENAI_API_KEY"}
+
+
+@dataclass(frozen=True)
+class ProjectRoot:
+    """Named project root shown before creating a new Codex session."""
+
+    label: str
+    path: Path
+
+
+def _parse_project_roots(raw: str, fallback: Path) -> list[ProjectRoot]:
+    """Parse CCBOT_PROJECT_ROOTS as label=path pairs."""
+
+    roots: list[ProjectRoot] = []
+    seen_labels: set[str] = set()
+    for item in raw.replace("\n", ",").split(","):
+        entry = item.strip()
+        if not entry:
+            continue
+
+        if "=" in entry:
+            label, path_value = entry.split("=", 1)
+        elif ":" in entry:
+            label, path_value = entry.split(":", 1)
+        else:
+            path_value = entry
+            label = Path(path_value).expanduser().name or path_value
+
+        label = label.strip()
+        path_value = path_value.strip()
+        if not label or not path_value:
+            continue
+
+        base_label = label
+        suffix = 2
+        while label in seen_labels:
+            label = f"{base_label}-{suffix}"
+            suffix += 1
+        seen_labels.add(label)
+        roots.append(ProjectRoot(label=label, path=Path(path_value).expanduser()))
+
+    return roots or [ProjectRoot(label="Default", path=fallback)]
 
 
 class Config:
@@ -88,6 +131,12 @@ class Config:
             if default_projects_path
             else Path.home() / "Projects"
         )
+        project_roots = os.getenv("CCBOT_PROJECT_ROOTS", "")
+        self.project_roots_configured = bool(project_roots.strip())
+        self.project_roots = _parse_project_roots(
+            project_roots,
+            self.default_projects_path,
+        )
 
         self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "2.0"))
 
@@ -134,7 +183,7 @@ class Config:
         logger.debug(
             "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
             "tmux_socket=%s, tmux_session=%s, codex_projects_path=%s, "
-            "default_projects_path=%s",
+            "default_projects_path=%s, project_roots=%d",
             self.config_dir,
             self.telegram_bot_token[:8],
             len(self.allowed_users),
@@ -142,6 +191,7 @@ class Config:
             self.tmux_session_name,
             self.codex_projects_path,
             self.default_projects_path,
+            len(self.project_roots),
         )
 
     def is_user_allowed(self, user_id: int) -> bool:

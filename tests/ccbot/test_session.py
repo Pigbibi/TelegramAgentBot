@@ -184,6 +184,17 @@ class TestWindowState:
         assert refreshed.window_name == "project"
         assert refreshed.account_name == "team"
         assert refreshed.usage_limit_exceeded is False
+        assert refreshed.launch_started_at > 0
+
+    def test_register_session_to_window_clears_pending_launch_time(
+        self, mgr: SessionManager
+    ) -> None:
+        mgr.prepare_window_launch("@1", cwd="/tmp/project", window_name="project")
+        assert mgr.get_window_state("@1").launch_started_at > 0
+
+        mgr.register_session_to_window("@1", "sid-1", "/tmp/project")
+
+        assert mgr.get_window_state("@1").launch_started_at == 0.0
 
     def test_mark_window_usage_limit_exceeded_is_idempotent(
         self, mgr: SessionManager

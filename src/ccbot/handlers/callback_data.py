@@ -5,6 +5,7 @@ Each prefix identifies a specific action or navigation target.
 
 Constants:
   - CB_HISTORY_*: History pagination
+  - CB_ROOT_*: Project root picker
   - CB_DIR_*: Directory browser navigation
   - CB_WIN_*: Window picker (bind existing unbound window)
   - CB_SCREENSHOT_*: Screenshot refresh
@@ -17,6 +18,8 @@ CB_HISTORY_PREV = "hp:"  # history page older
 CB_HISTORY_NEXT = "hn:"  # history page newer
 
 # Directory browser
+CB_ROOT_SELECT = "rt:sel:"
+CB_ROOT_CANCEL = "rt:cancel"
 CB_DIR_SELECT = "db:sel:"
 CB_DIR_UP = "db:up"
 CB_DIR_CONFIRM = "db:confirm"

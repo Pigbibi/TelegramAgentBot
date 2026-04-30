@@ -146,6 +146,7 @@ class WindowState:
     window_name: str = ""
     account_name: str = ""
     usage_limit_exceeded: bool = False
+    launch_started_at: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -158,6 +159,8 @@ class WindowState:
             d["account_name"] = self.account_name
         if self.usage_limit_exceeded:
             d["usage_limit_exceeded"] = True
+        if self.launch_started_at:
+            d["launch_started_at"] = self.launch_started_at
         return d
 
     @classmethod
@@ -168,6 +171,7 @@ class WindowState:
             window_name=data.get("window_name", ""),
             account_name=data.get("account_name", ""),
             usage_limit_exceeded=bool(data.get("usage_limit_exceeded", False)),
+            launch_started_at=float(data.get("launch_started_at", 0.0) or 0.0),
         )
 
 
@@ -325,6 +329,21 @@ class SessionManager:
             live_ids.add(w.window_id)
 
         changed = False
+        bound_window_ids = {
+            wid
+            for bindings in self.thread_bindings.values()
+            for wid in bindings.values()
+            if self._is_window_id(wid)
+        }
+
+        def is_recoverable_missing_window(window_id: str) -> bool:
+            state = self.window_states.get(window_id)
+            return bool(
+                state
+                and window_id in bound_window_ids
+                and state.session_id
+                and state.cwd
+            )
 
         # --- Migrate window_states ---
         new_window_states: dict[str, WindowState] = {}
@@ -349,10 +368,21 @@ class SessionManager:
                         self.window_display_names.pop(key, None)
                         changed = True
                     else:
-                        logger.info(
-                            "Dropping stale window_state: %s (name=%s)", key, display
-                        )
-                        changed = True
+                        if is_recoverable_missing_window(key):
+                            logger.info(
+                                "Keeping missing bound window_state for recovery: "
+                                "%s (name=%s)",
+                                key,
+                                display,
+                            )
+                            new_window_states[key] = ws
+                        else:
+                            logger.info(
+                                "Dropping stale window_state: %s (name=%s)",
+                                key,
+                                display,
+                            )
+                            changed = True
             else:
                 # Old format: key is window_name
                 new_id = live_by_name.get(key)
@@ -390,13 +420,26 @@ class SessionManager:
                             self.window_display_names[new_id] = display
                             changed = True
                         else:
-                            logger.info(
-                                "Dropping stale thread binding: user=%d, thread=%d, wid=%s",
-                                uid,
-                                tid,
-                                val,
-                            )
-                            changed = True
+                            if (
+                                val in new_window_states
+                                and is_recoverable_missing_window(val)
+                            ):
+                                logger.info(
+                                    "Keeping missing bound window for recovery: "
+                                    "user=%d, thread=%d, wid=%s",
+                                    uid,
+                                    tid,
+                                    val,
+                                )
+                                new_bindings[tid] = val
+                            else:
+                                logger.info(
+                                    "Dropping stale thread binding: user=%d, thread=%d, wid=%s",
+                                    uid,
+                                    tid,
+                                    val,
+                                )
+                                changed = True
                 else:
                     # Old format: val is window_name
                     new_id = live_by_name.get(val)
@@ -458,6 +501,8 @@ class SessionManager:
                         if new_id:
                             new_offsets[new_id] = offset
                             changed = True
+                        elif key in valid_window_ids:
+                            new_offsets[key] = offset
                         else:
                             changed = True
                 else:
@@ -723,6 +768,9 @@ class SessionManager:
                 state.session_id = new_sid
                 state.cwd = new_cwd
                 changed = True
+            if state.launch_started_at:
+                state.launch_started_at = 0.0
+                changed = True
             # Update display name
             if new_wname:
                 state.window_name = new_wname
@@ -735,7 +783,17 @@ class SessionManager:
         # startups/resumes can keep session_map empty for a while (or forever on
         # failure), and eagerly deleting here breaks already-bound topics.
         if valid_wids:
-            stale_wids = [w for w in self.window_states if w and w not in valid_wids]
+            stale_wids = []
+            for w, state in self.window_states.items():
+                if not w or w in valid_wids:
+                    continue
+                if (
+                    state.launch_started_at
+                    and not state.session_id
+                    and w in live_window_cwds
+                ):
+                    continue
+                stale_wids.append(w)
             for wid in stale_wids:
                 logger.info("Removing stale window_state: %s", wid)
                 del self.window_states[wid]
@@ -795,6 +853,7 @@ class SessionManager:
         state.window_name = window_name
         state.account_name = account_name
         state.usage_limit_exceeded = False
+        state.launch_started_at = time.time()
         if window_name:
             self.window_display_names[window_id] = window_name
         self._save_state()
@@ -942,6 +1001,7 @@ class SessionManager:
         state.session_id = session_id
         state.cwd = cwd
         state.usage_limit_exceeded = False
+        state.launch_started_at = 0.0
         canonical_id = _canonical_session_id(session_id)
         if canonical_id:
             self.hidden_session_ids.discard(canonical_id)

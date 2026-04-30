@@ -122,6 +122,22 @@ class SessionMonitor:
             return True
         return cls._is_account_home_transcript(file_path)
 
+    @staticmethod
+    def _is_older_than_pending_launch(
+        file_path: Path | None,
+        state: Any,
+        *,
+        tolerance_seconds: float = 1.0,
+    ) -> bool:
+        """Return True when a transcript predates a pending fresh window launch."""
+        launch_started_at = float(getattr(state, "launch_started_at", 0.0) or 0.0)
+        if not file_path or not launch_started_at or getattr(state, "session_id", ""):
+            return False
+        try:
+            return file_path.stat().st_mtime + tolerance_seconds < launch_started_at
+        except OSError:
+            return False
+
     async def _get_active_cwds(self) -> set[str]:
         """Get normalized cwds of all active tmux windows."""
         cwds = set()
@@ -292,6 +308,10 @@ class SessionMonitor:
             if self._normalize_path(window.cwd) == normalized_project_path
             and not _is_shell_pane_command(
                 (getattr(window, "pane_current_command", "") or "").strip()
+            )
+            and not self._is_older_than_pending_launch(
+                session_file,
+                session_manager.get_window_state(window.window_id),
             )
         ]
         if not matching_windows:

@@ -1,11 +1,23 @@
 """Tests for binding existing tmux windows to topics."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
 
 import pytest
 from telegram.error import TelegramError
 
-from ccbot.handlers.callback_data import CB_WIN_BIND
+from ccbot.config import ProjectRoot
+from ccbot.handlers.callback_data import CB_DIR_CONFIRM, CB_ROOT_SELECT, CB_WIN_BIND
+from ccbot.handlers.directory_browser import (
+    BROWSE_DIRS_KEY,
+    BROWSE_PATH_KEY,
+    BROWSE_ROOT_LABEL_KEY,
+    BROWSE_ROOT_PATH_KEY,
+    ROOTS_KEY,
+    STATE_BROWSING_DIRECTORY,
+    STATE_KEY,
+    STATE_SELECTING_ROOT,
+)
 from ccbot.session import WindowState
 
 
@@ -62,6 +74,7 @@ class TestExistingWindowBinding:
             patch("ccbot.bot._get_thread_id", return_value=42),
             patch("ccbot.bot.session_manager") as mock_sm,
             patch("ccbot.bot.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.config.project_roots_configured", False),
             patch("ccbot.bot.build_directory_browser") as build_directory_browser,
             patch("ccbot.bot.safe_reply", new_callable=AsyncMock) as safe_reply,
         ):
@@ -80,6 +93,106 @@ class TestExistingWindowBinding:
         )
         assert context.user_data["_pending_thread_id"] == 42
         assert context.user_data["_pending_thread_text"] == "hi"
+
+    @pytest.mark.asyncio
+    async def test_unbound_topic_shows_root_picker_before_directory_browser(self):
+        update = _make_text_update("hi")
+        context = _make_context()
+
+        with (
+            patch("ccbot.bot.is_user_allowed", return_value=True),
+            patch("ccbot.bot._get_thread_id", return_value=42),
+            patch("ccbot.bot.session_manager") as mock_sm,
+            patch("ccbot.bot.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.config") as mock_config,
+            patch("ccbot.bot.safe_reply", new_callable=AsyncMock) as safe_reply,
+        ):
+            mock_tmux.list_windows = AsyncMock(return_value=[])
+            mock_sm.iter_thread_bindings.return_value = []
+            mock_sm.get_window_for_thread.return_value = None
+            mock_config.project_roots_configured = True
+            mock_config.project_roots = [
+                ProjectRoot("Primary", Path("/srv/projects")),
+            ]
+
+            from ccbot.bot import text_handler
+
+            await text_handler(update, context)
+
+        safe_reply.assert_awaited_once()
+        message_text = safe_reply.await_args.args[1]
+        assert "Select Computer / VPS" in message_text
+        assert "Primary" in message_text
+        assert context.user_data[STATE_KEY] == STATE_SELECTING_ROOT
+        assert context.user_data[ROOTS_KEY] == [
+            ("Primary", "/srv/projects"),
+        ]
+        assert context.user_data["_pending_thread_text"] == "hi"
+
+    @pytest.mark.asyncio
+    async def test_root_picker_selection_enters_selected_directory(self, tmp_path):
+        root_path = tmp_path / "primary"
+        root_path.mkdir()
+        (root_path / "repo").mkdir()
+        update, query = _make_callback_update(f"{CB_ROOT_SELECT}0")
+        context = _make_context()
+        context.user_data = {
+            STATE_KEY: STATE_SELECTING_ROOT,
+            ROOTS_KEY: [("Primary", str(root_path))],
+            "_pending_thread_id": 42,
+            "_pending_thread_text": "hi",
+        }
+
+        with (
+            patch("ccbot.bot.is_user_allowed", return_value=True),
+            patch("ccbot.bot._get_thread_id", return_value=42),
+            patch("ccbot.bot.safe_edit", new_callable=AsyncMock) as safe_edit,
+        ):
+            from ccbot.bot import callback_handler
+
+            await callback_handler(update, context)
+
+        safe_edit.assert_awaited_once()
+        assert "Primary" in safe_edit.await_args.args[1]
+        assert context.user_data[STATE_KEY] == STATE_BROWSING_DIRECTORY
+        assert context.user_data[BROWSE_PATH_KEY] == str(root_path)
+        assert context.user_data[BROWSE_ROOT_LABEL_KEY] == "Primary"
+        assert context.user_data[BROWSE_ROOT_PATH_KEY] == str(root_path)
+        assert context.user_data[BROWSE_DIRS_KEY] == ["repo"]
+        assert ROOTS_KEY not in context.user_data
+
+    @pytest.mark.asyncio
+    async def test_directory_confirm_falls_back_to_callback_topic_when_pending_missing(
+        self, tmp_path
+    ):
+        selected_path = tmp_path / "project"
+        selected_path.mkdir()
+        update, query = _make_callback_update(CB_DIR_CONFIRM)
+        context = _make_context()
+        context.user_data = {
+            STATE_KEY: STATE_BROWSING_DIRECTORY,
+            BROWSE_PATH_KEY: str(selected_path),
+        }
+
+        with (
+            patch("ccbot.bot.is_user_allowed", return_value=True),
+            patch("ccbot.bot._get_thread_id", return_value=42),
+            patch("ccbot.bot.session_manager") as mock_sm,
+            patch("ccbot.bot.safe_edit", new_callable=AsyncMock),
+            patch(
+                "ccbot.bot._create_and_bind_window",
+                new_callable=AsyncMock,
+            ) as create_and_bind,
+        ):
+            mock_sm.list_sessions_for_directory = AsyncMock(return_value=[])
+
+            from ccbot.bot import callback_handler
+
+            await callback_handler(update, context)
+
+        create_and_bind.assert_awaited_once()
+        assert create_and_bind.await_args.args[4] == 42
+        assert create_and_bind.await_args.kwargs["answer_callback"] is False
 
     @pytest.mark.asyncio
     async def test_window_picker_rejects_untracked_window(self):
