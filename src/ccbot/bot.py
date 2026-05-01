@@ -2636,6 +2636,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 text=msg.text,
                 thread_id=thread_id,
                 image_data=msg.image_data,
+                wait_until_sent=True,
             )
 
             # Update user's read offset to current file position

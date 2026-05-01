@@ -7,7 +7,7 @@ sessions to matching tmux windows by cwd, and emits parsed messages to the bot.
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -69,6 +69,7 @@ class SessionMonitor:
         self._message_callback: Callable[[NewMessage], Awaitable[None]] | None = None
         self._pending_tools: dict[str, dict[str, PendingToolInfo]] = {}
         self._file_mtimes: dict[str, float] = {}
+        self._deferred_state_updates: dict[str, TrackedSession] = {}
 
     def set_message_callback(
         self, callback: Callable[[NewMessage], Awaitable[None]]
@@ -366,11 +367,31 @@ class SessionMonitor:
             persist_session_map=True,
         )
 
-    async def check_for_updates(self, active_session_ids: set[str]) -> list[NewMessage]:
+    def commit_deferred_state_updates(self) -> None:
+        """Persist monitor offsets after queued Telegram delivery completes."""
+        if not self._deferred_state_updates:
+            return
+        for tracked in self._deferred_state_updates.values():
+            self.state.update_session(tracked)
+        self._deferred_state_updates.clear()
+        self.state.save_if_dirty()
+
+    def discard_deferred_state_updates(self) -> None:
+        """Drop uncommitted offsets so undelivered transcript lines can replay."""
+        self._deferred_state_updates.clear()
+
+    async def check_for_updates(
+        self,
+        active_session_ids: set[str],
+        *,
+        save_state: bool = True,
+    ) -> list[NewMessage]:
         """Check tracked Codex sessions for new parsed entries."""
         del active_session_ids
 
         new_messages: list[NewMessage] = []
+        if not save_state:
+            self._deferred_state_updates.clear()
         sessions = await self.scan_projects()
 
         from .session import session_manager
@@ -385,14 +406,18 @@ class SessionMonitor:
                         file_path=str(session_info.file_path),
                         last_byte_offset=0,
                     )
-                    self.state.update_session(tracked)
+                    if save_state:
+                        self.state.update_session(tracked)
 
                     if not project_path:
                         project_path = await asyncio.to_thread(
                             read_cwd_from_jsonl,
                             session_info.file_path,
                         )
-                elif tracked.file_path != str(session_info.file_path):
+                elif not save_state:
+                    tracked = replace(tracked)
+
+                if tracked.file_path != str(session_info.file_path):
                     tracked.file_path = str(session_info.file_path)
 
                 if project_path and not session_manager.has_bound_thread_for_session(
@@ -463,7 +488,10 @@ class SessionMonitor:
                         )
                     )
 
-                self.state.update_session(tracked)
+                if save_state:
+                    self.state.update_session(tracked)
+                else:
+                    self._deferred_state_updates[tracked.session_id] = replace(tracked)
             except OSError as exc:
                 logger.debug(
                     "Error processing session %s: %s",
@@ -471,7 +499,8 @@ class SessionMonitor:
                     exc,
                 )
 
-        self.state.save_if_dirty()
+        if save_state:
+            self.state.save_if_dirty()
         return new_messages
 
     async def _monitor_loop(self) -> None:
@@ -487,11 +516,16 @@ class SessionMonitor:
         while self._running:
             try:
                 await session_manager.load_session_map()
-                new_messages = await self.check_for_updates(set())
+                new_messages = await self.check_for_updates(set(), save_state=False)
                 for message in new_messages:
                     if self._message_callback:
                         await self._message_callback(message)
+                self.commit_deferred_state_updates()
+            except asyncio.CancelledError:
+                self.discard_deferred_state_updates()
+                raise
             except Exception as exc:
+                self.discard_deferred_state_updates()
                 logger.error("Loop error: %s", exc)
             await asyncio.sleep(self.poll_interval)
 
@@ -507,4 +541,5 @@ class SessionMonitor:
         if self._task:
             self._task.cancel()
             self._task = None
+        self.discard_deferred_state_updates()
         self.state.save()
