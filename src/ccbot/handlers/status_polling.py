@@ -213,7 +213,7 @@ async def status_poll_loop(bot: Bot) -> None:
                     # UI detection happens unconditionally in update_status_message.
                     # Status enqueue is skipped inside update_status_message when
                     # interactive UI is detected (returns early) or when queue is non-empty.
-                    queue = get_message_queue(user_id)
+                    queue = get_message_queue(user_id, thread_id)
                     skip_status = queue is not None and not queue.empty()
 
                     await update_status_message(
