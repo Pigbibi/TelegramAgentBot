@@ -340,6 +340,14 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     wid = task.window_id or ""
     tid = task.thread_id or 0
     chat_id = session_manager.resolve_chat_id(user_id, task.thread_id)
+    logger.debug(
+        "Process content: user=%d, thread=%d, window_id=%s, content_type=%s, parts=%d",
+        user_id,
+        tid,
+        wid,
+        task.content_type,
+        len(task.parts),
+    )
 
     # 1. Handle tool_result editing (merged parts are edited together)
     if task.content_type == "tool_result" and task.tool_use_id:
@@ -358,6 +366,13 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                     parse_mode=PARSE_MODE,
                     link_preview_options=NO_LINK_PREVIEW,
                 )
+                logger.info(
+                    "Delivered tool result by editing message: user=%d thread=%d "
+                    "message_id=%d",
+                    user_id,
+                    tid,
+                    edit_msg_id,
+                )
                 await _send_task_images(bot, chat_id, task)
                 await _check_and_send_status(bot, user_id, wid, task.thread_id)
                 return
@@ -372,6 +387,13 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                         message_id=edit_msg_id,
                         text=plain_text,
                         link_preview_options=NO_LINK_PREVIEW,
+                    )
+                    logger.info(
+                        "Delivered tool result by plain edit: user=%d thread=%d "
+                        "message_id=%d",
+                        user_id,
+                        tid,
+                        edit_msg_id,
                     )
                     await _send_task_images(bot, chat_id, task)
                     await _check_and_send_status(bot, user_id, wid, task.thread_id)
@@ -399,6 +421,13 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 part,
             )
             if converted_msg_id is not None:
+                logger.info(
+                    "Delivered content by editing status message: user=%d thread=%d "
+                    "message_id=%d",
+                    user_id,
+                    tid,
+                    converted_msg_id,
+                )
                 last_msg_id = converted_msg_id
                 continue
 
@@ -410,7 +439,19 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
         )
 
         if sent:
+            logger.info(
+                "Delivered content message: user=%d thread=%d message_id=%d",
+                user_id,
+                tid,
+                sent.message_id,
+            )
             last_msg_id = sent.message_id
+        else:
+            logger.warning(
+                "Content send returned no Telegram message: user=%d thread=%d",
+                user_id,
+                tid,
+            )
 
     # 3. Record tool_use message ID for later editing
     if last_msg_id and task.tool_use_id and task.content_type == "tool_use":
@@ -639,11 +680,13 @@ async def enqueue_content_message(
     text: str | None = None,
     thread_id: int | None = None,
     image_data: list[tuple[str, bytes]] | None = None,
+    wait_until_sent: bool = False,
 ) -> None:
     """Enqueue a content message task."""
     logger.debug(
-        "Enqueue content: user=%d, window_id=%s, content_type=%s",
+        "Enqueue content: user=%d, thread=%s, window_id=%s, content_type=%s",
         user_id,
+        thread_id,
         window_id,
         content_type,
     )
@@ -660,6 +703,8 @@ async def enqueue_content_message(
         image_data=image_data,
     )
     queue.put_nowait(task)
+    if wait_until_sent:
+        await queue.join()
 
 
 async def enqueue_status_update(
@@ -721,6 +766,24 @@ def clear_tool_msg_ids_for_topic(user_id: int, thread_id: int | None = None) -> 
 
 async def shutdown_workers() -> None:
     """Stop all queue workers (called during bot shutdown)."""
+    queues = list(_message_queues.items())
+    if queues:
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*(queue.join() for _, queue in queues)),
+                timeout=10.0,
+            )
+        except TimeoutError:
+            pending = {
+                key: queue.qsize()
+                for key, queue in queues
+                if not queue.empty() or key in _active_queue_keys
+            }
+            logger.warning(
+                "Timed out waiting for message queues to drain before shutdown: %s",
+                pending,
+            )
+
     for _, worker in list(_queue_workers.items()):
         worker.cancel()
         try:

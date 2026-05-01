@@ -143,6 +143,49 @@ class TestReadNewLinesOffsetRecovery:
         assert "usage limit" in messages[0].text.lower()
 
     @pytest.mark.asyncio
+    async def test_deferred_state_waits_for_delivery_ack(self, monitor, tmp_path):
+        """Monitor offsets should not persist until Telegram delivery is acked."""
+        jsonl_file = tmp_path / "session.jsonl"
+        entry = {
+            "timestamp": "2026-03-25T22:21:29.901Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Delivered later"}],
+            },
+        }
+        jsonl_file.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+        monitor.scan_projects = AsyncMock(
+            return_value=[
+                SessionInfo(
+                    session_id="session-deferred",
+                    file_path=jsonl_file,
+                )
+            ]
+        )
+        monitor.state.update_session(
+            TrackedSession(
+                session_id="session-deferred",
+                file_path=str(jsonl_file),
+                last_byte_offset=0,
+            )
+        )
+
+        messages = await monitor.check_for_updates(set(), save_state=False)
+
+        assert [message.text for message in messages] == ["Delivered later"]
+        assert monitor.state.get_session("session-deferred").last_byte_offset == 0
+
+        monitor.commit_deferred_state_updates()
+
+        assert (
+            monitor.state.get_session("session-deferred").last_byte_offset
+            == jsonl_file.stat().st_size
+        )
+
+    @pytest.mark.asyncio
     async def test_rebinds_bound_window_with_stale_cwd(self, monitor, tmp_path):
         """Rebind a topic window when session_map points at an old cwd."""
         jsonl_file = tmp_path / "session.jsonl"

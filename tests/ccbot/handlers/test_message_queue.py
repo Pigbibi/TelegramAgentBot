@@ -56,3 +56,50 @@ async def test_different_threads_process_concurrently(monkeypatch):
         if queues:
             await asyncio.gather(*(q.join() for q in queues))
         await message_queue.shutdown_workers()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_can_wait_until_content_is_processed(monkeypatch):
+    await message_queue.shutdown_workers()
+    completed: list[int | None] = []
+
+    async def fake_process_content(bot, user_id, task):
+        await asyncio.sleep(0.01)
+        completed.append(task.thread_id)
+
+    monkeypatch.setattr(message_queue, "_process_content_task", fake_process_content)
+
+    await message_queue.enqueue_content_message(
+        bot=object(),
+        user_id=1,
+        window_id="@1",
+        parts=["final"],
+        thread_id=303,
+        wait_until_sent=True,
+    )
+
+    assert completed == [303]
+    await message_queue.shutdown_workers()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drains_pending_content_before_cancelling(monkeypatch):
+    await message_queue.shutdown_workers()
+    completed: list[int | None] = []
+
+    async def fake_process_content(bot, user_id, task):
+        await asyncio.sleep(0.01)
+        completed.append(task.thread_id)
+
+    monkeypatch.setattr(message_queue, "_process_content_task", fake_process_content)
+
+    await message_queue.enqueue_content_message(
+        bot=object(),
+        user_id=1,
+        window_id="@1",
+        parts=["final"],
+        thread_id=404,
+    )
+
+    await message_queue.shutdown_workers()
+    assert completed == [404]
