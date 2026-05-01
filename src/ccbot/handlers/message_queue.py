@@ -66,11 +66,15 @@ class MessageTask:
     image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
 
 
-# Per-user message queues and worker tasks
-_message_queues: dict[int, asyncio.Queue[MessageTask]] = {}
-_queue_workers: dict[int, asyncio.Task[None]] = {}
-_queue_locks: dict[int, asyncio.Lock] = {}  # Protect drain/refill operations
-_active_queue_users: set[int] = set()
+# Per-target message queues and worker tasks.
+# Keyed by (user_id, thread_id_or_0) so different Telegram topics/windows for
+# the same user can be delivered independently while preserving ordering within
+# each topic.
+QueueKey = tuple[int, int]
+_message_queues: dict[QueueKey, asyncio.Queue[MessageTask]] = {}
+_queue_workers: dict[QueueKey, asyncio.Task[None]] = {}
+_queue_locks: dict[QueueKey, asyncio.Lock] = {}  # Protect drain/refill operations
+_active_queue_keys: set[QueueKey] = set()
 
 # Map (tool_use_id, user_id, thread_id_or_0) -> telegram message_id
 # for editing tool_use messages with results
@@ -86,28 +90,38 @@ _flood_until: dict[int, float] = {}
 FLOOD_CONTROL_MAX_WAIT = 10
 
 
-def get_message_queue(user_id: int) -> asyncio.Queue[MessageTask] | None:
-    """Get the message queue for a user (if exists)."""
-    return _message_queues.get(user_id)
+def _queue_key(user_id: int, thread_id: int | None = None) -> QueueKey:
+    """Return the queue key for a user/topic target."""
+    return (user_id, thread_id or 0)
+
+
+def get_message_queue(
+    user_id: int, thread_id: int | None = None
+) -> asyncio.Queue[MessageTask] | None:
+    """Get the message queue for a user/topic target (if exists)."""
+    return _message_queues.get(_queue_key(user_id, thread_id))
 
 
 def has_pending_message_work() -> bool:
     """Return whether Telegram message delivery has queued or active work."""
-    return bool(_active_queue_users) or any(
+    return bool(_active_queue_keys) or any(
         not queue.empty() for queue in _message_queues.values()
     )
 
 
-def get_or_create_queue(bot: Bot, user_id: int) -> asyncio.Queue[MessageTask]:
-    """Get or create message queue and worker for a user."""
-    if user_id not in _message_queues:
-        _message_queues[user_id] = asyncio.Queue()
-        _queue_locks[user_id] = asyncio.Lock()
-        # Start worker task for this user
-        _queue_workers[user_id] = asyncio.create_task(
-            _message_queue_worker(bot, user_id)
+def get_or_create_queue(
+    bot: Bot, user_id: int, thread_id: int | None = None
+) -> asyncio.Queue[MessageTask]:
+    """Get or create message queue and worker for a user/topic target."""
+    key = _queue_key(user_id, thread_id)
+    if key not in _message_queues:
+        _message_queues[key] = asyncio.Queue()
+        _queue_locks[key] = asyncio.Lock()
+        # Start worker task for this user/topic target
+        _queue_workers[key] = asyncio.create_task(
+            _message_queue_worker(bot, user_id, key[1])
         )
-    return _message_queues[user_id]
+    return _message_queues[key]
 
 
 def _inspect_queue(queue: asyncio.Queue[MessageTask]) -> list[MessageTask]:
@@ -205,16 +219,21 @@ async def _merge_content_tasks(
     )
 
 
-async def _message_queue_worker(bot: Bot, user_id: int) -> None:
-    """Process message tasks for a user sequentially."""
-    queue = _message_queues[user_id]
-    lock = _queue_locks[user_id]
-    logger.info(f"Message queue worker started for user {user_id}")
+async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> None:
+    """Process message tasks for a user/topic target sequentially."""
+    key = _queue_key(user_id, thread_id_or_0)
+    queue = _message_queues[key]
+    lock = _queue_locks[key]
+    logger.info(
+        "Message queue worker started for user %d thread %d",
+        user_id,
+        thread_id_or_0,
+    )
 
     while True:
         try:
             task = await queue.get()
-            _active_queue_users.add(user_id)
+            _active_queue_keys.add(key)
             try:
                 # Flood control: drop status, wait for content
                 flood_end = _flood_until.get(user_id, 0)
@@ -274,13 +293,22 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
             except Exception as e:
                 logger.error(f"Error processing message task for user {user_id}: {e}")
             finally:
-                _active_queue_users.discard(user_id)
+                _active_queue_keys.discard(key)
                 queue.task_done()
         except asyncio.CancelledError:
-            logger.info(f"Message queue worker cancelled for user {user_id}")
+            logger.info(
+                "Message queue worker cancelled for user %d thread %d",
+                user_id,
+                thread_id_or_0,
+            )
             break
         except Exception as e:
-            logger.error(f"Unexpected error in queue worker for user {user_id}: {e}")
+            logger.error(
+                "Unexpected error in queue worker for user %d thread %d: %s",
+                user_id,
+                thread_id_or_0,
+                e,
+            )
 
 
 def _send_kwargs(thread_id: int | None) -> dict[str, int]:
@@ -584,7 +612,7 @@ async def _check_and_send_status(
 ) -> None:
     """Check terminal for status line and send status message if present."""
     # Skip if there are more messages pending in the queue
-    queue = _message_queues.get(user_id)
+    queue = get_message_queue(user_id, thread_id)
     if queue and not queue.empty():
         return
     w = await tmux_manager.find_window_by_id(window_id)
@@ -619,7 +647,7 @@ async def enqueue_content_message(
         window_id,
         content_type,
     )
-    queue = get_or_create_queue(bot, user_id)
+    queue = get_or_create_queue(bot, user_id, thread_id)
 
     task = MessageTask(
         task_type="content",
@@ -656,7 +684,7 @@ async def enqueue_status_update(
         if info and info[1] == window_id and info[2] == status_text:
             return
 
-    queue = get_or_create_queue(bot, user_id)
+    queue = get_or_create_queue(bot, user_id, thread_id)
 
     if status_text:
         task = MessageTask(
@@ -702,5 +730,5 @@ async def shutdown_workers() -> None:
     _queue_workers.clear()
     _message_queues.clear()
     _queue_locks.clear()
-    _active_queue_users.clear()
+    _active_queue_keys.clear()
     logger.info("Message queue workers stopped")
