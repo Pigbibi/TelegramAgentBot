@@ -23,6 +23,7 @@ import time
 from telegram import Bot
 from telegram.error import BadRequest
 
+from ..config import config
 from ..session import session_manager
 from ..terminal_parser import is_interactive_ui, parse_status_update
 from ..tmux_manager import tmux_manager
@@ -36,8 +37,7 @@ from .message_queue import enqueue_status_update, get_message_queue
 
 logger = logging.getLogger(__name__)
 
-# Status polling interval
-STATUS_POLL_INTERVAL = 1.0  # seconds - faster response (rate limiting at send layer)
+# Default comes from CCBOT_STATUS_POLL_INTERVAL. Rate limiting remains at the send layer.
 
 # Topic existence probe interval
 TOPIC_CHECK_INTERVAL = 60.0  # seconds
@@ -160,7 +160,8 @@ async def update_status_message(
 
 async def status_poll_loop(bot: Bot) -> None:
     """Background task to poll terminal status for all thread-bound windows."""
-    logger.info("Status polling started (interval: %ss)", STATUS_POLL_INTERVAL)
+    poll_interval = config.status_poll_interval
+    logger.info("Status polling started (interval: %ss)", poll_interval)
     last_topic_check = 0.0
     while True:
         try:
@@ -253,4 +254,4 @@ async def status_poll_loop(bot: Bot) -> None:
         except Exception as e:
             logger.error(f"Status poll loop error: {e}")
 
-        await asyncio.sleep(STATUS_POLL_INTERVAL)
+        await asyncio.sleep(poll_interval)

@@ -212,6 +212,7 @@ CCBOT_SHOW_COMMENTARY_MESSAGES=true
 | `CCBOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | 创建新会话时默认展示的目录 |
 | `CCBOT_PROJECT_ROOTS` | _(空)_ | 可选：进入目录浏览前展示的命名根目录 |
 | `MONITOR_POLL_INTERVAL` | `2.0` | 轮询间隔，单位秒 |
+| `CCBOT_STATUS_POLL_INTERVAL` | `1.0` | 终端状态轮询间隔，单位秒；用于持续编辑 Telegram 里的 `Working (...)` 状态 |
 | `CCBOT_AUTO_UPDATE` | `false` | 启动时自动检查并 fast-forward 更新 git 源码安装 |
 | `CCBOT_UPDATE_INTERVAL_SECONDS` | `86400` | 两次自动更新检查之间的最短间隔 |
 | `CCBOT_UPDATE_REQUIRE_IDLE` | `true` | 仅在没有活跃 Codex pane 时应用自动更新 |

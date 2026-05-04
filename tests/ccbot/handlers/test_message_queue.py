@@ -1,4 +1,6 @@
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -103,3 +105,53 @@ async def test_shutdown_drains_pending_content_before_cancelling(monkeypatch):
 
     await message_queue.shutdown_workers()
     assert completed == [404]
+
+
+@pytest.mark.asyncio
+async def test_elapsed_working_status_edits_existing_status_message(monkeypatch):
+    """Changing Working elapsed time should edit the Telegram status in place."""
+    message_queue._status_msg_info.clear()
+
+    bot = AsyncMock()
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+
+    async def fake_send_with_fallback(*args, **kwargs):
+        return SimpleNamespace(message_id=321)
+
+    monkeypatch.setattr(message_queue, "send_with_fallback", fake_send_with_fallback)
+
+    await message_queue._process_status_update_task(
+        bot,
+        1,
+        message_queue.MessageTask(
+            task_type="status_update",
+            text="• Working (1m 00s • esc to interrupt)",
+            window_id="@4",
+            thread_id=42,
+        ),
+    )
+    await message_queue._process_status_update_task(
+        bot,
+        1,
+        message_queue.MessageTask(
+            task_type="status_update",
+            text="• Working (1m 05s • esc to interrupt)",
+            window_id="@4",
+            thread_id=42,
+        ),
+    )
+
+    bot.edit_message_text.assert_awaited_once()
+    edit_kwargs = bot.edit_message_text.await_args.kwargs
+    assert edit_kwargs["chat_id"] == -100123
+    assert edit_kwargs["message_id"] == 321
+    assert "1m 05s" in edit_kwargs["text"]
+    assert message_queue._status_msg_info[(1, 42)][2] == (
+        "• Working (1m 05s • esc to interrupt)"
+    )
+
+    message_queue._status_msg_info.clear()

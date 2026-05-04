@@ -43,6 +43,11 @@ class TestConfigValid:
         cfg = Config()
         assert cfg.monitor_poll_interval == 5.0
 
+    def test_custom_status_poll_interval(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_STATUS_POLL_INTERVAL", "0.5")
+        cfg = Config()
+        assert cfg.status_poll_interval == 0.5
+
     def test_is_user_allowed_true(self):
         cfg = Config()
         assert cfg.is_user_allowed(12345) is True
