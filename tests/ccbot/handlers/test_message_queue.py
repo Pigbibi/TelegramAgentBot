@@ -155,3 +155,82 @@ async def test_elapsed_working_status_edits_existing_status_message(monkeypatch)
     )
 
     message_queue._status_msg_info.clear()
+
+
+@pytest.mark.asyncio
+async def test_status_updates_are_coalesced_behind_content(monkeypatch):
+    """Queued Working timer edits should not bury real Codex output."""
+    await message_queue.shutdown_workers()
+    message_queue._status_msg_info.clear()
+    message_queue._flood_until.clear()
+
+    processed: list[tuple[str, str | None]] = []
+    first_status_started = asyncio.Event()
+    release_first_status = asyncio.Event()
+    status_calls = 0
+
+    async def fake_process_status(bot, user_id, task):
+        nonlocal status_calls
+        status_calls += 1
+        processed.append((task.task_type, task.text))
+        if status_calls == 1:
+            first_status_started.set()
+            await release_first_status.wait()
+
+    async def fake_process_content(bot, user_id, task):
+        processed.append((task.task_type, task.parts[0]))
+
+    monkeypatch.setattr(
+        message_queue, "_process_status_update_task", fake_process_status
+    )
+    monkeypatch.setattr(message_queue, "_process_content_task", fake_process_content)
+
+    try:
+        await message_queue.enqueue_status_update(
+            bot=object(),
+            user_id=1,
+            window_id="@1",
+            status_text="Working 0",
+            thread_id=505,
+        )
+        await asyncio.wait_for(first_status_started.wait(), timeout=1)
+
+        for i in range(1, 20):
+            await message_queue.enqueue_status_update(
+                bot=object(),
+                user_id=1,
+                window_id="@1",
+                status_text=f"Working {i}",
+                thread_id=505,
+            )
+
+        await message_queue.enqueue_content_message(
+            bot=object(),
+            user_id=1,
+            window_id="@1",
+            parts=["final answer"],
+            thread_id=505,
+        )
+        await message_queue.enqueue_status_update(
+            bot=object(),
+            user_id=1,
+            window_id="@1",
+            status_text="Working final",
+            thread_id=505,
+        )
+
+        release_first_status.set()
+        queue = message_queue.get_message_queue(1, 505)
+        assert queue is not None
+        await asyncio.wait_for(queue.join(), timeout=1)
+
+        assert processed == [
+            ("status_update", "Working 0"),
+            ("content", "final answer"),
+            ("status_update", "Working final"),
+        ]
+    finally:
+        release_first_status.set()
+        await message_queue.shutdown_workers()
+        message_queue._status_msg_info.clear()
+        message_queue._flood_until.clear()

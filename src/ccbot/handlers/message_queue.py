@@ -219,6 +219,37 @@ async def _merge_content_tasks(
     )
 
 
+async def _enqueue_coalesced_status_task(
+    queue: asyncio.Queue[MessageTask],
+    task: MessageTask,
+    lock: asyncio.Lock,
+) -> int:
+    """Enqueue the latest status task, dropping stale pending status tasks.
+
+    Status updates are ephemeral. Older pending status updates can bury actual
+    Codex output behind a long queue of Working timer edits, so preserve content
+    tasks and keep only the newest pending status task for the target topic.
+    """
+    dropped = 0
+
+    async with lock:
+        items = _inspect_queue(queue)
+        for item in items:
+            if item.task_type in ("status_update", "status_clear"):
+                queue.task_done()
+                dropped += 1
+                continue
+
+            queue.put_nowait(item)
+            # Compensate for put_nowait increment. This task was already counted
+            # when originally enqueued.
+            queue.task_done()
+
+        queue.put_nowait(task)
+
+    return dropped
+
+
 async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> None:
     """Process message tasks for a user/topic target sequentially."""
     key = _queue_key(user_id, thread_id_or_0)
@@ -729,6 +760,7 @@ async def enqueue_status_update(
         if info and info[1] == window_id and info[2] == status_text:
             return
 
+    key = _queue_key(user_id, thread_id)
     queue = get_or_create_queue(bot, user_id, thread_id)
 
     if status_text:
@@ -741,7 +773,14 @@ async def enqueue_status_update(
     else:
         task = MessageTask(task_type="status_clear", thread_id=thread_id)
 
-    queue.put_nowait(task)
+    dropped = await _enqueue_coalesced_status_task(queue, task, _queue_locks[key])
+    if dropped:
+        logger.debug(
+            "Coalesced %d queued status tasks for user=%d thread=%d",
+            dropped,
+            user_id,
+            tid,
+        )
 
 
 def clear_status_msg_info(user_id: int, thread_id: int | None = None) -> None:
