@@ -139,6 +139,9 @@ class Config:
         )
 
         self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "2.0"))
+        self.status_poll_interval = float(
+            os.getenv("CCBOT_STATUS_POLL_INTERVAL", "1.0")
+        )
 
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix

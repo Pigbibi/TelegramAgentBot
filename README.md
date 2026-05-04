@@ -214,6 +214,7 @@ For most setups, this is the only file you need to edit.
 | `CCBOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
 | `CCBOT_PROJECT_ROOTS` | _(none)_ | Optional named roots shown before directory browsing |
 | `MONITOR_POLL_INTERVAL` | `2.0` | Poll interval in seconds |
+| `CCBOT_STATUS_POLL_INTERVAL` | `1.0` | Terminal status polling interval in seconds; active `Working (...)` status edits keep Telegram refreshed |
 | `CCBOT_AUTO_UPDATE` | `false` | On startup, check and fast-forward git source installs |
 | `CCBOT_UPDATE_INTERVAL_SECONDS` | `86400` | Minimum seconds between automatic update checks |
 | `CCBOT_UPDATE_REQUIRE_IDLE` | `true` | Apply automatic updates only when no Codex pane is active |
