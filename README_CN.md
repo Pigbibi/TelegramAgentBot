@@ -203,6 +203,13 @@ CCBOT_SHOW_COMMENTARY_MESSAGES=true
 - `docs/github_codex_bridge.md`
 - `docs/github_codex_bridge.sample.json`
 
+桥接器支持两种本地模式：
+
+- `targets`：直接轮询一个或多个仓库，把每个 issue 交给对应的 tmux
+  窗口
+- `orchestrator`：消费控制面仓库发布的月度 issue，把任务转发给一个
+  runner 窗口
+
 真实配置应放在 `~/.ccbot/github_codex_bridge.json`，不要提交到仓库。
 
 ### 必填变量

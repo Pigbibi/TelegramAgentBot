@@ -1,4 +1,5 @@
 {
+  "bridge_mode": "targets",
   "dispatch_mode": "poll",
   "tmux_socket": null,
   "issue_limit": 50,
@@ -7,6 +8,12 @@
   "poll_interval_seconds": 300,
   "retry_attempts": 3,
   "retry_base_delay_seconds": 1.0,
+  "source_repo": "owner/control-plane-repo",
+  "source_label": "monthly-review",
+  "source_query": "Monthly Audit Review",
+  "runner_window": "@42",
+  "runner_workspace": "/home/ubuntu/Projects/runner",
+  "runner_extra_instructions": "Treat the monthly issue as the contract and keep changes minimal.",
   "targets": [
     {
       "name": "snapshot-audit",

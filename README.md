@@ -205,6 +205,13 @@ configuration local and use the template docs in:
 - `docs/github_codex_bridge.md`
 - `docs/github_codex_bridge.sample.json`
 
+The bridge supports two local modes:
+
+- `targets`: poll one or more repositories directly and hand each issue to its
+  configured tmux window
+- `orchestrator`: consume the monthly issue from a control-plane repository and
+  relay it to a single runner window
+
 The real config belongs at `~/.ccbot/github_codex_bridge.json` and should not
 be committed.
 

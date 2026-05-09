@@ -8,10 +8,12 @@ from ccbot.bridge import (
     BridgeConfig,
     BridgeTarget,
     GitHubIssue,
+    build_orchestrator_message,
     build_task_message,
     dispatch_to_tmux,
     load_config,
     process_target,
+    process_orchestrator,
     select_issue,
 )
 
@@ -41,6 +43,7 @@ def test_load_config(tmp_path: Path) -> None:
     cfg_path.write_text(
         json.dumps(
             {
+                "bridge_mode": "targets",
                 "tmux_socket": "ccbot",
                 "issue_limit": 20,
                 "body_limit": 100,
@@ -75,6 +78,34 @@ def test_load_config(tmp_path: Path) -> None:
     assert cfg.targets[0].query == "monthly review"
     assert cfg.targets[0].merge_mode == "auto"
     assert cfg.targets[0].merge_label == "auto-merge-ok"
+
+
+def test_load_config_orchestrator_mode(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "bridge.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "bridge_mode": "orchestrator",
+                "source_repo": "owner/control-plane",
+                "source_label": "monthly-review",
+                "source_query": "Monthly Audit Review",
+                "runner_window": "@42",
+                "runner_workspace": "/tmp/runner",
+                "runner_extra_instructions": "Keep it minimal.",
+                "tmux_socket": "ccbot",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = load_config(cfg_path)
+    assert cfg.bridge_mode == "orchestrator"
+    assert cfg.source_repo == "owner/control-plane"
+    assert cfg.source_label == "monthly-review"
+    assert cfg.source_query == "Monthly Audit Review"
+    assert cfg.runner_window == "@42"
+    assert cfg.runner_workspace == "/tmp/runner"
+    assert cfg.runner_extra_instructions == "Keep it minimal."
 
 
 def test_select_issue_prefers_latest_matching_issue() -> None:
@@ -144,6 +175,33 @@ def test_build_task_message_mentions_auto_merge_gate() -> None:
     text = build_task_message(target, issue, cfg)
     assert "Add the `auto-merge-ok` label" in text
     assert "Do not merge unless `auto-merge-ok` is present" in text
+
+
+def test_build_orchestrator_message_includes_monthly_contract() -> None:
+    issue = _make_issue(
+        17,
+        "Monthly Audit Review: 2026-05",
+        body='{"month":"2026-05","targets":["owner/repo-a"]}',
+        comments=[{"author": {"login": "ops"}, "body": "please keep it scoped"}],
+    )
+    cfg = BridgeConfig(
+        bridge_mode="orchestrator",
+        targets=[],
+        source_repo="owner/control-plane",
+        runner_window="@42",
+        runner_workspace="/home/ubuntu/Projects/runner",
+        runner_extra_instructions="Keep output concise.",
+        body_limit=200,
+        comment_limit=1,
+    )
+
+    text = build_orchestrator_message(issue, cfg)
+    assert "Mode: orchestrator" in text
+    assert "Source repo: owner/control-plane" in text
+    assert "Treat the issue body and payload as the current contract" in text
+    assert "Workspace: /home/ubuntu/Projects/runner" in text
+    assert "Keep output concise." in text
+    assert "@ops" in text
 
 
 def test_dispatch_to_tmux_uses_paste_buffer(monkeypatch) -> None:
@@ -220,3 +278,33 @@ def test_process_target_retries_retryable_gh_failure(monkeypatch) -> None:
 
     assert dispatched is True
     assert calls["count"] == 2
+
+
+def test_process_orchestrator_dispatches_monthly_issue(monkeypatch) -> None:
+    cfg = BridgeConfig(
+        bridge_mode="orchestrator",
+        targets=[],
+        source_repo="owner/control-plane",
+        runner_window="@42",
+        source_label="monthly-review",
+        source_query="Monthly Audit Review",
+    )
+    issue = _make_issue(88, "Monthly Audit Review: 2026-05", labels=["monthly-review"])
+    state: dict = {}
+
+    monkeypatch.setattr(
+        "ccbot.bridge.list_open_issues",
+        lambda repo, limit, **kwargs: [issue],
+    )
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "ccbot.bridge.dispatch_to_tmux",
+        lambda window, text, **kwargs: sent.append((window, text)),
+    )
+
+    dispatched = process_orchestrator(cfg, state)
+
+    assert dispatched is True
+    assert sent[0][0] == "@42"
+    assert "Monthly Audit Review: 2026-05" in sent[0][1]
+    assert state["orchestrator"]["last_issue_number"] == 88

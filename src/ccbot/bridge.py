@@ -9,8 +9,15 @@ Typical usage:
 
     ccbot-bridge --config ~/.ccbot/github_codex_bridge.json --watch
 
-The configuration file is a JSON object with a `targets` array. Each target may
-define:
+The configuration file can use one of two modes:
+
+1. legacy target mode, where the config contains a `targets` array and each
+   target points at a GitHub repo and tmux window independently;
+2. orchestrator mode, where the config contains a single `source_repo` /
+   `runner_window` pair and the bridge consumes a monthly issue published by a
+   GitHub Actions control-plane repository such as `AuditOrchestrator`.
+
+Legacy target mode targets may define:
 
     {
       "name": "crypto-snapshot",
@@ -50,10 +57,15 @@ DEFAULT_ISSUE_LIMIT = 50
 DEFAULT_BODY_LIMIT = 4000
 DEFAULT_COMMENT_LIMIT = 3
 DEFAULT_DISPATCH_MODE = "poll"
+DEFAULT_BRIDGE_MODE = "targets"
 DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_RETRY_BASE_DELAY_SECONDS = 1.0
 DEFAULT_MERGE_MODE = "manual"
 DEFAULT_MERGE_LABEL = "auto-merge-ok"
+DEFAULT_SOURCE_REPO = "QuantStrategyLab/AuditOrchestrator"
+DEFAULT_SOURCE_LABEL = "monthly-review"
+DEFAULT_SOURCE_QUERY = "Monthly Audit Review"
+DEFAULT_RUNNER_WINDOW = "audit-runner"
 
 
 @dataclass(slots=True)
@@ -76,7 +88,8 @@ class BridgeTarget:
 class BridgeConfig:
     """Top-level bridge configuration loaded from JSON."""
 
-    targets: list[BridgeTarget]
+    bridge_mode: str = DEFAULT_BRIDGE_MODE
+    targets: list[BridgeTarget] = field(default_factory=list)
     dispatch_mode: str = DEFAULT_DISPATCH_MODE
     tmux_socket: str | None = None
     issue_limit: int = DEFAULT_ISSUE_LIMIT
@@ -85,6 +98,13 @@ class BridgeConfig:
     poll_interval_seconds: int = DEFAULT_POLL_INTERVAL_SECONDS
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS
     retry_base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS
+    source_repo: str = DEFAULT_SOURCE_REPO
+    source_label: str = DEFAULT_SOURCE_LABEL
+    source_query: str = DEFAULT_SOURCE_QUERY
+    source_issue_number: int | None = None
+    runner_window: str = DEFAULT_RUNNER_WINDOW
+    runner_workspace: str | None = None
+    runner_extra_instructions: str | None = None
 
 
 @dataclass(slots=True)
@@ -212,6 +232,14 @@ def _parse_issue(raw: dict[str, Any]) -> GitHubIssue:
 def load_config(path: Path) -> BridgeConfig:
     """Load bridge configuration from JSON."""
     raw = json.loads(path.read_text(encoding="utf-8"))
+
+    def _str_setting(key: str, default: str) -> str:
+        value = raw.get(key, default)
+        if value is None:
+            return default
+        text = str(value).strip()
+        return text or default
+
     targets: list[BridgeTarget] = []
     for item in raw.get("targets", []):
         labels = item.get("labels", []) or []
@@ -243,10 +271,11 @@ def load_config(path: Path) -> BridgeConfig:
                 extra_instructions=item.get("extra_instructions"),
             )
         )
-    return BridgeConfig(
+    bridge_mode = _str_setting("bridge_mode", DEFAULT_BRIDGE_MODE)
+    config = BridgeConfig(
+        bridge_mode=bridge_mode,
         targets=targets,
-        dispatch_mode=str(raw.get("dispatch_mode", DEFAULT_DISPATCH_MODE)).strip()
-        or DEFAULT_DISPATCH_MODE,
+        dispatch_mode=_str_setting("dispatch_mode", DEFAULT_DISPATCH_MODE),
         tmux_socket=raw.get("tmux_socket"),
         issue_limit=int(raw.get("issue_limit", DEFAULT_ISSUE_LIMIT)),
         body_limit=int(raw.get("body_limit", DEFAULT_BODY_LIMIT)),
@@ -258,7 +287,21 @@ def load_config(path: Path) -> BridgeConfig:
         retry_base_delay_seconds=float(
             raw.get("retry_base_delay_seconds", DEFAULT_RETRY_BASE_DELAY_SECONDS)
         ),
+        source_repo=_str_setting("source_repo", DEFAULT_SOURCE_REPO),
+        source_label=_str_setting("source_label", DEFAULT_SOURCE_LABEL),
+        source_query=_str_setting("source_query", DEFAULT_SOURCE_QUERY),
+        source_issue_number=(
+            int(raw["source_issue_number"])
+            if raw.get("source_issue_number") is not None
+            else None
+        ),
+        runner_window=_str_setting("runner_window", DEFAULT_RUNNER_WINDOW),
+        runner_workspace=raw.get("runner_workspace"),
+        runner_extra_instructions=raw.get("runner_extra_instructions"),
     )
+    if config.bridge_mode.lower() not in {"targets", "orchestrator"}:
+        raise ValueError(f"Unsupported bridge_mode: {config.bridge_mode}")
+    return config
 
 
 def load_state(path: Path) -> dict[str, Any]:
@@ -453,6 +496,54 @@ def build_task_message(target: BridgeTarget, issue: GitHubIssue, config: BridgeC
     return "\n".join(lines).strip() + "\n"
 
 
+def build_orchestrator_message(issue: GitHubIssue, config: BridgeConfig) -> str:
+    """Build the Codex task message for the orchestrator issue."""
+    comments: list[dict[str, Any]] = issue.comments[: config.comment_limit]
+    comment_lines: list[str] = []
+    for comment in comments:
+        author = comment.get("author", {}) if isinstance(comment, dict) else {}
+        author_login = ""
+        if isinstance(author, dict):
+            author_login = str(author.get("login", "")).strip()
+        body = str(comment.get("body", "")) if isinstance(comment, dict) else ""
+        body = _truncate(body, 800)
+        prefix = f"- @{author_login}: " if author_login else "- "
+        comment_lines.append(prefix + body.replace("\n", "\n  "))
+
+    body_text = _truncate(issue.body, config.body_limit)
+    lines = [
+        "[Codex bridge task]",
+        "Mode: orchestrator",
+        f"Source repo: {config.source_repo}",
+        f"Issue: #{issue.number} {issue.title}",
+        f"URL: {issue.url}",
+        "",
+        "You are the downstream Codex runner for the monthly audit control plane.",
+        "Read the monthly issue and its latest comments before editing.",
+        "Treat the issue body and payload as the current contract for the month.",
+        "Inspect the machine-readable payload before choosing actions.",
+        "Make the smallest safe change that satisfies the issue.",
+        "Prefer targeted tests over broad builds.",
+        "Open draft PR(s) in the affected repository or repositories.",
+        "Comment back to the monthly issue with the PR link(s) or failure summary.",
+    ]
+    if config.runner_workspace:
+        lines.extend(["", f"Workspace: {config.runner_workspace}"])
+    if config.runner_extra_instructions:
+        lines.extend(["", "Runner instructions:", config.runner_extra_instructions.strip()])
+    lines.extend(
+        [
+            "",
+            "Monthly issue body:",
+            body_text or "(empty)",
+        ]
+    )
+    if comment_lines:
+        lines.extend(["", "Latest comments:"])
+        lines.extend(comment_lines)
+    return "\n".join(lines).strip() + "\n"
+
+
 def _tmux_prefix(socket_name: str | None) -> list[str]:
     cmd = ["tmux"]
     if socket_name:
@@ -574,16 +665,87 @@ def process_target(
     return True
 
 
+def process_orchestrator(
+    config: BridgeConfig,
+    state: dict[str, Any],
+    *,
+    force: bool = False,
+    dry_run: bool = False,
+    issue_number: int | None = None,
+) -> bool:
+    """Poll the orchestrator issue and dispatch it to the runner window."""
+    orch_state = state.setdefault("orchestrator", {})
+
+    if issue_number is not None:
+        candidate = fetch_issue(
+            config.source_repo,
+            issue_number,
+            attempts=config.retry_attempts,
+            base_delay_seconds=config.retry_base_delay_seconds,
+        )
+    else:
+        issues = list_open_issues(
+            config.source_repo,
+            config.issue_limit,
+            attempts=config.retry_attempts,
+            base_delay_seconds=config.retry_base_delay_seconds,
+        )
+        candidate = select_issue(
+            issues,
+            labels=[config.source_label] if config.source_label else None,
+            query=config.source_query,
+            issue_number=config.source_issue_number,
+        )
+
+    if candidate is None:
+        logger.info("No matching monthly issue for source_repo=%s", config.source_repo)
+        return False
+
+    fingerprint = _issue_fingerprint(candidate)
+    if not force and orch_state.get("last_fingerprint") == fingerprint:
+        logger.info(
+            "Orchestrator already dispatched issue #%d (%s)",
+            candidate.number,
+            fingerprint,
+        )
+        return False
+
+    message = build_orchestrator_message(candidate, config)
+    if dry_run:
+        print(message, end="")
+        return True
+
+    dispatch_to_tmux(
+        config.runner_window,
+        message,
+        socket_name=config.tmux_socket,
+        attempts=config.retry_attempts,
+        base_delay_seconds=config.retry_base_delay_seconds,
+    )
+    orch_state["last_fingerprint"] = fingerprint
+    orch_state["last_issue_number"] = candidate.number
+    orch_state["last_issue_url"] = candidate.url
+    orch_state["last_dispatched_at"] = datetime.now(tz=UTC).isoformat()
+    logger.info(
+        "Dispatched issue #%d to orchestrator runner window=%s",
+        candidate.number,
+        config.runner_window,
+    )
+    return True
+
+
 def candidate_target_window(target: BridgeTarget) -> str:
     """Return the tmux target for the bridge task."""
     return target.window
 
 
-def _load_targets(path: Path) -> BridgeConfig:
+def _load_config(path: Path) -> BridgeConfig:
     """Load config and normalize defaults."""
     config = load_config(path)
-    if not config.targets:
+    if config.bridge_mode.lower() == "targets" and not config.targets:
         raise ValueError("bridge config has no targets")
+    if config.bridge_mode.lower() == "orchestrator" and not config.source_repo:
+        raise ValueError("bridge config is missing source_repo for orchestrator mode")
     return config
 
 
@@ -658,6 +820,19 @@ def run_once(
     issue_number: int | None = None,
 ) -> int:
     """Run one bridge pass and return the number of dispatches."""
+    mode = config.bridge_mode.lower()
+    if mode == "orchestrator":
+        return int(
+            process_orchestrator(
+                config,
+                state,
+                force=force,
+                dry_run=dry_run,
+                issue_number=issue_number,
+            )
+        )
+    if mode != "targets":
+        raise ValueError(f"Unsupported bridge_mode: {config.bridge_mode}")
     dispatched = 0
     for target in _selected_targets(config, target_names):
         if issue_number is not None:
@@ -680,7 +855,7 @@ def run_once(
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
     args = _parse_args(argv or sys.argv[1:])
-    config = _load_targets(args.config)
+    config = _load_config(args.config)
     state = load_state(args.state_file)
 
     logging.basicConfig(

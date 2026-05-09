@@ -13,8 +13,8 @@ The intended flow is:
    to Telegram as usual.
 
 The bridge does not replace ccbot. It is only the task injector.
-It only touches the targets listed in its config file, so it will not affect
-other repositories unless you add them explicitly.
+It only touches the repositories listed in its config file, so it will not
+affect other repositories unless you add them explicitly.
 
 ## Configuration
 
@@ -33,6 +33,7 @@ Create `~/.ccbot/github_codex_bridge.json`:
 
 ```json
 {
+  "bridge_mode": "targets",
   "dispatch_mode": "poll",
   "tmux_socket": null,
   "issue_limit": 50,
@@ -41,6 +42,12 @@ Create `~/.ccbot/github_codex_bridge.json`:
   "poll_interval_seconds": 300,
   "retry_attempts": 3,
   "retry_base_delay_seconds": 1.0,
+  "source_repo": "owner/control-plane-repo",
+  "source_label": "monthly-review",
+  "source_query": "Monthly Audit Review",
+  "runner_window": "@42",
+  "runner_workspace": "/home/ubuntu/Projects/runner",
+  "runner_extra_instructions": "Treat the monthly issue as the contract and keep changes minimal.",
   "targets": [
     {
       "name": "snapshot-audit",
@@ -66,8 +73,24 @@ Create `~/.ccbot/github_codex_bridge.json`:
 
 Fields:
 
+- `bridge_mode`: `targets` (legacy per-repository bridge, the default) or
+  `orchestrator` (consume the monthly issue published by a GitHub Actions
+  control plane such as `AuditOrchestrator`).
 - `dispatch_mode`: `poll` (run once per invocation, the default) or `watch`
   (keep polling on `poll_interval_seconds`).
+- `source_repo`: repository that publishes the monthly issue when `bridge_mode`
+  is `orchestrator`.
+- `source_label`: label used to identify the monthly issue when `bridge_mode`
+  is `orchestrator`.
+- `source_query`: optional title/body filter used to select the monthly issue
+  when `bridge_mode` is `orchestrator`.
+- `source_issue_number`: optional explicit issue number to consume in
+  orchestrator mode.
+- `runner_window`: tmux window that receives the orchestrator task.
+- `runner_workspace`: optional local workspace path to include in the
+  orchestrator task prompt.
+- `runner_extra_instructions`: optional extra guardrails appended to the
+  orchestrator task prompt.
 - `repo`: GitHub repository in `owner/name` form.
 - `window`: tmux window id or target accepted by `tmux -t`.
 - `workspace`: optional local repo path to include in the instruction text.
@@ -80,6 +103,25 @@ Fields:
 - `retry_attempts`: bounded retry count for transient `gh` and `tmux` failures.
 - `retry_base_delay_seconds`: base delay for retry backoff.
 - `extra_instructions`: optional repo-specific guardrails appended to the task.
+
+## Bridge modes
+
+### Legacy target mode
+
+Use `bridge_mode: "targets"` when you want the bridge to poll one or more
+repositories directly and inject a separate Codex task for each target.
+
+This is the original mode and it still works as before.
+
+### Orchestrator mode
+
+Use `bridge_mode: "orchestrator"` when you want the bridge to consume a
+monthly issue from a control-plane repository and hand the work to one tmux
+runner window.
+
+The monthly issue should already contain the machine-readable payload defined by
+the control-plane repository. The bridge just relays that contract into the
+runner session.
 
 ## Automatic merge
 
@@ -106,10 +148,14 @@ in a narrow, auditable gate.
 
 ## Suggested target setup
 
-If you only want the two AI-audited repositories, start with:
+If you only want the two AI-audited repositories, start with `targets` mode:
 
 - `snapshot-audit` for your monthly snapshot/reporting repo
 - `execution-audit` for your monthly execution/audit repo
+
+If you want the GitHub Actions control plane to drive a single Codex runner,
+switch to `orchestrator` mode and point `source_repo` at that control plane
+repository.
 
 Do not use this bridge to self-update `ccbot`; keep the bridge focused on the
 external repositories listed in your local config file.
