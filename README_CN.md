@@ -2,39 +2,25 @@
 
 [English README](README.md)
 
-> 一个面向 Codex 工作流的 CCBot 分叉版。  
+> TelegramCodexCCBot 通过 Telegram 远程控制 Codex 会话。
 > CLI / 包名继续保持 `ccbot`。
 
-**上游项目：** https://github.com/six-ddc/ccbot  
-**许可证：** MIT（沿用上游）
+**原始项目：** https://github.com/six-ddc/ccbot
+**许可证：** MIT
 
 这个版本的目标很直接：通过 Telegram 远程控制真实运行在 tmux 里的 Codex 会话，让手机端和桌面端可以围绕同一个终端会话来回切换，而不是再起一个独立 SDK 会话。
 
 https://github.com/user-attachments/assets/15ffb38e-5eb9-4720-93b9-412e4961dc93
 
-## 为什么做这个 fork
+## 功能概览
 
-上游已经很好用，但我的实际使用场景更偏 Codex，所以这个 fork 主要做了这些方向的收敛：
+TelegramCodexCCBot 是一个通过 Telegram 远程控制 Codex 会话的工具：
 
 - 新建窗口默认直接跑 `codex`
 - 会话监控默认面向 `~/.codex` 下的现代 Codex transcript
 - Telegram 转发、topic 隔离、清理流程按长时间跑 Codex 的方式做了加固
 - 保留 tmux-first 的用法，手机和桌面都围绕同一个真实终端会话工作
-
-简单说：核心思路还是 CCBot，但默认假设你在用的是 Codex。
-
-## 相比上游优化了什么
-
-相对 https://github.com/six-ddc/ccbot，这个 fork 主要增加或调整了：
-
-- **Codex 优先默认值** —— 默认命令、文档和会话说明都以 Codex 为主
-- **递归扫描 Codex transcript** —— 直接读取 `~/.codex` 下的 JSONL 会话记录
-- **更稳的 Telegram 转发** —— 改进轮询超时、commentary 转发和通知链路
-- **更严格的话题隔离** —— 避免多个 Telegram topic 绑到同一个活跃 session 上
-- **更完整的脏状态清理** —— stale `session_map`、死 topic、死窗口、残留绑定会一起处理
-- **更干净的 topic 关闭流程** —— `/kill` 和 topic 删除时，本地状态清理更完整
-- **多账号切换与额度失败转移** —— 支持隔离的 `CODEX_HOME` 目录、账号快照，以及 `usage_limit_exceeded` 后切到新 session
-- **更贴近 Codex 的文档** —— 安装、配置、命令说明都改成 Codex 语境
+- 支持把 GitHub issue 中的结构化任务注入到 Codex tmux 会话
 
 ## 主要功能
 
@@ -217,8 +203,8 @@ CCBOT_SHOW_COMMENTARY_MESSAGES=true
 | `CCBOT_UPDATE_INTERVAL_SECONDS` | `86400` | 两次自动更新检查之间的最短间隔 |
 | `CCBOT_UPDATE_REQUIRE_IDLE` | `true` | 仅在没有活跃 Codex pane 时应用自动更新 |
 | `CCBOT_UPDATE_BUSY_RETRY_SECONDS` | `300` | 因正在工作而延后更新时，多久后再检查一次空闲状态 |
-| `CCBOT_UPDATE_REMOTE` | upstream remote | 可选：指定用于更新的 git remote |
-| `CCBOT_UPDATE_BRANCH` | upstream branch | 可选：指定用于更新的 git branch |
+| `CCBOT_UPDATE_REMOTE` | git remote | 可选：指定用于更新的 git remote |
+| `CCBOT_UPDATE_BRANCH` | git branch | 可选：指定用于更新的 git branch |
 | `CCBOT_UPDATE_RUN_UV_SYNC` | `true` | git 更新成功后是否执行 `uv sync` |
 | `CCBOT_CODEX_UPDATE_CHECK` | `false` | 在空闲更新循环里检查 Codex CLI 的 npm 新版本 |
 | `CCBOT_CODEX_AUTO_UPDATE` | `false` | 空闲且发现新版本时，执行 `npm install -g @openai/codex@latest` |
@@ -250,7 +236,7 @@ CCBOT_PROJECT_ROOTS=Local=~/Projects,Remote=/mnt/remote-projects
 CCBOT_AUTO_UPDATE=true
 ```
 
-bot 运行期间会按 `CCBOT_UPDATE_INTERVAL_SECONDS` 周期检查 git upstream。
+bot 运行期间会按 `CCBOT_UPDATE_INTERVAL_SECONDS` 周期检查配置的 git remote。
 默认 `CCBOT_UPDATE_REQUIRE_IDLE=true`，所以更新前会先确认 Telegram
 发送队列为空，并且没有 Codex tmux pane 正在工作或等待交互输入。如果还有任务，
 就按 `CCBOT_UPDATE_BUSY_RETRY_SECONDS` 延后再检查。
@@ -286,7 +272,7 @@ CCBOT_CODEX_COMMAND=IS_SANDBOX=1 codex --dangerously-bypass-approvals-and-sandbo
 
 ## 多账号切换与额度失败转移
 
-这个 fork 支持在 `~/.ccbot/accounts/homes/` 下保存多个隔离的 Codex 账号 home。
+这个项目支持在 `~/.ccbot/accounts/homes/` 下保存多个隔离的 Codex 账号 home。
 
 典型流程：
 
@@ -485,4 +471,4 @@ src/ccbot/
 - 上游仓库：https://github.com/six-ddc/ccbot
 - 许可证：MIT
 
-本 fork 保留了上游 MIT `LICENSE`，并为 fork 新增部分补充了 Pigbibi 的版权声明。
+本项目以 MIT 许可证发布，保留原始项目的署名信息，并继续维护当前代码库中的改动。

@@ -2,39 +2,25 @@
 
 [中文文档](README_CN.md)
 
-> A Codex-focused fork of the original CCBot.
+> TelegramCodexCCBot controls live Codex sessions over Telegram.
 > The CLI/package name stays `ccbot`.
 
-**Upstream project:** https://github.com/six-ddc/ccbot  
-**License:** MIT (kept from upstream)
+**Original project:** https://github.com/six-ddc/ccbot
+**License:** MIT
 
 Control Codex sessions remotely through Telegram while keeping tmux as the source of truth. This lets you monitor, answer, interrupt, resume, and clean up real terminal sessions from your phone without switching to a separate SDK session.
 
 https://github.com/user-attachments/assets/15ffb38e-5eb9-4720-93b9-412e4961dc93
 
-## Why this fork exists
+## What it does
 
-The upstream project is a solid base, but this fork is tuned for a Codex workflow:
+TelegramCodexCCBot is a Telegram controller for live Codex sessions:
 
 - `codex` is the default command for new tmux windows
 - transcript parsing and monitoring target modern Codex JSONL output under `~/.codex`
-- Telegram delivery and topic isolation were hardened for long-running Codex sessions
-- the fork keeps tmux-first ergonomics, so you can always return to the same terminal session on desktop
-
-In short: this is still CCBot, but adapted to how Codex is actually used day to day.
-
-## What changed compared with upstream?
-
-Compared with https://github.com/six-ddc/ccbot, this fork adds or changes the following:
-
-- **Codex-first defaults** — uses `codex` instead of the upstream legacy defaults
-- **Recursive Codex transcript discovery** — monitors modern Codex session logs under `~/.codex`
-- **Better Telegram delivery** — improved polling behavior, commentary forwarding, and notification handling
-- **Safer topic/session isolation** — prevents multiple Telegram topics from attaching to the same live session
-- **Stale state cleanup** — removes dead topic bindings, stale `session_map` entries, and stale window state
-- **Cleaner topic shutdown** — `/kill` and topic deletion flows clean up tmux/session state more reliably
-- **Account rotation support** — supports isolated `CODEX_HOME` homes plus saved account snapshots for manual switching and usage-limit failover
-- **Codex-oriented documentation** — examples, setup, and command descriptions now assume a Codex workflow
+- Telegram delivery and topic isolation are hardened for long-running Codex sessions
+- tmux stays the source of truth, so you can return to the same terminal session on desktop
+- GitHub bridge support can inject structured tasks from issues into Codex tmux sessions
 
 ## Features
 
@@ -219,8 +205,8 @@ For most setups, this is the only file you need to edit.
 | `CCBOT_UPDATE_INTERVAL_SECONDS` | `86400` | Minimum seconds between automatic update checks |
 | `CCBOT_UPDATE_REQUIRE_IDLE` | `true` | Apply automatic updates only when no Codex pane is active |
 | `CCBOT_UPDATE_BUSY_RETRY_SECONDS` | `300` | Retry delay when automatic update is deferred by active work |
-| `CCBOT_UPDATE_REMOTE` | upstream remote | Optional git remote override for updates |
-| `CCBOT_UPDATE_BRANCH` | upstream branch | Optional git branch override for updates |
+| `CCBOT_UPDATE_REMOTE` | git remote | Optional git remote override for updates |
+| `CCBOT_UPDATE_BRANCH` | git branch | Optional git branch override for updates |
 | `CCBOT_UPDATE_RUN_UV_SYNC` | `true` | Run `uv sync` after a successful git update |
 | `CCBOT_CODEX_UPDATE_CHECK` | `false` | Check npm for Codex CLI updates during the idle update loop |
 | `CCBOT_CODEX_AUTO_UPDATE` | `false` | Run `npm install -g @openai/codex@latest` when an idle Codex update exists |
@@ -254,7 +240,7 @@ For source-checkout installs created by the bootstrap scripts, set:
 CCBOT_AUTO_UPDATE=true
 ```
 
-While the bot keeps running, it checks the configured git upstream at most once
+While the bot keeps running, it checks the configured git remote at most once
 per `CCBOT_UPDATE_INTERVAL_SECONDS`. With the default
 `CCBOT_UPDATE_REQUIRE_IDLE=true`, it first verifies that Telegram delivery queues
 are empty and that no Codex tmux pane is working or waiting for interactive
@@ -294,7 +280,7 @@ CCBOT_CODEX_COMMAND=IS_SANDBOX=1 codex --dangerously-bypass-approvals-and-sandbo
 
 ## Multi-account switching and failover
 
-This fork supports isolated account homes for Codex under `~/.ccbot/accounts/homes/`.
+This project supports isolated account homes for Codex under `~/.ccbot/accounts/homes/`.
 
 Typical flow:
 
@@ -317,7 +303,7 @@ Important: this is **session rotation**, not seamless continuation of the exact 
 
 ## Session tracking
 
-By default, this fork scans Codex transcript files under `~/.codex`.
+By default, this project scans Codex transcript files under `~/.codex`.
 
 If you want automatic session-to-window tracking via the CLI hook, install it with:
 
@@ -486,11 +472,10 @@ src/ccbot/
 └── handlers/
 ```
 
-## Upstream and license
+## License
 
-This project is based on the original work by **six-ddc**:
+This project is distributed under the MIT License.
 
-- Upstream repository: https://github.com/six-ddc/ccbot
-- License: MIT
+Original project: https://github.com/six-ddc/ccbot
 
-The upstream MIT license is preserved in this fork, and the fork-specific modifications are additionally copyrighted by Pigbibi.
+Attribution is preserved to the original author, and project changes remain part of this MIT-licensed codebase.
