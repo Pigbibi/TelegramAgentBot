@@ -35,6 +35,7 @@ https://github.com/user-attachments/assets/15ffb38e-5eb9-4720-93b9-412e4961dc93
 - **更干净的 topic 关闭流程** —— `/kill` 和 topic 删除时，本地状态清理更完整
 - **多账号切换与额度失败转移** —— 支持隔离的 `CODEX_HOME` 目录、账号快照，以及 `usage_limit_exceeded` 后切到新 session
 - **更贴近 Codex 的文档** —— 安装、配置、命令说明都改成 Codex 语境
+- **GitHub 桥接** —— 可选 `ccbot-bridge` CLI 可以轮询 GitHub issue，并把结构化任务注入到 Codex 的 tmux 会话中
 
 ## 主要功能
 
@@ -193,6 +194,16 @@ CCBOT_SHOW_COMMENTARY_MESSAGES=true
 ```
 
 多数情况下，真正需要手改的就这一份 `.env`。
+
+### GitHub 桥接
+
+如果你希望把 GitHub issue 交给 Codex 会话处理，请把桥接配置保留在
+本机，并参考下面的模板文档：
+
+- `docs/github_codex_bridge.md`
+- `docs/github_codex_bridge.sample.json`
+
+真实配置应放在 `~/.ccbot/github_codex_bridge.json`，不要提交到仓库。
 
 ### 必填变量
 

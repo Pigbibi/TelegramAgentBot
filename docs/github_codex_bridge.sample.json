@@ -1,0 +1,28 @@
+{
+  "dispatch_mode": "poll",
+  "tmux_socket": null,
+  "issue_limit": 50,
+  "body_limit": 4000,
+  "comment_limit": 3,
+  "poll_interval_seconds": 300,
+  "targets": [
+    {
+      "name": "snapshot-audit",
+      "repo": "owner/example-snapshot-repo",
+      "window": "@12",
+      "workspace": "/home/ubuntu/Projects/example-snapshot-repo",
+      "labels": ["codex-bridge"],
+      "query": "monthly review",
+      "extra_instructions": "Only make low-risk changes."
+    },
+    {
+      "name": "execution-audit",
+      "repo": "owner/example-execution-repo",
+      "window": "@13",
+      "workspace": "/home/ubuntu/Projects/example-execution-repo",
+      "labels": ["codex-bridge"],
+      "query": "monthly review",
+      "extra_instructions": "Focus on execution quality, monthly audit findings, and low-risk fixes."
+    }
+  ]
+}
