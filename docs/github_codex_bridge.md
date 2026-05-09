@@ -39,6 +39,8 @@ Create `~/.ccbot/github_codex_bridge.json`:
   "body_limit": 4000,
   "comment_limit": 3,
   "poll_interval_seconds": 300,
+  "retry_attempts": 3,
+  "retry_base_delay_seconds": 1.0,
   "targets": [
     {
       "name": "snapshot-audit",
@@ -75,6 +77,8 @@ Fields:
 - `issue_number`: optional explicit issue number to dispatch.
 - `merge_mode`: `manual` (default) or `auto`.
 - `merge_label`: label required before auto-merge is permitted.
+- `retry_attempts`: bounded retry count for transient `gh` and `tmux` failures.
+- `retry_base_delay_seconds`: base delay for retry backoff.
 - `extra_instructions`: optional repo-specific guardrails appended to the task.
 
 ## Automatic merge
@@ -143,5 +147,7 @@ ccbot-bridge --config ~/.ccbot/github_codex_bridge.json --dry-run
 - The bridge tracks the last dispatched issue fingerprint in
   `~/.ccbot/github_codex_bridge_state.json` so it does not resend the same
   issue repeatedly.
+- `gh` and `tmux` calls are retried only for transient subprocess failures.
+  Logical failures still fail fast.
 - For a true event listener, use a webhook receiver plus a public endpoint.
   This bridge intentionally stays polling-first for VPS simplicity.

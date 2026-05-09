@@ -5,6 +5,8 @@
   "body_limit": 4000,
   "comment_limit": 3,
   "poll_interval_seconds": 300,
+  "retry_attempts": 3,
+  "retry_base_delay_seconds": 1.0,
   "targets": [
     {
       "name": "snapshot-audit",

@@ -32,6 +32,7 @@ import argparse
 import json
 import logging
 import os
+import random
 import subprocess
 import sys
 import time
@@ -49,6 +50,8 @@ DEFAULT_ISSUE_LIMIT = 50
 DEFAULT_BODY_LIMIT = 4000
 DEFAULT_COMMENT_LIMIT = 3
 DEFAULT_DISPATCH_MODE = "poll"
+DEFAULT_RETRY_ATTEMPTS = 3
+DEFAULT_RETRY_BASE_DELAY_SECONDS = 1.0
 DEFAULT_MERGE_MODE = "manual"
 DEFAULT_MERGE_LABEL = "auto-merge-ok"
 
@@ -80,6 +83,8 @@ class BridgeConfig:
     body_limit: int = DEFAULT_BODY_LIMIT
     comment_limit: int = DEFAULT_COMMENT_LIMIT
     poll_interval_seconds: int = DEFAULT_POLL_INTERVAL_SECONDS
+    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS
+    retry_base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS
 
 
 @dataclass(slots=True)
@@ -95,15 +100,81 @@ class GitHubIssue:
     comments: list[dict[str, Any]]
 
 
-def _run_json_command(argv: list[str]) -> Any:
+def _run_json_command(
+    argv: list[str],
+    *,
+    attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
+) -> Any:
     """Run a command that returns JSON."""
-    result = subprocess.run(
+    result = _run_subprocess_with_retry(
         argv,
-        check=True,
         capture_output=True,
         text=True,
+        retryable_prefixes=("gh",),
+        attempts=attempts,
+        base_delay_seconds=base_delay_seconds,
     )
     return json.loads(result.stdout)
+
+
+def _is_retryable_subprocess_error(
+    exc: subprocess.CalledProcessError | OSError,
+    retryable_prefixes: tuple[str, ...],
+) -> bool:
+    """Return whether a subprocess failure is worth retrying."""
+    if isinstance(exc, OSError):
+        return True
+    if not retryable_prefixes:
+        return False
+    if not exc.cmd:
+        return False
+    cmd = exc.cmd
+    if isinstance(cmd, str):
+        argv0 = cmd.split()[0] if cmd.split() else ""
+    else:
+        argv0 = str(cmd[0]) if cmd else ""
+    return argv0 in retryable_prefixes
+
+
+def _run_subprocess_with_retry(
+    argv: list[str],
+    *,
+    input: bytes | None = None,
+    capture_output: bool = False,
+    text: bool = False,
+    retryable_prefixes: tuple[str, ...] = (),
+    attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
+) -> subprocess.CompletedProcess[Any]:
+    """Run a subprocess with bounded retries for transient failures."""
+    if attempts < 1:
+        attempts = 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return subprocess.run(
+                argv,
+                check=True,
+                input=input,
+                capture_output=capture_output,
+                text=text,
+            )
+        except (subprocess.CalledProcessError, OSError) as exc:
+            if attempt >= attempts or not _is_retryable_subprocess_error(
+                exc, retryable_prefixes
+            ):
+                raise
+            sleep_seconds = base_delay_seconds * (2 ** (attempt - 1))
+            sleep_seconds += random.uniform(0.0, 0.25)
+            logger.warning(
+                "Retryable subprocess failure (%s), retrying %d/%d in %.2fs: %s",
+                argv[0] if argv else "<empty>",
+                attempt + 1,
+                attempts,
+                sleep_seconds,
+                exc,
+            )
+            time.sleep(sleep_seconds)
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -183,6 +254,10 @@ def load_config(path: Path) -> BridgeConfig:
         poll_interval_seconds=int(
             raw.get("poll_interval_seconds", DEFAULT_POLL_INTERVAL_SECONDS)
         ),
+        retry_attempts=int(raw.get("retry_attempts", DEFAULT_RETRY_ATTEMPTS)),
+        retry_base_delay_seconds=float(
+            raw.get("retry_base_delay_seconds", DEFAULT_RETRY_BASE_DELAY_SECONDS)
+        ),
     )
 
 
@@ -205,7 +280,13 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
     tmp_path.replace(path)
 
 
-def list_open_issues(repo: str, limit: int) -> list[GitHubIssue]:
+def list_open_issues(
+    repo: str,
+    limit: int,
+    *,
+    attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
+) -> list[GitHubIssue]:
     """List open issues for a repo using gh."""
     raw = _run_json_command(
         [
@@ -220,12 +301,20 @@ def list_open_issues(repo: str, limit: int) -> list[GitHubIssue]:
             str(limit),
             "--json",
             "number,title,url,updatedAt,labels",
-        ]
+        ],
+        attempts=attempts,
+        base_delay_seconds=base_delay_seconds,
     )
     return [_parse_issue({**item, "body": "", "comments": []}) for item in raw]
 
 
-def fetch_issue(repo: str, issue_number: int) -> GitHubIssue:
+def fetch_issue(
+    repo: str,
+    issue_number: int,
+    *,
+    attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
+) -> GitHubIssue:
     """Fetch full issue details for a repo/issue number."""
     raw = _run_json_command(
         [
@@ -237,7 +326,9 @@ def fetch_issue(repo: str, issue_number: int) -> GitHubIssue:
             repo,
             "--json",
             "number,title,body,url,updatedAt,labels,comments",
-        ]
+        ],
+        attempts=attempts,
+        base_delay_seconds=base_delay_seconds,
     )
     return _parse_issue(raw)
 
@@ -369,21 +460,37 @@ def _tmux_prefix(socket_name: str | None) -> list[str]:
     return cmd
 
 
-def dispatch_to_tmux(window: str, text: str, *, socket_name: str | None = None) -> None:
+def dispatch_to_tmux(
+    window: str,
+    text: str,
+    *,
+    socket_name: str | None = None,
+    attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
+) -> None:
     """Paste text into a tmux window and press Enter."""
     buffer_name = f"ccbot-bridge-{os.getpid()}-{time.time_ns()}"
     prefix = _tmux_prefix(socket_name)
-    subprocess.run(
+    _run_subprocess_with_retry(
         [*prefix, "load-buffer", "-b", buffer_name, "-"],
         input=text.encode("utf-8"),
-        check=True,
+        retryable_prefixes=("tmux",),
+        attempts=attempts,
+        base_delay_seconds=base_delay_seconds,
     )
     try:
-        subprocess.run(
+        _run_subprocess_with_retry(
             [*prefix, "paste-buffer", "-b", buffer_name, "-t", window, "-d"],
-            check=True,
+            retryable_prefixes=("tmux",),
+            attempts=attempts,
+            base_delay_seconds=base_delay_seconds,
         )
-        subprocess.run([*prefix, "send-keys", "-t", window, "Enter"], check=True)
+        _run_subprocess_with_retry(
+            [*prefix, "send-keys", "-t", window, "Enter"],
+            retryable_prefixes=("tmux",),
+            attempts=attempts,
+            base_delay_seconds=base_delay_seconds,
+        )
     finally:
         subprocess.run(
             [*prefix, "delete-buffer", "-b", buffer_name],
@@ -404,13 +511,23 @@ def process_target(
     target_state = state.setdefault("targets", {}).setdefault(target.name, {})
 
     if target.issue_number is not None:
-        candidate = fetch_issue(target.repo, target.issue_number)
+        candidate = fetch_issue(
+            target.repo,
+            target.issue_number,
+            attempts=config.retry_attempts,
+            base_delay_seconds=config.retry_base_delay_seconds,
+        )
         if candidate:
             issues = [candidate]
         else:
             issues = []
     else:
-        issues = list_open_issues(target.repo, config.issue_limit)
+        issues = list_open_issues(
+            target.repo,
+            config.issue_limit,
+            attempts=config.retry_attempts,
+            base_delay_seconds=config.retry_base_delay_seconds,
+        )
         candidate = select_issue(
             issues,
             labels=target.labels,
@@ -437,7 +554,13 @@ def process_target(
         print(message, end="")
         return True
 
-    dispatch_to_tmux(candidate_target_window(target), message, socket_name=config.tmux_socket)
+    dispatch_to_tmux(
+        candidate_target_window(target),
+        message,
+        socket_name=config.tmux_socket,
+        attempts=config.retry_attempts,
+        base_delay_seconds=config.retry_base_delay_seconds,
+    )
     target_state["last_fingerprint"] = fingerprint
     target_state["last_issue_number"] = candidate.number
     target_state["last_issue_url"] = candidate.url

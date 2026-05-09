@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 from ccbot.bridge import (
     BridgeConfig,
@@ -171,7 +172,10 @@ def test_process_target_skips_duplicate_issue(monkeypatch, tmp_path: Path) -> No
     issue = _make_issue(4, "duplicate")
     state = {"targets": {"alpha": {"last_fingerprint": "4:2026-05-09T00:00:00Z"}}}
 
-    monkeypatch.setattr("ccbot.bridge.list_open_issues", lambda repo, limit: [issue])
+    monkeypatch.setattr(
+        "ccbot.bridge.list_open_issues",
+        lambda repo, limit, **kwargs: [issue],
+    )
     monkeypatch.setattr(
         "ccbot.bridge.dispatch_to_tmux",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not send")),
@@ -179,3 +183,40 @@ def test_process_target_skips_duplicate_issue(monkeypatch, tmp_path: Path) -> No
 
     dispatched = process_target(target, cfg, state)
     assert dispatched is False
+
+
+def test_process_target_retries_retryable_gh_failure(monkeypatch) -> None:
+    target = BridgeTarget(name="alpha", repo="owner/repo", window="@1")
+    cfg = BridgeConfig(targets=[target], retry_attempts=2, retry_base_delay_seconds=0.0)
+    issue = _make_issue(5, "retry")
+    state: dict = {}
+    calls = {"count": 0}
+
+    def fake_run(argv, *, input=None, check=None, capture_output=None, text=None):
+        if argv[0] == "gh":
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise subprocess.CalledProcessError(returncode=1, cmd=argv)
+            return type("Result", (), {"stdout": json.dumps([{
+                "number": issue.number,
+                "title": issue.title,
+                "url": issue.url,
+                "updatedAt": issue.updated_at,
+                "labels": [{"name": "codex-bridge"}],
+            }])})()
+        return type("Result", (), {"stdout": ""})()
+
+    monkeypatch.setattr("ccbot.bridge.subprocess.run", fake_run)
+    monkeypatch.setattr("ccbot.bridge.time.sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("ccbot.bridge.random.uniform", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr("ccbot.bridge.dispatch_to_tmux", lambda *args, **kwargs: None)
+
+    dispatched = process_target(
+        target,
+        cfg,
+        state,
+        dry_run=True,
+    )
+
+    assert dispatched is True
+    assert calls["count"] == 2
