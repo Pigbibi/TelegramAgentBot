@@ -65,7 +65,7 @@ DEFAULT_MERGE_LABEL = "auto-merge-ok"
 DEFAULT_SOURCE_REPO = "QuantStrategyLab/AuditOrchestrator"
 DEFAULT_SOURCE_LABEL = "monthly-review"
 DEFAULT_SOURCE_QUERY = "Monthly Audit Review"
-DEFAULT_RUNNER_WINDOW = "audit-runner"
+DEFAULT_RUNNER_WINDOW = "Ubuntu"
 
 
 @dataclass(slots=True)
@@ -424,6 +424,24 @@ def _issue_fingerprint(issue: GitHubIssue) -> str:
     return f"{issue.number}:{issue.updated_at}"
 
 
+def _ensure_full_issue(
+    repo: str,
+    issue: GitHubIssue,
+    *,
+    attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
+) -> GitHubIssue:
+    """Fetch a full issue payload when we only have list metadata."""
+    if issue.body and issue.comments:
+        return issue
+    return fetch_issue(
+        repo,
+        issue.number,
+        attempts=attempts,
+        base_delay_seconds=base_delay_seconds,
+    )
+
+
 def build_task_message(target: BridgeTarget, issue: GitHubIssue, config: BridgeConfig) -> str:
     """Build the Codex task message for a selected issue."""
     comments: list[dict[str, Any]] = issue.comments[: config.comment_limit]
@@ -630,6 +648,13 @@ def process_target(
         logger.info("No matching issue for target=%s", target.name)
         return False
 
+    candidate = _ensure_full_issue(
+        target.repo,
+        candidate,
+        attempts=config.retry_attempts,
+        base_delay_seconds=config.retry_base_delay_seconds,
+    )
+
     fingerprint = _issue_fingerprint(candidate)
     if not force and target_state.get("last_fingerprint") == fingerprint:
         logger.info(
@@ -700,6 +725,13 @@ def process_orchestrator(
     if candidate is None:
         logger.info("No matching monthly issue for source_repo=%s", config.source_repo)
         return False
+
+    candidate = _ensure_full_issue(
+        config.source_repo,
+        candidate,
+        attempts=config.retry_attempts,
+        base_delay_seconds=config.retry_base_delay_seconds,
+    )
 
     fingerprint = _issue_fingerprint(candidate)
     if not force and orch_state.get("last_fingerprint") == fingerprint:

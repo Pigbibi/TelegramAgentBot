@@ -78,6 +78,7 @@ def test_load_config(tmp_path: Path) -> None:
     assert cfg.targets[0].query == "monthly review"
     assert cfg.targets[0].merge_mode == "auto"
     assert cfg.targets[0].merge_label == "auto-merge-ok"
+    assert cfg.runner_window == "Ubuntu"
 
 
 def test_load_config_orchestrator_mode(tmp_path: Path) -> None:
@@ -235,6 +236,10 @@ def test_process_target_skips_duplicate_issue(monkeypatch, tmp_path: Path) -> No
         lambda repo, limit, **kwargs: [issue],
     )
     monkeypatch.setattr(
+        "ccbot.bridge.fetch_issue",
+        lambda repo, issue_number, **kwargs: issue,
+    )
+    monkeypatch.setattr(
         "ccbot.bridge.dispatch_to_tmux",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not send")),
     )
@@ -267,6 +272,10 @@ def test_process_target_retries_retryable_gh_failure(monkeypatch) -> None:
     monkeypatch.setattr("ccbot.bridge.subprocess.run", fake_run)
     monkeypatch.setattr("ccbot.bridge.time.sleep", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("ccbot.bridge.random.uniform", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(
+        "ccbot.bridge.fetch_issue",
+        lambda repo, issue_number, **kwargs: issue,
+    )
     monkeypatch.setattr("ccbot.bridge.dispatch_to_tmux", lambda *args, **kwargs: None)
 
     dispatched = process_target(
@@ -290,11 +299,22 @@ def test_process_orchestrator_dispatches_monthly_issue(monkeypatch) -> None:
         source_query="Monthly Audit Review",
     )
     issue = _make_issue(88, "Monthly Audit Review: 2026-05", labels=["monthly-review"])
+    full_issue = _make_issue(
+        88,
+        "Monthly Audit Review: 2026-05",
+        body='{"month":"2026-05","targets":["owner/repo-a"]}',
+        labels=["monthly-review"],
+        comments=[{"author": {"login": "ops"}, "body": "keep it scoped"}],
+    )
     state: dict = {}
 
     monkeypatch.setattr(
         "ccbot.bridge.list_open_issues",
         lambda repo, limit, **kwargs: [issue],
+    )
+    monkeypatch.setattr(
+        "ccbot.bridge.fetch_issue",
+        lambda repo, issue_number, **kwargs: full_issue if issue_number == 88 else issue,
     )
     sent: list[tuple[str, str]] = []
     monkeypatch.setattr(
@@ -307,4 +327,46 @@ def test_process_orchestrator_dispatches_monthly_issue(monkeypatch) -> None:
     assert dispatched is True
     assert sent[0][0] == "@42"
     assert "Monthly Audit Review: 2026-05" in sent[0][1]
+    assert "owner/repo-a" in sent[0][1]
+    assert "@ops" in sent[0][1]
     assert state["orchestrator"]["last_issue_number"] == 88
+
+
+def test_process_orchestrator_fetches_full_issue_payload(monkeypatch) -> None:
+    cfg = BridgeConfig(
+        bridge_mode="orchestrator",
+        targets=[],
+        source_repo="owner/control-plane",
+        runner_window="@42",
+        source_label="monthly-review",
+        source_query="Monthly Audit Review",
+    )
+    summary_issue = _make_issue(90, "Monthly Audit Review: 2026-05", labels=["monthly-review"], body="")
+    full_issue = _make_issue(
+        90,
+        "Monthly Audit Review: 2026-05",
+        body='{"month":"2026-05","targets":["owner/repo-a"]}',
+        labels=["monthly-review"],
+        comments=[{"author": {"login": "ops"}, "body": "keep it scoped"}],
+    )
+    state: dict = {}
+
+    monkeypatch.setattr(
+        "ccbot.bridge.list_open_issues",
+        lambda repo, limit, **kwargs: [summary_issue],
+    )
+    monkeypatch.setattr(
+        "ccbot.bridge.fetch_issue",
+        lambda repo, issue_number, **kwargs: full_issue,
+    )
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "ccbot.bridge.dispatch_to_tmux",
+        lambda window, text, **kwargs: sent.append((window, text)),
+    )
+
+    dispatched = process_orchestrator(cfg, state)
+
+    assert dispatched is True
+    assert "owner/repo-a" in sent[0][1]
+    assert "@ops" in sent[0][1]
