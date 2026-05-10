@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 _UUID_SUFFIX_RE = re.compile(
     r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
 )
+_FOLDED_PASTE_INPUT_RE = re.compile(r"^[›❯]\s*\[Pasted Content\s+\d+\s+chars\]")
 
 
 def _resume_target_id(session_id: str) -> str:
@@ -189,7 +190,8 @@ class TmuxManager:
     def _pane_still_has_pending_literal_input(self, window_id: str, text: str) -> bool:
         """Return True if the pasted prompt still appears in Codex's input row."""
         fragment = self._first_prompt_fragment(text)
-        if not fragment:
+        may_render_as_folded_paste = len(text) > 1000 or "\n" in text
+        if not fragment and not may_render_as_folded_paste:
             return False
 
         cmd = [
@@ -222,6 +224,8 @@ class TmuxManager:
         for line in result.stdout.splitlines()[-30:]:
             stripped = line.strip()
             if stripped.startswith("›") and fragment in stripped:
+                return True
+            if may_render_as_folded_paste and _FOLDED_PASTE_INPUT_RE.match(stripped):
                 return True
         return False
 

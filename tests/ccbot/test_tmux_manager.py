@@ -222,6 +222,32 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(pending)
 
+    def test_pane_pending_literal_input_detects_folded_paste_row(self) -> None:
+        manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
+        capture = (
+            "─ Worked for 1m 53s ─────────────────────────\n"
+            "• Done\n"
+            "\n"
+            "› [Pasted Content 2048 chars] #3\n"
+            "\n"
+            "  gpt-5.5 xhigh · ~/Projects\n"
+        )
+
+        with patch(
+            "ccbot.tmux_manager.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["tmux", "capture-pane"],
+                returncode=0,
+                stdout=capture,
+            ),
+        ):
+            pending = manager._pane_still_has_pending_literal_input(
+                "@9",
+                "line 1\n" + ("long content\n" * 200),
+            )
+
+        self.assertTrue(pending)
+
     async def test_send_keys_uses_tmux_cli_for_enter_after_literal_text(self) -> None:
         pane = _SendKeysDummyPane()
         window = _SendKeysDummyWindow(pane)
