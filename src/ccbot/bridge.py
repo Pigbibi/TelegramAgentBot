@@ -195,6 +195,7 @@ def _run_subprocess_with_retry(
                 exc,
             )
             time.sleep(sleep_seconds)
+    raise RuntimeError("unreachable: subprocess retry loop exhausted")
 
 
 def _truncate(text: str, limit: int) -> str:
