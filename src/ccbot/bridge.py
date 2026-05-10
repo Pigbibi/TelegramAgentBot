@@ -244,7 +244,9 @@ def load_config(path: Path) -> BridgeConfig:
     for item in raw.get("targets", []):
         labels = item.get("labels", []) or []
         if not isinstance(labels, list):
-            raise ValueError(f"Target {item.get('name', '<unnamed>')} labels must be a list")
+            raise ValueError(
+                f"Target {item.get('name', '<unnamed>')} labels must be a list"
+            )
         targets.append(
             BridgeTarget(
                 name=str(item["name"]),
@@ -442,7 +444,9 @@ def _ensure_full_issue(
     )
 
 
-def build_task_message(target: BridgeTarget, issue: GitHubIssue, config: BridgeConfig) -> str:
+def build_task_message(
+    target: BridgeTarget, issue: GitHubIssue, config: BridgeConfig
+) -> str:
     """Build the Codex task message for a selected issue."""
     comments: list[dict[str, Any]] = issue.comments[: config.comment_limit]
     comment_lines: list[str] = []
@@ -548,7 +552,9 @@ def build_orchestrator_message(issue: GitHubIssue, config: BridgeConfig) -> str:
     if config.runner_workspace:
         lines.extend(["", f"Workspace: {config.runner_workspace}"])
     if config.runner_extra_instructions:
-        lines.extend(["", "Runner instructions:", config.runner_extra_instructions.strip()])
+        lines.extend(
+            ["", "Runner instructions:", config.runner_extra_instructions.strip()]
+        )
     lines.extend(
         [
             "",
@@ -835,7 +841,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _selected_targets(config: BridgeConfig, names: list[str] | None) -> list[BridgeTarget]:
+def _selected_targets(
+    config: BridgeConfig, names: list[str] | None
+) -> list[BridgeTarget]:
     if not names:
         return config.targets
     wanted = {name for name in names}

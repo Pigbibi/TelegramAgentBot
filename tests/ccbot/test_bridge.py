@@ -112,8 +112,15 @@ def test_load_config_orchestrator_mode(tmp_path: Path) -> None:
 def test_select_issue_prefers_latest_matching_issue() -> None:
     issues = [
         _make_issue(1, "skip me", labels=["other"], updated_at="2026-05-09T00:00:00Z"),
-        _make_issue(2, "match later", labels=["codex-bridge"], updated_at="2026-05-09T01:00:00Z"),
-        _make_issue(3, "match earlier", labels=["codex-bridge"], updated_at="2026-05-09T00:30:00Z"),
+        _make_issue(
+            2, "match later", labels=["codex-bridge"], updated_at="2026-05-09T01:00:00Z"
+        ),
+        _make_issue(
+            3,
+            "match earlier",
+            labels=["codex-bridge"],
+            updated_at="2026-05-09T00:30:00Z",
+        ),
     ]
 
     selected = select_issue(issues, labels=["codex-bridge"])
@@ -123,7 +130,9 @@ def test_select_issue_prefers_latest_matching_issue() -> None:
 
 def test_select_issue_matches_query_terms() -> None:
     issues = [
-        _make_issue(1, "build bridge", body="monthly review ready", labels=["codex-bridge"]),
+        _make_issue(
+            1, "build bridge", body="monthly review ready", labels=["codex-bridge"]
+        ),
         _make_issue(2, "unrelated", body="different text", labels=["codex-bridge"]),
     ]
 
@@ -241,7 +250,9 @@ def test_process_target_skips_duplicate_issue(monkeypatch, tmp_path: Path) -> No
     )
     monkeypatch.setattr(
         "ccbot.bridge.dispatch_to_tmux",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not send")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("should not send")
+        ),
     )
 
     dispatched = process_target(target, cfg, state)
@@ -260,13 +271,23 @@ def test_process_target_retries_retryable_gh_failure(monkeypatch) -> None:
             calls["count"] += 1
             if calls["count"] == 1:
                 raise subprocess.CalledProcessError(returncode=1, cmd=argv)
-            return type("Result", (), {"stdout": json.dumps([{
-                "number": issue.number,
-                "title": issue.title,
-                "url": issue.url,
-                "updatedAt": issue.updated_at,
-                "labels": [{"name": "codex-bridge"}],
-            }])})()
+            return type(
+                "Result",
+                (),
+                {
+                    "stdout": json.dumps(
+                        [
+                            {
+                                "number": issue.number,
+                                "title": issue.title,
+                                "url": issue.url,
+                                "updatedAt": issue.updated_at,
+                                "labels": [{"name": "codex-bridge"}],
+                            }
+                        ]
+                    )
+                },
+            )()
         return type("Result", (), {"stdout": ""})()
 
     monkeypatch.setattr("ccbot.bridge.subprocess.run", fake_run)
@@ -314,7 +335,9 @@ def test_process_orchestrator_dispatches_monthly_issue(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "ccbot.bridge.fetch_issue",
-        lambda repo, issue_number, **kwargs: full_issue if issue_number == 88 else issue,
+        lambda repo, issue_number, **kwargs: (
+            full_issue if issue_number == 88 else issue
+        ),
     )
     sent: list[tuple[str, str]] = []
     monkeypatch.setattr(
@@ -341,7 +364,9 @@ def test_process_orchestrator_fetches_full_issue_payload(monkeypatch) -> None:
         source_label="monthly-review",
         source_query="Monthly Audit Review",
     )
-    summary_issue = _make_issue(90, "Monthly Audit Review: 2026-05", labels=["monthly-review"], body="")
+    summary_issue = _make_issue(
+        90, "Monthly Audit Review: 2026-05", labels=["monthly-review"], body=""
+    )
     full_issue = _make_issue(
         90,
         "Monthly Audit Review: 2026-05",
