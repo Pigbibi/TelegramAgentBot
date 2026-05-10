@@ -90,7 +90,10 @@ UI_PATTERNS: list[UIPattern] = [
     UIPattern(
         # Codex command approval prompt shown by newer CLIs.
         name="CommandApproval",
-        top=(re.compile(r"^\s*Would you like to run the following command\?"),),
+        top=(
+            re.compile(r"^\s*Would you like to run the following command\?"),
+            re.compile(r"^\s*Would you like to make the following edits?\?"),
+        ),
         bottom=(
             re.compile(
                 r"^\s*Press enter to confirm or esc to cancel",
