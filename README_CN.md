@@ -180,6 +180,23 @@ CCBOT_SHOW_COMMENTARY_MESSAGES=true
 
 多数情况下，真正需要手改的就这一份 `.env`。
 
+### GitHub 桥接
+
+如果你希望把 GitHub issue 交给 Codex 会话处理，请把桥接配置保留在
+本机，并参考下面的模板文档：
+
+- `docs/github_codex_bridge.md`
+- `docs/github_codex_bridge.sample.json`
+
+桥接器支持两种本地模式：
+
+- `targets`：直接轮询一个或多个仓库，把每个 issue 交给对应的 tmux
+  窗口
+- `orchestrator`：消费控制面仓库发布的月度 issue，把任务转发给一个
+  runner 窗口
+
+真实配置应放在 `~/.ccbot/github_codex_bridge.json`，不要提交到仓库。
+
 ### 必填变量
 
 | 变量 | 说明 |

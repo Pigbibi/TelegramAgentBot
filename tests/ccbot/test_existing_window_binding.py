@@ -130,6 +130,51 @@ class TestExistingWindowBinding:
         assert context.user_data["_pending_thread_text"] == "hi"
 
     @pytest.mark.asyncio
+    async def test_configured_project_roots_take_priority_over_unbound_windows(self):
+        update = _make_text_update("hi")
+        context = _make_context()
+
+        fake_window = MagicMock()
+        fake_window.window_id = "@1"
+        fake_window.window_name = "audit-runner"
+        fake_window.cwd = "/srv/projects"
+
+        with (
+            patch("ccbot.bot.is_user_allowed", return_value=True),
+            patch("ccbot.bot._get_thread_id", return_value=42),
+            patch("ccbot.bot.session_manager") as mock_sm,
+            patch("ccbot.bot.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.config") as mock_config,
+            patch("ccbot.bot.safe_reply", new_callable=AsyncMock) as safe_reply,
+        ):
+            mock_tmux.list_windows = AsyncMock(return_value=[fake_window])
+            mock_sm.iter_thread_bindings.return_value = []
+            mock_sm.get_window_for_thread.return_value = None
+            mock_sm.window_states = {
+                "@1": WindowState(session_id="session-1", cwd="/srv/projects")
+            }
+            mock_config.project_roots_configured = True
+            mock_config.project_roots = [
+                ProjectRoot("Ubuntu", Path("/srv/projects")),
+            ]
+
+            from ccbot.bot import text_handler
+
+            await text_handler(update, context)
+
+        mock_tmux.list_windows.assert_not_awaited()
+        safe_reply.assert_awaited_once()
+        message_text = safe_reply.await_args.args[1]
+        assert "Select Computer / VPS" in message_text
+        assert "Ubuntu" in message_text
+        assert "audit-runner" not in message_text
+        assert context.user_data[STATE_KEY] == STATE_SELECTING_ROOT
+        assert context.user_data[ROOTS_KEY] == [
+            ("Ubuntu", "/srv/projects"),
+        ]
+        assert context.user_data["_pending_thread_text"] == "hi"
+
+    @pytest.mark.asyncio
     async def test_root_picker_selection_enters_selected_directory(self, tmp_path):
         root_path = tmp_path / "primary"
         root_path.mkdir()

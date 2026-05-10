@@ -171,6 +171,83 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(long_delay, short_delay)
         self.assertLessEqual(long_delay, 5.0)
 
+    def test_pane_pending_literal_input_detects_codex_input_row(self) -> None:
+        manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
+        capture = (
+            "previous transcript\n"
+            "› CryptoSnapshotPipelines/pull/48\n"
+            "  - Status: ready for review\n"
+            "  gpt-5.5 xhigh · ~/Projects\n"
+        )
+
+        with patch(
+            "ccbot.tmux_manager.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["tmux", "capture-pane"],
+                returncode=0,
+                stdout=capture,
+            ),
+        ):
+            pending = manager._pane_still_has_pending_literal_input(
+                "@9",
+                "CryptoSnapshotPipelines/pull/48\n- Status: ready for review",
+            )
+
+        self.assertTrue(pending)
+
+    def test_pane_pending_literal_input_ignores_submitted_transcript(self) -> None:
+        manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
+        capture = (
+            "  CryptoSnapshotPipelines/pull/48\n"
+            "  - Status: ready for review\n"
+            "◦ Working (13s • esc to interrupt)\n"
+            "\n"
+            "› Write tests for @filename\n"
+            "\n"
+            "  gpt-5.5 xhigh · ~/Projects\n"
+        )
+
+        with patch(
+            "ccbot.tmux_manager.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["tmux", "capture-pane"],
+                returncode=0,
+                stdout=capture,
+            ),
+        ):
+            pending = manager._pane_still_has_pending_literal_input(
+                "@9",
+                "CryptoSnapshotPipelines/pull/48\n- Status: ready for review",
+            )
+
+        self.assertFalse(pending)
+
+    def test_pane_pending_literal_input_detects_folded_paste_row(self) -> None:
+        manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
+        capture = (
+            "─ Worked for 1m 53s ─────────────────────────\n"
+            "• Done\n"
+            "\n"
+            "› [Pasted Content 2048 chars] #3\n"
+            "\n"
+            "  gpt-5.5 xhigh · ~/Projects\n"
+        )
+
+        with patch(
+            "ccbot.tmux_manager.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["tmux", "capture-pane"],
+                returncode=0,
+                stdout=capture,
+            ),
+        ):
+            pending = manager._pane_still_has_pending_literal_input(
+                "@9",
+                "line 1\n" + ("long content\n" * 200),
+            )
+
+        self.assertTrue(pending)
+
     async def test_send_keys_uses_tmux_cli_for_enter_after_literal_text(self) -> None:
         pane = _SendKeysDummyPane()
         window = _SendKeysDummyWindow(pane)
@@ -185,6 +262,9 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
                     args=["tmux", "send-keys"], returncode=0
                 ),
             ) as run_mock,
+            patch.object(
+                manager, "_pane_still_has_pending_literal_input", return_value=False
+            ),
         ):
             ok = await manager.send_keys("@9", "hello")
 
@@ -212,6 +292,9 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
                     returncode=1,
                     stderr="send failed",
                 ),
+            ),
+            patch.object(
+                manager, "_pane_still_has_pending_literal_input", return_value=False
             ),
         ):
             ok = await manager.send_keys("@9", "hello")
@@ -243,6 +326,9 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
                     args=["tmux", "send-keys"], returncode=0
                 ),
             ) as run_mock,
+            patch.object(
+                manager, "_pane_still_has_pending_literal_input", return_value=False
+            ),
         ):
             ok = await manager.send_keys("@9", text)
 
@@ -253,6 +339,35 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
             run_mock.call_args_list[0].args[0],
             [*manager._tmux_cli_prefix(), "send-keys", "-t", "@9", "Enter"],
         )
+
+    async def test_send_keys_retries_enter_when_prompt_is_still_pending(self) -> None:
+        pane = _SendKeysDummyPane()
+        window = _SendKeysDummyWindow(pane)
+        session = _SendKeysDummySession(window)
+        manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
+
+        with (
+            patch.object(manager, "get_session", return_value=session),
+            patch(
+                "ccbot.tmux_manager.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    args=["tmux", "send-keys"], returncode=0
+                ),
+            ) as run_mock,
+            patch.object(
+                manager, "_pane_still_has_pending_literal_input", return_value=True
+            ),
+        ):
+            ok = await manager.send_keys("@9", "hello")
+
+        self.assertTrue(ok)
+        self.assertEqual(pane.commands, [("hello", False, True)])
+        self.assertEqual(run_mock.call_count, 2)
+        for call in run_mock.call_args_list:
+            self.assertEqual(
+                call.args[0],
+                [*manager._tmux_cli_prefix(), "send-keys", "-t", "@9", "Enter"],
+            )
 
     def test_paste_buffer_literal_uses_tmux_bracketed_paste(self) -> None:
         manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")

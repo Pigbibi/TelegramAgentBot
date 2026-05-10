@@ -33,6 +33,7 @@ TelegramCodexCCBot is a Telegram controller for live Codex sessions:
 - **Topic cleanup** — stale topics, stale tmux windows, and dead bindings are cleaned up more safely
 - **Usage-limit failover** — when a session hits `usage_limit_exceeded`, the next message can rotate to another saved account in a fresh session
 - **Persistent state** — thread bindings, display names, offsets, and monitor state survive restarts
+- **GitHub bridge** — optional `ccbot-bridge` CLI can poll GitHub issues and inject structured tasks into Codex tmux sessions
 
 ## Prerequisites
 
@@ -181,6 +182,24 @@ CCBOT_SHOW_COMMENTARY_MESSAGES=true
 ```
 
 For most setups, this is the only file you need to edit.
+
+### GitHub bridge
+
+If you want GitHub issues to be handed off to Codex sessions, keep the bridge
+configuration local and use the template docs in:
+
+- `docs/github_codex_bridge.md`
+- `docs/github_codex_bridge.sample.json`
+
+The bridge supports two local modes:
+
+- `targets`: poll one or more repositories directly and hand each issue to its
+  configured tmux window
+- `orchestrator`: consume the monthly issue from a control-plane repository and
+  relay it to a single runner window
+
+The real config belongs at `~/.ccbot/github_codex_bridge.json` and should not
+be committed.
 
 ### Required variables
 

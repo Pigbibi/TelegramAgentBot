@@ -1530,6 +1530,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     wid = session_manager.get_window_for_thread(user.id, thread_id)
     if wid is None:
+        if getattr(config, "project_roots_configured", False):
+            logger.info(
+                "Unbound topic: showing configured project root picker (user=%d, thread=%d)",
+                user.id,
+                thread_id,
+            )
+            if context.user_data is not None:
+                context.user_data["_pending_thread_id"] = thread_id
+                context.user_data["_pending_thread_text"] = text
+            await _show_root_or_directory_picker(update.message, context)
+            return
+
         # Unbound topic — check for unbound windows first
         all_windows = await tmux_manager.list_windows()
         bound_ids = {wid for _, _, wid in session_manager.iter_thread_bindings()}

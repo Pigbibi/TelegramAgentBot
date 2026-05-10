@@ -168,6 +168,24 @@ class TestExtractInteractiveContent:
         assert "Would you like to run the following command?" in result.content
         assert "Press enter to confirm" in result.content
 
+    def test_codex_edit_approval_prompt(self):
+        pane = (
+            "  Would you like to make the following edits?\n"
+            "\n"
+            "  Reason: command failed; retry without sandbox?\n"
+            "\n"
+            "  › 1. Yes, proceed (y)\n"
+            "    2. Yes, and don't ask again for these files (a)\n"
+            "    3. No, and tell Codex what to do differently (esc)\n"
+            "\n"
+            "  Press enter to confirm or esc to cancel\n"
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "CommandApproval"
+        assert "Would you like to make the following edits?" in result.content
+        assert "Press enter to confirm" in result.content
+
     def test_codex_field_permission_prompt(self):
         pane = (
             "  Field 1/1\n"

@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 _UUID_SUFFIX_RE = re.compile(
     r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
 )
+_FOLDED_PASTE_INPUT_RE = re.compile(r"^[›❯]\s*\[Pasted Content\s+\d+\s+chars\]")
 
 
 def _resume_target_id(session_id: str) -> str:
@@ -97,6 +98,15 @@ class TmuxManager:
         char_delay = min(len(text) / 1800.0, 2.0)
         line_delay = min(text.count("\n") * 0.035, 2.5)
         return min(max(0.5, 0.5 + char_delay + line_delay), 5.0)
+
+    @staticmethod
+    def _first_prompt_fragment(text: str) -> str:
+        """Return a short fragment suitable for checking pending TUI input."""
+        for line in text.splitlines():
+            fragment = line.strip()
+            if fragment:
+                return fragment[:40]
+        return text.strip()[:40]
 
     def get_session(self) -> libtmux.Session | None:
         """Get the tmux session if it exists."""
@@ -176,6 +186,48 @@ class TmuxManager:
                     )
                 except Exception:
                     pass
+
+    def _pane_still_has_pending_literal_input(self, window_id: str, text: str) -> bool:
+        """Return True if the pasted prompt still appears in Codex's input row."""
+        fragment = self._first_prompt_fragment(text)
+        may_render_as_folded_paste = len(text) > 1000 or "\n" in text
+        if not fragment and not may_render_as_folded_paste:
+            return False
+
+        cmd = [
+            *self._tmux_cli_prefix(),
+            "capture-pane",
+            "-t",
+            window_id,
+            "-p",
+            "-S",
+            "-30",
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception as e:
+            logger.debug(
+                "Unable to verify Codex prompt submission for window %s: %s",
+                window_id,
+                e,
+            )
+            return False
+
+        if result.returncode != 0:
+            return False
+
+        for line in result.stdout.splitlines()[-30:]:
+            stripped = line.strip()
+            if stripped.startswith("›") and fragment in stripped:
+                return True
+            if may_render_as_folded_paste and _FOLDED_PASTE_INPUT_RE.match(stripped):
+                return True
+        return False
 
     def get_or_create_session(self) -> libtmux.Session:
         """Get existing session or create a new one."""
@@ -453,7 +505,21 @@ class TmuxManager:
                 elif not await asyncio.to_thread(_send_literal, text):
                     return False
             await asyncio.sleep(self._literal_submit_delay(text))
-            return await asyncio.to_thread(_send_enter)
+            if not await asyncio.to_thread(_send_enter):
+                return False
+            await asyncio.sleep(0.25)
+            if await asyncio.to_thread(
+                self._pane_still_has_pending_literal_input,
+                window_id,
+                text,
+            ):
+                logger.warning(
+                    "Codex prompt still appears pending in window %s after Enter; retrying submit",
+                    window_id,
+                )
+                await asyncio.sleep(0.5)
+                return await asyncio.to_thread(_send_enter)
+            return True
 
         # Other cases: special keys (literal=False) or no-enter
         def _sync_send_keys() -> bool:

@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 ccbot = "ccbot.main:main"
+ccbot-bridge = "ccbot.bridge:main"
 
 [project.optional-dependencies]
 dev = [
