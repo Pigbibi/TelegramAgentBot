@@ -10,8 +10,8 @@ All Codex text patterns live here. To support a new UI type or
 a changed Codex version, edit UI_PATTERNS / STATUS_SPINNERS.
 
 Key functions: is_interactive_ui(), extract_interactive_content(),
-parse_status_line(), parse_status_update(), strip_pane_chrome(),
-extract_bash_output().
+is_codex_input_ready(), parse_status_line(), parse_status_update(),
+strip_pane_chrome(), extract_bash_output().
 """
 
 import re
@@ -260,6 +260,26 @@ def parse_status_line(pane_text: str) -> str | None:
         # First non-empty line above separator isn't a spinner → no status
         return None
     return None
+
+
+def is_codex_input_ready(pane_text: str) -> bool:
+    """Return True when the visible Codex TUI is ready for a new prompt."""
+    if not pane_text:
+        return False
+
+    if parse_status_update(pane_text):
+        return False
+
+    lines = pane_text.split("\n")
+    for line in lines[-12:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped == "›" or stripped == "❯":
+            return True
+        if stripped.startswith("› ") or stripped.startswith("❯ "):
+            return True
+    return False
 
 
 def _truncate_progress_text(text: str) -> str:
