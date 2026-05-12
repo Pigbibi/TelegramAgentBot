@@ -150,7 +150,12 @@ from .handlers.status_polling import forget_missing_bound_window, status_poll_lo
 from .screenshot import text_to_image
 from .session import CodexSession, session_manager
 from .session_monitor import NewMessage, SessionMonitor
-from .terminal_parser import extract_bash_output, is_interactive_ui
+from .terminal_parser import (
+    extract_bash_output,
+    is_codex_input_ready,
+    is_interactive_ui,
+    parse_status_update,
+)
 from .tmux_manager import tmux_manager
 from .transcribe import close_client as close_transcribe_client
 from .transcribe import transcribe_voice
@@ -1303,8 +1308,12 @@ async def _send_to_window_when_codex_ready(
     last_message = ""
     while asyncio.get_event_loop().time() < deadline:
         pane_text = await tmux_manager.capture_pane(window_id)
-        if not pane_text or "OpenAI Codex" not in pane_text or "›" not in pane_text:
-            last_message = "Codex UI is still starting"
+        if not is_codex_input_ready(pane_text or ""):
+            status = parse_status_update(pane_text or "")
+            if status:
+                last_message = f"Codex is still busy: {status}"
+            else:
+                last_message = "Codex UI is not ready for input"
             await asyncio.sleep(interval)
             continue
         send_ok, send_msg = await session_manager.send_to_window(window_id, text)
@@ -1660,7 +1669,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if handled:
             return
 
-    success, message = await session_manager.send_to_window(wid, text)
+    success, message = await _send_to_window_when_codex_ready(wid, text)
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return

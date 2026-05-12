@@ -5,6 +5,7 @@ import pytest
 from ccbot.terminal_parser import (
     extract_bash_output,
     extract_interactive_content,
+    is_codex_input_ready,
     is_interactive_ui,
     parse_public_progress_block,
     parse_status_line,
@@ -109,6 +110,30 @@ class TestParseStatusUpdate:
         )
         assert parse_public_progress_block(pane) is not None
         assert parse_status_update(pane) is None
+
+    def test_codex_input_ready_when_idle_prompt_is_visible(self, chrome: str):
+        pane = (
+            "─ Worked for 2m 04s ─────────────────────────\n\n"
+            "• Final answer already rendered\n\n"
+            "› Run /review on my current changes\n"
+            f"{chrome}"
+        )
+        assert is_codex_input_ready(pane)
+
+    def test_codex_input_not_ready_while_working_even_with_prompt_row(
+        self, chrome: str
+    ):
+        pane = (
+            "• Working (1m 07s • esc to interrupt)\n"
+            f"{chrome}"
+            "❯ \n"
+            f"{chrome}"
+            "  [Opus 4.6] Context: 50%\n"
+        )
+        assert not is_codex_input_ready(pane)
+
+    def test_codex_input_not_ready_without_prompt(self):
+        assert not is_codex_input_ready("output only\nno prompt")
 
 
 # ── extract_interactive_content ──────────────────────────────────────────
