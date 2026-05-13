@@ -37,6 +37,9 @@ _INSERT_OVERLAY_RE = re.compile(
     r"(?:press\s+)?enter\s+to\s+insert\s+or\s+esc\s+to\s+close",
     re.IGNORECASE,
 )
+_ACTIVE_WORKING_RE = re.compile(
+    r"^[•◦]\s*Working\b|esc\s+to\s+interrupt", re.IGNORECASE
+)
 
 
 def _resume_target_id(session_id: str) -> str:
@@ -240,7 +243,11 @@ class TmuxManager:
         if not pane_text:
             return False
 
-        for line in pane_text.splitlines()[-30:]:
+        tail_lines = pane_text.splitlines()[-30:]
+        if any(_ACTIVE_WORKING_RE.search(line.strip()) for line in tail_lines):
+            return False
+
+        for line in tail_lines:
             stripped = line.strip()
             if stripped.startswith("›") and fragment in stripped:
                 return True
@@ -555,7 +562,9 @@ class TmuxManager:
                     window_id,
                 )
                 await asyncio.sleep(0.5)
-                if await asyncio.to_thread(self._pane_has_insert_overlay, window_id):
+                if "@" in text or await asyncio.to_thread(
+                    self._pane_has_insert_overlay, window_id
+                ):
                     if not await asyncio.to_thread(_send_control_key, "Escape"):
                         return False
                     await asyncio.sleep(0.2)

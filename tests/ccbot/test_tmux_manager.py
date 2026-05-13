@@ -248,6 +248,33 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(pending)
 
+    def test_pane_pending_literal_input_ignores_active_working_status(self) -> None:
+        manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
+        capture = (
+            "› Improve documentation in @filename\n"
+            "\n"
+            "◦ Working (51s • esc to interrupt)\n"
+            "\n"
+            "› Improve documentation in @filename\n"
+            "\n"
+            "  gpt-5.5 xhigh · ~/Projects\n"
+        )
+
+        with patch(
+            "ccbot.tmux_manager.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["tmux", "capture-pane"],
+                returncode=0,
+                stdout=capture,
+            ),
+        ):
+            pending = manager._pane_still_has_pending_literal_input(
+                "@9",
+                "Improve documentation in @filename",
+            )
+
+        self.assertFalse(pending)
+
     def test_pane_has_insert_overlay_detects_codex_at_mention_popup(self) -> None:
         manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
         capture = (
@@ -406,6 +433,35 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
                 call.args[0],
                 [*manager._tmux_cli_prefix(), "send-keys", "-t", "@9", "Enter"],
             )
+
+    async def test_send_keys_closes_at_mention_completion_before_retry(self) -> None:
+        pane = _SendKeysDummyPane()
+        window = _SendKeysDummyWindow(pane)
+        session = _SendKeysDummySession(window)
+        manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
+
+        with (
+            patch.object(manager, "get_session", return_value=session),
+            patch(
+                "ccbot.tmux_manager.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    args=["tmux", "send-keys"], returncode=0
+                ),
+            ) as run_mock,
+            patch.object(
+                manager,
+                "_pane_still_has_pending_literal_input",
+                side_effect=[True, False],
+            ),
+            patch.object(manager, "_pane_has_insert_overlay", return_value=False),
+        ):
+            ok = await manager.send_keys("@9", "Improve documentation in @filename")
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            [call.args[0][-1] for call in run_mock.call_args_list],
+            ["Enter", "Escape", "Enter"],
+        )
 
     async def test_send_keys_closes_insert_overlay_before_submit(self) -> None:
         pane = _SendKeysDummyPane()
