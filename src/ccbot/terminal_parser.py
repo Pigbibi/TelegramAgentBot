@@ -318,19 +318,6 @@ def parse_public_progress_block(pane_text: str) -> str | None:
     # Only inspect the recent tail where Codex renders progress updates.
     lines = lines[max(0, len(lines) - 40) :]
 
-    def _is_progress_start(stripped: str) -> bool:
-        return stripped.startswith(_PROGRESS_BULLETS)
-
-    def _is_progress_continuation(stripped: str) -> bool:
-        if not stripped:
-            return False
-        if stripped.startswith(_PROGRESS_BULLETS):
-            return False
-        if stripped.startswith(_PROMPT_PREFIXES):
-            return False
-        first = stripped[0]
-        return first.isspace() or first in {"│", "└", "…"}
-
     for idx in range(len(lines) - 1, -1, -1):
         stripped = lines[idx].strip()
         if not _is_progress_start(stripped):
@@ -355,6 +342,71 @@ def parse_public_progress_block(pane_text: str) -> str | None:
     return None
 
 
+def _is_progress_start(stripped: str) -> bool:
+    return stripped.startswith(_PROGRESS_BULLETS)
+
+
+def _is_progress_continuation(stripped: str) -> bool:
+    if not stripped:
+        return False
+    if stripped.startswith(_PROGRESS_BULLETS):
+        return False
+    if stripped.startswith(_PROMPT_PREFIXES):
+        return False
+    first = stripped[0]
+    return first.isspace() or first in {"│", "└", "…"}
+
+
+def _parse_tail_progress_block(pane_text: str) -> str | None:
+    """Extract a progress block only when it is the current visible tail."""
+    if not pane_text:
+        return None
+
+    lines = pane_text.split("\n")
+    if not lines:
+        return None
+
+    lines = lines[max(0, len(lines) - 40) :]
+    for idx in range(len(lines) - 1, -1, -1):
+        stripped = lines[idx].strip()
+        if not _is_progress_start(stripped):
+            continue
+
+        block_lines = [lines[idx].rstrip()]
+        block_end = idx
+        for next_idx in range(idx + 1, len(lines)):
+            next_stripped = lines[next_idx].rstrip()
+            next_trimmed = next_stripped.strip()
+            if not next_trimmed:
+                break
+            if _is_chrome_separator(next_trimmed):
+                break
+            if next_trimmed.startswith(_PROMPT_PREFIXES):
+                break
+            if next_trimmed.startswith(_PROGRESS_BULLETS):
+                break
+            if not _is_progress_continuation(next_stripped):
+                break
+            block_lines.append(next_stripped)
+            block_end = next_idx
+
+        for next_idx in range(block_end + 1, len(lines)):
+            next_trimmed = lines[next_idx].strip()
+            if not next_trimmed:
+                continue
+            if _is_chrome_separator(next_trimmed):
+                return _truncate_progress_text("\n".join(block_lines))
+            return None
+
+        return _truncate_progress_text("\n".join(block_lines))
+
+    return None
+
+
+def _is_chrome_separator(stripped: str) -> bool:
+    return len(stripped) >= 20 and all(c == "─" for c in stripped)
+
+
 def _is_active_progress_block(progress_block: str | None) -> bool:
     if not progress_block:
         return False
@@ -375,9 +427,10 @@ def parse_status_update(pane_text: str) -> str | None:
     """
     status_line = parse_status_line(pane_text)
     progress_block = parse_public_progress_block(pane_text)
+    tail_progress_block = _parse_tail_progress_block(pane_text)
 
-    if not status_line and _is_active_progress_block(progress_block):
-        return progress_block
+    if not status_line and _is_active_progress_block(tail_progress_block):
+        return tail_progress_block
 
     if not status_line:
         return None
