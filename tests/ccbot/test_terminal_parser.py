@@ -98,6 +98,18 @@ class TestParseStatusUpdate:
             "1 background terminal running · /ps to …"
         )
 
+    def test_ignores_stale_working_progress_when_idle(self, chrome: str):
+        pane = (
+            "• Working (3m 08s • esc to interrupt)\n\n"
+            "Done with the requested change.\n"
+            f"{chrome}"
+        )
+        assert parse_public_progress_block(pane) == (
+            "• Working (3m 08s • esc to interrupt)"
+        )
+        assert parse_status_update(pane) is None
+        assert is_codex_input_ready(pane)
+
     def test_ignores_final_answer_bullet_when_idle(self, chrome: str):
         """A completed final answer in the pane should not be sent as status."""
         pane = (
