@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ccbot.handlers import status_polling
 from ccbot.handlers.status_polling import status_poll_loop, update_status_message
 
 
@@ -29,9 +30,11 @@ def _clear_interactive_state():
 
     _interactive_mode.clear()
     _interactive_msgs.clear()
+    status_polling._synthetic_working_starts.clear()
     yield
     _interactive_mode.clear()
     _interactive_msgs.clear()
+    status_polling._synthetic_working_starts.clear()
 
 
 @pytest.mark.usefixtures("_clear_interactive_state")
@@ -231,6 +234,94 @@ class TestStatusPollerSettingsDetection:
                 "• Working (1m 07s • esc to interrupt)",
                 thread_id=42,
             )
+
+    @pytest.mark.asyncio
+    async def test_mark_window_working_sends_immediate_synthetic_status(
+        self, mock_bot: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A just-submitted prompt should show Working before Codex renders status."""
+        monkeypatch.setattr(status_polling.time, "monotonic", lambda: 100.0)
+
+        with patch(
+            "ccbot.handlers.status_polling.enqueue_status_update",
+            new_callable=AsyncMock,
+        ) as mock_enqueue_status:
+            await status_polling.mark_window_working(
+                mock_bot,
+                user_id=1,
+                window_id="@5",
+                thread_id=42,
+            )
+
+        mock_enqueue_status.assert_awaited_once_with(
+            mock_bot,
+            1,
+            "@5",
+            "• Working (0s • esc to interrupt)",
+            thread_id=42,
+        )
+        assert status_polling._synthetic_working_starts[(1, 42, "@5")] == 100.0
+
+    @pytest.mark.asyncio
+    async def test_synthetic_working_updates_until_codex_is_idle(
+        self, mock_bot: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Local Working timer refreshes and clears when the prompt is idle again."""
+        window_id = "@5"
+        mock_window = MagicMock()
+        mock_window.window_id = window_id
+        busy_without_status = "output\nstill running without prompt chrome\n"
+        idle_pane = (
+            "─ Worked for 2m 04s ─────────────────────────\n\n"
+            "• Final answer already rendered\n\n"
+            "› Run /review on my current changes\n"
+            "──────────────────────────────────────\n"
+            "  [Opus 4.6] Context: 50%\n"
+        )
+
+        status_polling._synthetic_working_starts[(1, 42, window_id)] = 100.0
+        monotonic_now = 105.0
+        monkeypatch.setattr(status_polling.time, "monotonic", lambda: monotonic_now)
+
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch(
+                "ccbot.handlers.status_polling.handle_interactive_ui",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "ccbot.handlers.status_polling.enqueue_status_update",
+                new_callable=AsyncMock,
+            ) as mock_enqueue_status,
+        ):
+            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.capture_pane = AsyncMock(
+                side_effect=[busy_without_status, idle_pane]
+            )
+
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+            monotonic_now = 110.0
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+
+        assert mock_enqueue_status.await_args_list[0].args == (
+            mock_bot,
+            1,
+            window_id,
+            "• Working (5s • esc to interrupt)",
+        )
+        assert mock_enqueue_status.await_args_list[0].kwargs == {"thread_id": 42}
+        assert mock_enqueue_status.await_args_list[1].args == (
+            mock_bot,
+            1,
+            window_id,
+            None,
+        )
+        assert mock_enqueue_status.await_args_list[1].kwargs == {"thread_id": 42}
+        assert (1, 42, window_id) not in status_polling._synthetic_working_starts
 
     @pytest.mark.asyncio
     async def test_non_working_status_is_skipped_when_queue_is_busy(

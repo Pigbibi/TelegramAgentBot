@@ -146,7 +146,11 @@ from .handlers.message_sender import (
 )
 from .markdown_v2 import convert_markdown
 from .handlers.response_builder import build_response_parts
-from .handlers.status_polling import forget_missing_bound_window, status_poll_loop
+from .handlers.status_polling import (
+    forget_missing_bound_window,
+    mark_window_working,
+    status_poll_loop,
+)
 from .screenshot import text_to_image
 from .session import CodexSession, session_manager
 from .session_monitor import NewMessage, SessionMonitor
@@ -1023,6 +1027,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
+    await mark_window_working(context.bot, user.id, wid, thread_id)
 
     # Confirm to user
     await safe_reply(update.message, PHOTO_CONFIRMATION_MESSAGE)
@@ -1111,6 +1116,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
+    await mark_window_working(context.bot, user.id, wid, thread_id)
 
     await safe_reply(update.message, f'🎤 "{text}"')
 
@@ -1275,6 +1281,7 @@ async def _rotate_thread_after_usage_limit(
 
     send_ok, send_msg = await _send_to_window_when_codex_ready(created_wid, text)
     if send_ok:
+        await mark_window_working(context.bot, user_id, created_wid, thread_id)
         await _refresh_session_map_after_first_prompt(created_wid)
     if send_ok:
         await safe_send(
@@ -1673,6 +1680,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
+    await mark_window_working(context.bot, user.id, wid, thread_id)
     await _refresh_session_map_after_first_prompt(wid)
 
     # Start background capture for ! bash command output
@@ -1823,6 +1831,12 @@ async def _create_and_bind_window(
                     pending_text,
                 )
                 if send_ok:
+                    await mark_window_working(
+                        context.bot,
+                        query.from_user.id,
+                        created_wid,
+                        pending_thread_id,
+                    )
                     await _refresh_session_map_after_first_prompt(created_wid)
                 if not send_ok:
                     logger.warning("Failed to forward pending text: %s", send_msg)
@@ -2328,7 +2342,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             send_ok, send_msg = await session_manager.send_to_window(
                 selected_wid, pending_text
             )
-            if not send_ok:
+            if send_ok:
+                await mark_window_working(
+                    context.bot,
+                    user.id,
+                    selected_wid,
+                    thread_id,
+                )
+            else:
                 logger.warning("Failed to forward pending text: %s", send_msg)
                 await safe_send(
                     context.bot,
