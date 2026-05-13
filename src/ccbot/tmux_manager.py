@@ -33,6 +33,10 @@ _UUID_SUFFIX_RE = re.compile(
     r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
 )
 _FOLDED_PASTE_INPUT_RE = re.compile(r"^[›❯]\s*\[Pasted Content\s+\d+\s+chars\]")
+_INSERT_OVERLAY_RE = re.compile(
+    r"(?:press\s+)?enter\s+to\s+insert\s+or\s+esc\s+to\s+close",
+    re.IGNORECASE,
+)
 
 
 def _resume_target_id(session_id: str) -> str:
@@ -187,13 +191,7 @@ class TmuxManager:
                 except Exception:
                     pass
 
-    def _pane_still_has_pending_literal_input(self, window_id: str, text: str) -> bool:
-        """Return True if the pasted prompt still appears in Codex's input row."""
-        fragment = self._first_prompt_fragment(text)
-        may_render_as_folded_paste = len(text) > 1000 or "\n" in text
-        if not fragment and not may_render_as_folded_paste:
-            return False
-
+    def _capture_pane_tail(self, window_id: str, start: int = -30) -> str | None:
         cmd = [
             *self._tmux_cli_prefix(),
             "capture-pane",
@@ -201,7 +199,7 @@ class TmuxManager:
             window_id,
             "-p",
             "-S",
-            "-30",
+            str(start),
         ]
         try:
             result = subprocess.run(
@@ -212,16 +210,37 @@ class TmuxManager:
             )
         except Exception as e:
             logger.debug(
-                "Unable to verify Codex prompt submission for window %s: %s",
+                "Unable to capture pane tail for window %s: %s",
                 window_id,
                 e,
             )
+            return None
+
+        if result.returncode != 0 or not isinstance(result.stdout, str):
+            return None
+        return result.stdout
+
+    def _pane_has_insert_overlay(self, window_id: str) -> bool:
+        """Return True when Codex's @-mention insert overlay is active."""
+        pane_text = self._capture_pane_tail(window_id, start=-20)
+        if not pane_text:
+            return False
+        return any(
+            _INSERT_OVERLAY_RE.search(line) for line in pane_text.splitlines()[-20:]
+        )
+
+    def _pane_still_has_pending_literal_input(self, window_id: str, text: str) -> bool:
+        """Return True if the pasted prompt still appears in Codex's input row."""
+        fragment = self._first_prompt_fragment(text)
+        may_render_as_folded_paste = len(text) > 1000 or "\n" in text
+        if not fragment and not may_render_as_folded_paste:
             return False
 
-        if result.returncode != 0:
+        pane_text = self._capture_pane_tail(window_id, start=-30)
+        if not pane_text:
             return False
 
-        for line in result.stdout.splitlines()[-30:]:
+        for line in pane_text.splitlines()[-30:]:
             stripped = line.strip()
             if stripped.startswith("›") and fragment in stripped:
                 return True
@@ -434,12 +453,12 @@ class TmuxManager:
                     logger.error(f"Failed to send keys to window {window_id}: {e}")
                     return False
 
-            def _send_enter() -> bool:
-                # libtmux's `pane.send_keys(..., enter=True)` can occasionally fail
-                # to submit a prompt to the long-running Codex TUI even though the
-                # text itself was delivered. The raw tmux CLI `send-keys Enter`
-                # has proven more reliable for this final submit step.
-                cmd = [*self._tmux_cli_prefix(), "send-keys", "-t", window_id, "Enter"]
+            def _send_control_key(key: str) -> bool:
+                # libtmux's `pane.send_keys(..., enter=True)` can occasionally
+                # fail to submit a prompt to the long-running Codex TUI even
+                # though the text itself was delivered. The raw tmux CLI
+                # `send-keys` has proven more reliable for control keys.
+                cmd = [*self._tmux_cli_prefix(), "send-keys", "-t", window_id, key]
                 try:
                     result = subprocess.run(
                         cmd,
@@ -451,13 +470,15 @@ class TmuxManager:
                         return True
                     stderr = result.stderr.strip() or f"exit {result.returncode}"
                     logger.error(
-                        "Failed to send Enter via tmux CLI to window %s: %s",
+                        "Failed to send %s via tmux CLI to window %s: %s",
+                        key,
                         window_id,
                         stderr,
                     )
                 except Exception as e:
                     logger.error(
-                        "Failed to send Enter via tmux CLI to window %s: %s",
+                        "Failed to send %s via tmux CLI to window %s: %s",
+                        key,
                         window_id,
                         e,
                     )
@@ -474,10 +495,18 @@ class TmuxManager:
                     pane = window.active_pane
                     if not pane:
                         return False
-                    pane.send_keys("", enter=True, literal=False)
+                    if key == "Enter":
+                        pane.send_keys("", enter=True, literal=False)
+                    else:
+                        pane.send_keys(key, enter=False, literal=False)
                     return True
                 except Exception as e:
-                    logger.error(f"Failed to send Enter to window {window_id}: {e}")
+                    logger.error(
+                        "Failed to send %s to window %s: %s",
+                        key,
+                        window_id,
+                        e,
+                    )
                     return False
 
             # Codex's ! command mode: send "!" first so the TUI
@@ -505,7 +534,15 @@ class TmuxManager:
                 elif not await asyncio.to_thread(_send_literal, text):
                     return False
             await asyncio.sleep(self._literal_submit_delay(text))
-            if not await asyncio.to_thread(_send_enter):
+            if await asyncio.to_thread(self._pane_has_insert_overlay, window_id):
+                logger.info(
+                    "Codex insert overlay detected in window %s; closing before submit",
+                    window_id,
+                )
+                if not await asyncio.to_thread(_send_control_key, "Escape"):
+                    return False
+                await asyncio.sleep(0.2)
+            if not await asyncio.to_thread(_send_control_key, "Enter"):
                 return False
             await asyncio.sleep(0.25)
             if await asyncio.to_thread(
@@ -518,7 +555,23 @@ class TmuxManager:
                     window_id,
                 )
                 await asyncio.sleep(0.5)
-                return await asyncio.to_thread(_send_enter)
+                if await asyncio.to_thread(self._pane_has_insert_overlay, window_id):
+                    if not await asyncio.to_thread(_send_control_key, "Escape"):
+                        return False
+                    await asyncio.sleep(0.2)
+                if not await asyncio.to_thread(_send_control_key, "Enter"):
+                    return False
+                await asyncio.sleep(0.25)
+                if await asyncio.to_thread(
+                    self._pane_still_has_pending_literal_input,
+                    window_id,
+                    text,
+                ):
+                    logger.error(
+                        "Codex prompt still appears pending in window %s after retry",
+                        window_id,
+                    )
+                    return False
             return True
 
         # Other cases: special keys (literal=False) or no-enter

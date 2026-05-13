@@ -248,6 +248,38 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(pending)
 
+    def test_pane_has_insert_overlay_detects_codex_at_mention_popup(self) -> None:
+        manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
+        capture = (
+            "› 🧪 模拟市价卖出 BOXX.US: 1.3823股 @ $116.67\n"
+            "  no matches\n"
+            "  Press enter to insert or esc to close\n"
+        )
+
+        with patch(
+            "ccbot.tmux_manager.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["tmux", "capture-pane"],
+                returncode=0,
+                stdout=capture,
+            ),
+        ):
+            self.assertTrue(manager._pane_has_insert_overlay("@9"))
+
+    def test_pane_has_insert_overlay_ignores_regular_permission_prompt(self) -> None:
+        manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
+        capture = "  Allow command?\n  Press enter to confirm or esc to cancel\n"
+
+        with patch(
+            "ccbot.tmux_manager.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["tmux", "capture-pane"],
+                returncode=0,
+                stdout=capture,
+            ),
+        ):
+            self.assertFalse(manager._pane_has_insert_overlay("@9"))
+
     async def test_send_keys_uses_tmux_cli_for_enter_after_literal_text(self) -> None:
         pane = _SendKeysDummyPane()
         window = _SendKeysDummyWindow(pane)
@@ -265,6 +297,7 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 manager, "_pane_still_has_pending_literal_input", return_value=False
             ),
+            patch.object(manager, "_pane_has_insert_overlay", return_value=False),
         ):
             ok = await manager.send_keys("@9", "hello")
 
@@ -296,6 +329,7 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 manager, "_pane_still_has_pending_literal_input", return_value=False
             ),
+            patch.object(manager, "_pane_has_insert_overlay", return_value=False),
         ):
             ok = await manager.send_keys("@9", "hello")
 
@@ -329,6 +363,7 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 manager, "_pane_still_has_pending_literal_input", return_value=False
             ),
+            patch.object(manager, "_pane_has_insert_overlay", return_value=False),
         ):
             ok = await manager.send_keys("@9", text)
 
@@ -355,8 +390,11 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ) as run_mock,
             patch.object(
-                manager, "_pane_still_has_pending_literal_input", return_value=True
+                manager,
+                "_pane_still_has_pending_literal_input",
+                side_effect=[True, False],
             ),
+            patch.object(manager, "_pane_has_insert_overlay", return_value=False),
         ):
             ok = await manager.send_keys("@9", "hello")
 
@@ -368,6 +406,64 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
                 call.args[0],
                 [*manager._tmux_cli_prefix(), "send-keys", "-t", "@9", "Enter"],
             )
+
+    async def test_send_keys_closes_insert_overlay_before_submit(self) -> None:
+        pane = _SendKeysDummyPane()
+        window = _SendKeysDummyWindow(pane)
+        session = _SendKeysDummySession(window)
+        manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
+
+        with (
+            patch.object(manager, "get_session", return_value=session),
+            patch(
+                "ccbot.tmux_manager.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    args=["tmux", "send-keys"], returncode=0
+                ),
+            ) as run_mock,
+            patch.object(
+                manager, "_pane_still_has_pending_literal_input", return_value=False
+            ),
+            patch.object(manager, "_pane_has_insert_overlay", return_value=True),
+        ):
+            ok = await manager.send_keys(
+                "@9",
+                "🧪 模拟市价卖出 BOXX.US: 1.3823股 @ $116.67",
+            )
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            [call.args[0][-1] for call in run_mock.call_args_list],
+            ["Escape", "Enter"],
+        )
+
+    async def test_send_keys_returns_false_when_retry_leaves_prompt_pending(
+        self,
+    ) -> None:
+        pane = _SendKeysDummyPane()
+        window = _SendKeysDummyWindow(pane)
+        session = _SendKeysDummySession(window)
+        manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
+
+        with (
+            patch.object(manager, "get_session", return_value=session),
+            patch(
+                "ccbot.tmux_manager.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    args=["tmux", "send-keys"], returncode=0
+                ),
+            ) as run_mock,
+            patch.object(
+                manager,
+                "_pane_still_has_pending_literal_input",
+                side_effect=[True, True],
+            ),
+            patch.object(manager, "_pane_has_insert_overlay", return_value=False),
+        ):
+            ok = await manager.send_keys("@9", "hello")
+
+        self.assertFalse(ok)
+        self.assertEqual(run_mock.call_count, 2)
 
     def test_paste_buffer_literal_uses_tmux_bracketed_paste(self) -> None:
         manager = tmux_manager_module.TmuxManager(session_name="ccbot-test")
