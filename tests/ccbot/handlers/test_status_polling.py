@@ -26,15 +26,18 @@ def mock_bot():
 @pytest.fixture
 def _clear_interactive_state():
     """Ensure interactive state is clean before and after each test."""
+    from ccbot.handlers import working_status
     from ccbot.handlers.interactive_ui import _interactive_mode, _interactive_msgs
 
     _interactive_mode.clear()
     _interactive_msgs.clear()
     status_polling._synthetic_working_starts.clear()
+    working_status._synthetic_working_output_seen.clear()
     yield
     _interactive_mode.clear()
     _interactive_msgs.clear()
     status_polling._synthetic_working_starts.clear()
+    working_status._synthetic_working_output_seen.clear()
 
 
 @pytest.mark.usefixtures("_clear_interactive_state")
@@ -267,6 +270,8 @@ class TestStatusPollerSettingsDetection:
         self, mock_bot: AsyncMock, monkeypatch: pytest.MonkeyPatch
     ):
         """Local Working timer refreshes and clears when the prompt is idle again."""
+        from ccbot.handlers import working_status
+
         window_id = "@5"
         mock_window = MagicMock()
         mock_window.window_id = window_id
@@ -302,6 +307,7 @@ class TestStatusPollerSettingsDetection:
             await update_status_message(
                 mock_bot, user_id=1, window_id=window_id, thread_id=42
             )
+            working_status.mark_output_seen(1, 42, window_id)
             monotonic_now = 110.0
             await update_status_message(
                 mock_bot, user_id=1, window_id=window_id, thread_id=42
@@ -322,6 +328,47 @@ class TestStatusPollerSettingsDetection:
         )
         assert mock_enqueue_status.await_args_list[1].kwargs == {"thread_id": 42}
         assert (1, 42, window_id) not in status_polling._synthetic_working_starts
+
+    @pytest.mark.asyncio
+    async def test_synthetic_working_does_not_clear_before_first_output(
+        self, mock_bot: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A transient prompt row before any output should not erase the timer."""
+        window_id = "@5"
+        mock_window = MagicMock()
+        mock_window.window_id = window_id
+        idle_like_pane = (
+            "› Find and fix a bug in @filename\n"
+            "──────────────────────────────────────\n"
+            "  [Opus 4.6] Context: 50%\n"
+        )
+
+        status_polling._synthetic_working_starts[(1, 42, window_id)] = 100.0
+        monkeypatch.setattr(status_polling.time, "monotonic", lambda: 110.0)
+
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch(
+                "ccbot.handlers.status_polling.handle_interactive_ui",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "ccbot.handlers.status_polling.enqueue_status_update",
+                new_callable=AsyncMock,
+            ) as mock_enqueue_status,
+        ):
+            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.capture_pane = AsyncMock(return_value=idle_like_pane)
+
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+
+        mock_enqueue_status.assert_awaited_once()
+        assert mock_enqueue_status.await_args.args[3] == (
+            "💭 Thinking (10s) · esc to interrupt"
+        )
+        assert status_polling._synthetic_working_starts[(1, 42, window_id)] == 100.0
 
     @pytest.mark.asyncio
     async def test_synthetic_working_keeps_timer_below_public_progress(

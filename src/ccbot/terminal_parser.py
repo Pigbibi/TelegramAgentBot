@@ -396,6 +396,9 @@ def _parse_tail_progress_block(pane_text: str) -> str | None:
                 continue
             if _is_chrome_separator(next_trimmed):
                 return _truncate_progress_text("\n".join(block_lines))
+            if next_trimmed.startswith(_PROMPT_PREFIXES):
+                block = _truncate_progress_text("\n".join(block_lines))
+                return block if _is_active_progress_block(block) else None
             return None
 
         return _truncate_progress_text("\n".join(block_lines))
