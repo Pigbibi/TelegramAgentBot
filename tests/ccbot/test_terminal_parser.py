@@ -144,6 +144,19 @@ class TestParseStatusUpdate:
         )
         assert not is_codex_input_ready(pane)
 
+    def test_active_progress_above_prompt_is_status(self):
+        """Newer Codex panes can show active status directly above the prompt."""
+        pane = (
+            "• Waiting for background terminal (52s • esc to interrupt)\n\n"
+            "› Find and fix a bug in @filename\n\n"
+            "  gpt-5.4-mini medium · ~/Projects\n"
+        )
+        assert (
+            parse_status_update(pane)
+            == "• Waiting for background terminal (52s • esc to interrupt)"
+        )
+        assert not is_codex_input_ready(pane)
+
     def test_codex_input_not_ready_without_prompt(self):
         assert not is_codex_input_ready("output only\nno prompt")
 

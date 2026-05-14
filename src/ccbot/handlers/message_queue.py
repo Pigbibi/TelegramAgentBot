@@ -37,7 +37,7 @@ from .message_sender import (
     send_with_fallback,
     strip_sentinels,
 )
-from .working_status import status_text_for_pane
+from .working_status import mark_output_seen, status_text_for_pane
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,7 @@ class MessageTask:
     parts: list[str] = field(default_factory=list)
     tool_use_id: str | None = None
     content_type: str = "text"
+    role: str = "assistant"
     thread_id: int | None = None  # Telegram topic thread_id for targeted send
     image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
 
@@ -213,6 +214,7 @@ async def _merge_content_tasks(
             parts=merged_parts,
             tool_use_id=first.tool_use_id,
             content_type=first.content_type,
+            role=first.role,
             thread_id=first.thread_id,
         ),
         merge_count,
@@ -492,6 +494,8 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     await _send_task_images(bot, chat_id, task)
 
     # 5. After content, check and send status
+    if task.role == "assistant":
+        mark_output_seen(user_id, task.thread_id, wid)
     await _check_and_send_status(bot, user_id, wid, task.thread_id)
 
 
@@ -708,6 +712,7 @@ async def enqueue_content_message(
     parts: list[str],
     tool_use_id: str | None = None,
     content_type: str = "text",
+    role: str = "assistant",
     text: str | None = None,
     thread_id: int | None = None,
     image_data: list[tuple[str, bytes]] | None = None,
@@ -730,6 +735,7 @@ async def enqueue_content_message(
         parts=parts,
         tool_use_id=tool_use_id,
         content_type=content_type,
+        role=role,
         thread_id=thread_id,
         image_data=image_data,
     )

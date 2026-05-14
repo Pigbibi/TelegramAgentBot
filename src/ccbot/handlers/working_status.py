@@ -5,8 +5,10 @@ import time
 from ..terminal_parser import is_codex_input_ready, parse_status_update
 
 SYNTHETIC_WORKING_IDLE_GRACE = 2.0
+SYNTHETIC_WORKING_NO_OUTPUT_MAX = 10 * 60.0
 
 _synthetic_working_starts: dict[tuple[int, int, str], float] = {}
+_synthetic_working_output_seen: set[tuple[int, int, str]] = set()
 
 
 def working_key(
@@ -66,13 +68,24 @@ def start_working(
 ) -> tuple[float, str]:
     """Start or replace the local timer for a just-submitted prompt."""
     start = started_at if started_at is not None else time.monotonic()
-    _synthetic_working_starts[working_key(user_id, thread_id, window_id)] = start
+    key = working_key(user_id, thread_id, window_id)
+    _synthetic_working_starts[key] = start
+    _synthetic_working_output_seen.discard(key)
     return start, format_working_status(start, now=start)
 
 
 def clear_working(user_id: int, thread_id: int | None, window_id: str) -> None:
     """Clear the local timer for one topic/window."""
-    _synthetic_working_starts.pop(working_key(user_id, thread_id, window_id), None)
+    key = working_key(user_id, thread_id, window_id)
+    _synthetic_working_starts.pop(key, None)
+    _synthetic_working_output_seen.discard(key)
+
+
+def mark_output_seen(user_id: int, thread_id: int | None, window_id: str) -> None:
+    """Record that a visible assistant message has arrived for this run."""
+    key = working_key(user_id, thread_id, window_id)
+    if key in _synthetic_working_starts:
+        _synthetic_working_output_seen.add(key)
 
 
 def status_text_for_pane(
@@ -95,11 +108,16 @@ def status_text_for_pane(
         return status_text
 
     current_time = now if now is not None else time.monotonic()
+    elapsed = current_time - started_at
     if (
-        is_codex_input_ready(pane_text)
-        and current_time - started_at >= SYNTHETIC_WORKING_IDLE_GRACE
+        key not in _synthetic_working_output_seen
+        and elapsed < SYNTHETIC_WORKING_NO_OUTPUT_MAX
     ):
+        return format_working_status(started_at, now=current_time, detail=status_text)
+
+    if is_codex_input_ready(pane_text) and elapsed >= SYNTHETIC_WORKING_IDLE_GRACE:
         _synthetic_working_starts.pop(key, None)
+        _synthetic_working_output_seen.discard(key)
         return status_text
 
     return format_working_status(started_at, now=current_time, detail=status_text)
