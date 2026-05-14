@@ -25,11 +25,7 @@ from telegram.error import BadRequest
 
 from ..config import config
 from ..session import session_manager
-from ..terminal_parser import (
-    is_codex_input_ready,
-    is_interactive_ui,
-    parse_status_update,
-)
+from ..terminal_parser import is_interactive_ui
 from ..tmux_manager import tmux_manager
 from .interactive_ui import (
     clear_interactive_msg,
@@ -38,6 +34,15 @@ from .interactive_ui import (
 )
 from .cleanup import clear_topic_state
 from .message_queue import enqueue_status_update, get_message_queue
+from .working_status import (
+    _synthetic_working_starts as _working_starts,
+    clear_working,
+    format_working_status,
+    is_active_working_status,
+    start_working,
+    status_text_for_pane,
+    working_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +55,7 @@ TOPIC_CHECK_INTERVAL = 60.0  # seconds
 # pane can disappear during local restarts or tmux churn, and immediately
 # deleting the topic binding loses the session id needed to resume it.
 _missing_bound_windows: set[tuple[int, int, str]] = set()
-_synthetic_working_starts: dict[tuple[int, int, str], float] = {}
-_SYNTHETIC_WORKING_IDLE_GRACE = 2.0
+_synthetic_working_starts = _working_starts
 
 
 def forget_missing_bound_window(user_id: int, thread_id: int, window_id: str) -> None:
@@ -59,35 +63,14 @@ def forget_missing_bound_window(user_id: int, thread_id: int, window_id: str) ->
     _missing_bound_windows.discard((user_id, thread_id, window_id))
 
 
-def _is_active_working_status(status_text: str | None) -> bool:
-    """Return whether a status is important enough to show while queue is busy."""
-    if not status_text:
-        return False
-    normalized = status_text.strip().lower()
-    return (
-        "esc to interrupt" in normalized
-        or normalized.startswith("• working")
-        or normalized.startswith("◦ working")
-        or normalized.startswith("working")
-    )
-
-
 def _working_key(
     user_id: int, thread_id: int | None, window_id: str
 ) -> tuple[int, int, str]:
-    return (user_id, thread_id or 0, window_id)
-
-
-def _format_elapsed(seconds: int) -> str:
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes, remainder = divmod(seconds, 60)
-    return f"{minutes}m {remainder:02d}s"
+    return working_key(user_id, thread_id, window_id)
 
 
 def _format_synthetic_working(started_at: float, now: float | None = None) -> str:
-    elapsed = max(0, int((now if now is not None else time.monotonic()) - started_at))
-    return f"• Working ({_format_elapsed(elapsed)} • esc to interrupt)"
+    return format_working_status(started_at, now=now)
 
 
 async def mark_window_working(
@@ -96,14 +79,19 @@ async def mark_window_working(
     window_id: str,
     thread_id: int | None = None,
 ) -> None:
-    """Start an immediate local Working timer for a just-submitted prompt."""
+    """Start an immediate local Thinking timer for a just-submitted prompt."""
     started_at = time.monotonic()
-    _synthetic_working_starts[_working_key(user_id, thread_id, window_id)] = started_at
+    _, status_text = start_working(
+        user_id,
+        thread_id,
+        window_id,
+        started_at=started_at,
+    )
     await enqueue_status_update(
         bot,
         user_id,
         window_id,
-        _format_synthetic_working(started_at, now=started_at),
+        status_text,
         thread_id=thread_id,
     )
 
@@ -113,8 +101,8 @@ def clear_window_working(
     window_id: str,
     thread_id: int | None = None,
 ) -> None:
-    """Clear the local Working timer for a window/topic."""
-    _synthetic_working_starts.pop(_working_key(user_id, thread_id, window_id), None)
+    """Clear the local Thinking timer for a window/topic."""
+    clear_working(user_id, thread_id, window_id)
 
 
 async def update_status_message(
@@ -177,28 +165,18 @@ async def update_status_message(
         await handle_interactive_ui(bot, user_id, window_id, thread_id)
         return
 
-    status_text = parse_status_update(pane_text)
-    working_key = _working_key(user_id, thread_id, window_id)
-    synthetic_started_at = _synthetic_working_starts.get(working_key)
+    status_text = status_text_for_pane(
+        user_id,
+        thread_id,
+        window_id,
+        pane_text,
+        now=time.monotonic(),
+    )
 
-    if status_text:
-        # Once Codex exposes its own status, prefer the native text and stop the
-        # local timer so idle detection later clears normally.
-        _synthetic_working_starts.pop(working_key, None)
-    elif synthetic_started_at is not None:
-        now = time.monotonic()
-        if (
-            is_codex_input_ready(pane_text)
-            and now - synthetic_started_at >= _SYNTHETIC_WORKING_IDLE_GRACE
-        ):
-            _synthetic_working_starts.pop(working_key, None)
-        else:
-            status_text = _format_synthetic_working(synthetic_started_at, now=now)
-
-    # Normal status line check.  If the queue is busy, still allow active
-    # "Working ... esc to interrupt" updates so the topic does not look idle.
+    # Normal status line check. If the queue is busy, still allow active timer
+    # updates so the topic does not look idle.
     if skip_status:
-        if _is_active_working_status(status_text):
+        if is_active_working_status(status_text):
             await enqueue_status_update(
                 bot,
                 user_id,

@@ -234,3 +234,51 @@ async def test_status_updates_are_coalesced_behind_content(monkeypatch):
         await message_queue.shutdown_workers()
         message_queue._status_msg_info.clear()
         message_queue._flood_until.clear()
+
+
+@pytest.mark.asyncio
+async def test_check_status_uses_synthetic_timer_after_content(monkeypatch):
+    """Content delivery should immediately restore the bottom elapsed timer."""
+    from ccbot.handlers import working_status
+
+    await message_queue.shutdown_workers()
+    message_queue._status_msg_info.clear()
+    working_status._synthetic_working_starts.clear()
+    working_status._synthetic_working_starts[(1, 42, "@9")] = 100.0
+    monkeypatch.setattr(working_status.time, "monotonic", lambda: 108.0)
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+    monkeypatch.setattr(
+        message_queue.tmux_manager,
+        "find_window_by_id",
+        AsyncMock(return_value=SimpleNamespace(window_id="@9")),
+    )
+    monkeypatch.setattr(
+        message_queue.tmux_manager,
+        "capture_pane",
+        AsyncMock(return_value="output\nstill running without prompt chrome\n"),
+    )
+
+    sent_texts: list[str] = []
+
+    async def fake_send_with_fallback(bot, chat_id, text, **kwargs):
+        sent_texts.append(text)
+        return SimpleNamespace(message_id=654)
+
+    monkeypatch.setattr(message_queue, "send_with_fallback", fake_send_with_fallback)
+
+    try:
+        await message_queue._check_and_send_status(
+            bot=AsyncMock(),
+            user_id=1,
+            window_id="@9",
+            thread_id=42,
+        )
+    finally:
+        message_queue._status_msg_info.clear()
+        working_status._synthetic_working_starts.clear()
+
+    assert sent_texts == ["💭 Thinking (8s) · esc to interrupt"]

@@ -29,7 +29,6 @@ from telegram.error import RetryAfter
 
 from ..markdown_v2 import convert_markdown
 from ..session import session_manager
-from ..terminal_parser import parse_status_update
 from ..tmux_manager import tmux_manager
 from .message_sender import (
     NO_LINK_PREVIEW,
@@ -38,6 +37,7 @@ from .message_sender import (
     send_with_fallback,
     strip_sentinels,
 )
+from .working_status import status_text_for_pane
 
 logger = logging.getLogger(__name__)
 
@@ -696,7 +696,7 @@ async def _check_and_send_status(
         return
 
     tid = thread_id or 0
-    status_text = parse_status_update(pane_text)
+    status_text = status_text_for_pane(user_id, thread_id, window_id, pane_text)
     if status_text:
         await _do_send_status_message(bot, user_id, tid, window_id, status_text)
 

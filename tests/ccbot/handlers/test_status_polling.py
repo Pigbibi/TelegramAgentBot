@@ -257,7 +257,7 @@ class TestStatusPollerSettingsDetection:
             mock_bot,
             1,
             "@5",
-            "• Working (0s • esc to interrupt)",
+            "💭 Thinking (0s) · esc to interrupt",
             thread_id=42,
         )
         assert status_polling._synthetic_working_starts[(1, 42, "@5")] == 100.0
@@ -311,7 +311,7 @@ class TestStatusPollerSettingsDetection:
             mock_bot,
             1,
             window_id,
-            "• Working (5s • esc to interrupt)",
+            "💭 Thinking (5s) · esc to interrupt",
         )
         assert mock_enqueue_status.await_args_list[0].kwargs == {"thread_id": 42}
         assert mock_enqueue_status.await_args_list[1].args == (
@@ -322,6 +322,50 @@ class TestStatusPollerSettingsDetection:
         )
         assert mock_enqueue_status.await_args_list[1].kwargs == {"thread_id": 42}
         assert (1, 42, window_id) not in status_polling._synthetic_working_starts
+
+    @pytest.mark.asyncio
+    async def test_synthetic_working_keeps_timer_below_public_progress(
+        self, mock_bot: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Public progress should not replace the visible elapsed timer."""
+        window_id = "@5"
+        mock_window = MagicMock()
+        mock_window.window_id = window_id
+        pane = (
+            '• Searched site:msci.com "MSCI USA Momentum Index"\n'
+            "✻ Searching the web\n"
+            "──────────────────────────────────────\n"
+            "❯ \n"
+            "──────────────────────────────────────\n"
+            "  [Opus 4.6] Context: 50%\n"
+        )
+
+        status_polling._synthetic_working_starts[(1, 42, window_id)] = 100.0
+        monkeypatch.setattr(status_polling.time, "monotonic", lambda: 106.0)
+
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch(
+                "ccbot.handlers.status_polling.handle_interactive_ui",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "ccbot.handlers.status_polling.enqueue_status_update",
+                new_callable=AsyncMock,
+            ) as mock_enqueue_status,
+        ):
+            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.capture_pane = AsyncMock(return_value=pane)
+
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+
+        mock_enqueue_status.assert_awaited_once()
+        status_text = mock_enqueue_status.await_args.args[3]
+        assert '• Searched site:msci.com "MSCI USA Momentum Index"' in status_text
+        assert status_text.endswith("💭 Thinking (6s) · esc to interrupt")
+        assert status_polling._synthetic_working_starts[(1, 42, window_id)] == 100.0
 
     @pytest.mark.asyncio
     async def test_non_working_status_is_skipped_when_queue_is_busy(
