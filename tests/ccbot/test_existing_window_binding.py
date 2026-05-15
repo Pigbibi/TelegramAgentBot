@@ -341,6 +341,7 @@ class TestExistingWindowBinding:
         ):
             mock_sm.get_window_for_thread.return_value = "@1"
             mock_sm.window_has_usage_limit_exceeded = AsyncMock(return_value=False)
+            mock_sm.send_to_window = AsyncMock(return_value=(True, "Sent"))
             mock_tmux.find_window_by_id = AsyncMock(return_value=fake_window)
             mock_tmux.capture_pane = AsyncMock(return_value="")
 
@@ -349,11 +350,12 @@ class TestExistingWindowBinding:
             await text_handler(update, context)
 
         enqueue_status_update.assert_awaited_once()
-        send_when_ready.assert_awaited_once_with("@1", "hi")
+        send_when_ready.assert_not_awaited()
+        mock_sm.send_to_window.assert_awaited_once_with("@1", "hi")
         safe_reply.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_bound_topic_reports_when_codex_never_becomes_ready(self):
+    async def test_bound_topic_reports_when_direct_send_fails(self):
         update = _make_text_update("hi")
         context = _make_context()
 
@@ -372,12 +374,12 @@ class TestExistingWindowBinding:
             patch(
                 "ccbot.bot._send_to_window_when_codex_ready",
                 new_callable=AsyncMock,
-                return_value=(False, "Codex is still busy"),
             ) as send_when_ready,
             patch("ccbot.bot._cancel_bash_capture"),
         ):
             mock_sm.get_window_for_thread.return_value = "@1"
             mock_sm.window_has_usage_limit_exceeded = AsyncMock(return_value=False)
+            mock_sm.send_to_window = AsyncMock(return_value=(False, "send failed"))
             mock_tmux.find_window_by_id = AsyncMock(return_value=fake_window)
             mock_tmux.capture_pane = AsyncMock(return_value="")
 
@@ -385,10 +387,11 @@ class TestExistingWindowBinding:
 
             await text_handler(update, context)
 
-        send_when_ready.assert_awaited_once_with("@1", "hi")
+        send_when_ready.assert_not_awaited()
+        mock_sm.send_to_window.assert_awaited_once_with("@1", "hi")
         safe_reply.assert_awaited_once_with(
             update.message,
-            "❌ Codex is still busy",
+            "❌ send failed",
         )
 
     @pytest.mark.asyncio

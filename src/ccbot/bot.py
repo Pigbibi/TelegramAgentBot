@@ -1653,6 +1653,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Check for pending interactive UI before sending text.
     # This catches UIs (permission prompts, etc.) that status polling might have missed.
     pane_text = await tmux_manager.capture_pane(w.window_id)
+    input_was_ready = is_codex_input_ready(pane_text or "")
     if pane_text and is_interactive_ui(pane_text):
         # UI detected — show it to user, then send text (acts as Enter)
         logger.info(
@@ -1676,7 +1677,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if handled:
             return
 
-    success, message = await _send_to_window_when_codex_ready(wid, text)
+    # Bound topics can receive text while Codex is working.  Sending directly
+    # lets the TUI queue the prompt for the next turn instead of dropping it
+    # after a local readiness timeout.
+    success, message = await session_manager.send_to_window(wid, text)
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
@@ -1684,7 +1688,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _refresh_session_map_after_first_prompt(wid)
 
     # Start background capture for ! bash command output
-    if text.startswith("!") and len(text) > 1:
+    if input_was_ready and text.startswith("!") and len(text) > 1:
         bash_cmd = text[1:]  # strip leading "!"
         task = asyncio.create_task(
             _capture_bash_output(context.bot, user.id, thread_id, wid, bash_cmd)
