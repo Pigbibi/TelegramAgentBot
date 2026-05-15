@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from telegram.error import BadRequest
 
 from ccbot.handlers import message_queue
 
@@ -155,6 +156,53 @@ async def test_elapsed_working_status_edits_existing_status_message(monkeypatch)
     )
 
     message_queue._status_msg_info.clear()
+
+
+@pytest.mark.asyncio
+async def test_status_message_not_modified_keeps_existing_status(monkeypatch):
+    """Telegram no-op edit errors should not create a duplicate status message."""
+    message_queue._status_msg_info.clear()
+
+    bot = AsyncMock()
+    bot.edit_message_text.side_effect = BadRequest(
+        "Message is not modified: specified new message content and reply markup "
+        "are exactly the same as a current content and reply markup of the message"
+    )
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+
+    send_status = AsyncMock()
+    monkeypatch.setattr(message_queue, "_do_send_status_message", send_status)
+
+    message_queue._status_msg_info[(1, 42)] = (
+        321,
+        "@4",
+        "💭 Thinking (6m 06s) · esc to interrupt",
+    )
+
+    try:
+        await message_queue._process_status_update_task(
+            bot,
+            1,
+            message_queue.MessageTask(
+                task_type="status_update",
+                text="💭 Thinking (6m 07s) · esc to interrupt",
+                window_id="@4",
+                thread_id=42,
+            ),
+        )
+
+        assert message_queue._status_msg_info[(1, 42)] == (
+            321,
+            "@4",
+            "💭 Thinking (6m 07s) · esc to interrupt",
+        )
+        send_status.assert_not_awaited()
+    finally:
+        message_queue._status_msg_info.clear()
 
 
 @pytest.mark.asyncio
