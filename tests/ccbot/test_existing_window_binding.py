@@ -395,6 +395,101 @@ class TestExistingWindowBinding:
         )
 
     @pytest.mark.asyncio
+    async def test_bound_topic_queues_busy_codex_by_default(self):
+        update = _make_text_update("wait for next turn")
+        context = _make_context()
+
+        fake_window = MagicMock()
+        fake_window.window_id = "@1"
+        fake_window.window_name = "Projects"
+        fake_window.cwd = "/tmp/project"
+
+        with (
+            patch("ccbot.bot.is_user_allowed", return_value=True),
+            patch("ccbot.bot._get_thread_id", return_value=42),
+            patch("ccbot.bot.session_manager") as mock_sm,
+            patch("ccbot.bot.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.enqueue_status_update", new_callable=AsyncMock),
+            patch("ccbot.bot.safe_reply", new_callable=AsyncMock) as safe_reply,
+            patch(
+                "ccbot.bot._send_to_window_when_codex_ready",
+                new_callable=AsyncMock,
+                return_value=(True, "Sent"),
+            ) as send_when_ready,
+            patch("ccbot.bot._cancel_bash_capture"),
+        ):
+            mock_sm.get_window_for_thread.return_value = "@1"
+            mock_sm.window_has_usage_limit_exceeded = AsyncMock(return_value=False)
+            mock_sm.send_to_window = AsyncMock(return_value=(True, "Sent"))
+            mock_tmux.find_window_by_id = AsyncMock(return_value=fake_window)
+            mock_tmux.capture_pane = AsyncMock(
+                return_value="• Working (12s • esc to interrupt)"
+            )
+            mock_tmux.send_keys = AsyncMock(return_value=True)
+
+            from ccbot.bot import text_handler
+
+            await text_handler(update, context)
+
+        mock_tmux.send_keys.assert_not_awaited()
+        send_when_ready.assert_not_awaited()
+        mock_sm.send_to_window.assert_awaited_once_with("@1", "wait for next turn")
+        safe_reply.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_interrupt_command_interrupts_busy_codex_before_forwarding_text(self):
+        update = _make_text_update("/interrupt interrupt me")
+        context = _make_context()
+
+        fake_window = MagicMock()
+        fake_window.window_id = "@1"
+        fake_window.window_name = "Projects"
+        fake_window.cwd = "/tmp/project"
+
+        with (
+            patch("ccbot.bot.is_user_allowed", return_value=True),
+            patch("ccbot.bot._get_thread_id", return_value=42),
+            patch("ccbot.bot.session_manager") as mock_sm,
+            patch("ccbot.bot.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.enqueue_status_update", new_callable=AsyncMock),
+            patch("ccbot.bot.safe_reply", new_callable=AsyncMock) as safe_reply,
+            patch(
+                "ccbot.bot._send_to_window_when_codex_ready",
+                new_callable=AsyncMock,
+                return_value=(True, "Sent"),
+            ) as send_when_ready,
+            patch(
+                "ccbot.bot._refresh_session_map_after_first_prompt",
+                new_callable=AsyncMock,
+            ),
+            patch("ccbot.bot.mark_window_working", new_callable=AsyncMock),
+            patch("ccbot.bot._cancel_bash_capture"),
+            patch("ccbot.bot.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            mock_sm.get_window_for_thread.return_value = "@1"
+            mock_sm.window_has_usage_limit_exceeded = AsyncMock(return_value=False)
+            mock_sm.send_to_window = AsyncMock(return_value=(True, "Sent"))
+            mock_tmux.find_window_by_id = AsyncMock(return_value=fake_window)
+            mock_tmux.capture_pane = AsyncMock(
+                return_value="• Working (12s • esc to interrupt)"
+            )
+            mock_tmux.send_keys = AsyncMock(return_value=True)
+
+            from ccbot.bot import interrupt_command
+
+            await interrupt_command(update, context)
+
+        mock_tmux.send_keys.assert_awaited_once_with("@1", "\x1b", enter=False)
+        send_when_ready.assert_awaited_once_with(
+            "@1",
+            "interrupt me",
+            timeout=15.0,
+            interval=0.25,
+        )
+        mock_sm.send_to_window.assert_not_awaited()
+        safe_reply.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_bound_topic_recovers_missing_window_and_forwards_text(self):
         update = _make_text_update("continue")
         context = _make_context()

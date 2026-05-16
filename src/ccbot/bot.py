@@ -198,6 +198,7 @@ PHOTO_CONFIRMATION_MESSAGE = f"📷 Image sent to {PRODUCT_NAME}."
 SESSION_STILL_RUNNING_MESSAGE = f"The {PRODUCT_NAME} session is still running in tmux."
 HELP_COMMAND_DESCRIPTION = f"↗ Show {PRODUCT_NAME} help"
 ESC_COMMAND_DESCRIPTION = f"Send Escape to interrupt {PRODUCT_NAME}"
+INTERRUPT_COMMAND_DESCRIPTION = "Interrupt and send message"
 USAGE_COMMAND_DESCRIPTION = f"Show {PRODUCT_NAME} usage remaining"
 
 
@@ -523,6 +524,75 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Send Escape control character (no enter)
     await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
     await safe_reply(update.message, "⎋ Sent Escape")
+
+
+async def interrupt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Interrupt the active Codex turn, then send the command payload."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    text = (update.message.text or "").split(maxsplit=1)
+    if len(text) < 2 or not text[1].strip():
+        await safe_reply(update.message, "Usage: /interrupt <message>")
+        return
+
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        await safe_reply(update.message, "❌ Please use a named topic.")
+        return
+
+    chat = update.effective_chat
+    if chat and chat.type in ("group", "supergroup"):
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+
+    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    if wid is None:
+        await safe_reply(update.message, "❌ No session bound to this topic.")
+        return
+
+    w = await tmux_manager.find_window_by_id(wid)
+    if not w:
+        display = session_manager.get_display_name(wid)
+        await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
+        return
+
+    payload = sanitize_forward_text(text[1])
+    await _safe_send_typing_action(update.message.chat, source="interrupt_command")
+    await enqueue_status_update(context.bot, user.id, wid, None, thread_id=thread_id)
+    _cancel_bash_capture(user.id, thread_id)
+
+    pane_text = await tmux_manager.capture_pane(w.window_id)
+    if pane_text and is_interactive_ui(pane_text):
+        await handle_interactive_ui(context.bot, user.id, wid, thread_id)
+        await asyncio.sleep(0.3)
+
+    if await session_manager.window_has_usage_limit_exceeded(wid):
+        handled = await _rotate_thread_after_usage_limit(
+            context=context,
+            user_id=user.id,
+            thread_id=thread_id,
+            current_window_id=wid,
+            current_window_cwd=w.cwd,
+            text=payload,
+        )
+        if handled:
+            return
+
+    success, message = await _send_to_bound_window(
+        wid,
+        payload,
+        pane_text,
+        input_was_ready=is_codex_input_ready(pane_text or ""),
+        interrupt_current=True,
+    )
+    if not success:
+        await safe_reply(update.message, f"❌ {message}")
+        return
+    await mark_window_working(context.bot, user.id, wid, thread_id)
+    await _refresh_session_map_after_first_prompt(wid)
 
 
 async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1333,6 +1403,59 @@ async def _send_to_window_when_codex_ready(
     return False, last_message or "Codex did not become ready"
 
 
+def _is_interruptible_codex_status(status_text: str | None) -> bool:
+    """Return whether the current Codex status advertises Escape interruption."""
+    if not status_text:
+        return False
+    normalized = status_text.strip().lower()
+    return "esc to interrupt" in normalized or normalized.startswith(
+        ("• working", "◦ working", "working")
+    )
+
+
+async def _send_to_bound_window(
+    window_id: str,
+    text: str,
+    pane_text: str | None,
+    *,
+    input_was_ready: bool,
+    interrupt_current: bool = False,
+) -> tuple[bool, str]:
+    """Send user text to a bound window, optionally interrupting an active turn."""
+    status_text = parse_status_update(pane_text or "")
+    if (
+        not interrupt_current
+        or input_was_ready
+        or not _is_interruptible_codex_status(status_text)
+    ):
+        return await session_manager.send_to_window(window_id, text)
+
+    logger.info(
+        "Interrupting active Codex turn before sending text: window_id=%s",
+        window_id,
+    )
+    if not await tmux_manager.send_keys(window_id, "\x1b", enter=False):
+        return False, "Failed to send Escape before interrupting Codex"
+
+    await asyncio.sleep(0.3)
+    send_ok, send_msg = await _send_to_window_when_codex_ready(
+        window_id,
+        text,
+        timeout=15.0,
+        interval=0.25,
+    )
+    if send_ok:
+        return send_ok, send_msg
+
+    logger.warning(
+        "Codex did not become ready after interrupt in window %s: %s; "
+        "falling back to direct send",
+        window_id,
+        send_msg,
+    )
+    return await session_manager.send_to_window(window_id, text)
+
+
 async def _refresh_session_map_after_first_prompt(
     window_id: str,
     *,
@@ -1677,10 +1800,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if handled:
             return
 
-    # Bound topics can receive text while Codex is working.  Sending directly
-    # lets the TUI queue the prompt for the next turn instead of dropping it
-    # after a local readiness timeout.
-    success, message = await session_manager.send_to_window(wid, text)
+    success, message = await _send_to_bound_window(
+        wid,
+        text,
+        pane_text,
+        input_was_ready=input_was_ready,
+    )
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
@@ -2710,6 +2835,7 @@ async def post_init(application: Application) -> None:
         BotCommand("history", "Message history for this topic"),
         BotCommand("screenshot", "Terminal screenshot with control keys"),
         BotCommand("esc", ESC_COMMAND_DESCRIPTION),
+        BotCommand("interrupt", INTERRUPT_COMMAND_DESCRIPTION),
         BotCommand("kill", "Kill session and delete topic"),
         BotCommand("unbind", "Unbind topic from session (keeps window running)"),
         BotCommand("usage", USAGE_COMMAND_DESCRIPTION),
@@ -2821,6 +2947,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
+    application.add_handler(CommandHandler("interrupt", interrupt_command))
     application.add_handler(CommandHandler("unbind", unbind_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
