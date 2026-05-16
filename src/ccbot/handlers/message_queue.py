@@ -236,20 +236,40 @@ async def _enqueue_coalesced_status_task(
     Status updates are ephemeral. Older pending status updates can bury actual
     Codex output behind a long queue of Working timer edits, so preserve content
     tasks and keep only the newest pending status task for the target topic.
+    Explicit clears are kept before a new status update so a status covered by
+    later chat messages is deleted and recreated at the bottom.
     """
     dropped = 0
 
     async with lock:
         items = _inspect_queue(queue)
+        pending_clear: MessageTask | None = None
+
         for item in items:
+            if item.task_type == "status_clear" and task.task_type == "status_update":
+                if pending_clear is not None:
+                    queue.task_done()
+                    dropped += 1
+                pending_clear = item
+                continue
+
             if item.task_type in ("status_update", "status_clear"):
                 queue.task_done()
                 dropped += 1
                 continue
 
+            if pending_clear is not None:
+                queue.put_nowait(pending_clear)
+                queue.task_done()
+                pending_clear = None
+
             queue.put_nowait(item)
             # Compensate for put_nowait increment. This task was already counted
             # when originally enqueued.
+            queue.task_done()
+
+        if pending_clear is not None:
+            queue.put_nowait(pending_clear)
             queue.task_done()
 
         queue.put_nowait(task)

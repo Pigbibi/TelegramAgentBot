@@ -206,6 +206,34 @@ async def test_status_message_not_modified_keeps_existing_status(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_status_clear_is_preserved_before_new_working_update():
+    """A requested clear must run before the next Working update is sent."""
+    queue: asyncio.Queue[message_queue.MessageTask] = asyncio.Queue()
+    lock = asyncio.Lock()
+
+    queue.put_nowait(message_queue.MessageTask(task_type="status_clear", thread_id=42))
+
+    dropped = await message_queue._enqueue_coalesced_status_task(
+        queue,
+        message_queue.MessageTask(
+            task_type="status_update",
+            text="Working final",
+            window_id="@1",
+            thread_id=42,
+        ),
+        lock,
+    )
+
+    items = message_queue._inspect_queue(queue)
+
+    assert dropped == 0
+    assert [(item.task_type, item.text) for item in items] == [
+        ("status_clear", None),
+        ("status_update", "Working final"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_status_updates_are_coalesced_behind_content(monkeypatch):
     """Queued Working timer edits should not bury real Codex output."""
     await message_queue.shutdown_workers()

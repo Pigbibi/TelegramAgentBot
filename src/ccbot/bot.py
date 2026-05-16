@@ -131,7 +131,6 @@ from .handlers.interactive_ui import (
     set_interactive_mode,
 )
 from .handlers.message_queue import (
-    clear_status_msg_info,
     enqueue_content_message,
     enqueue_status_update,
     get_message_queue,
@@ -1010,7 +1009,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         text_to_send = f"(image attached: {file_path})"
 
     await _safe_send_typing_action(update.message.chat, source="photo_handler")
-    clear_status_msg_info(user.id, thread_id)
+    await enqueue_status_update(context.bot, user.id, wid, None, thread_id=thread_id)
 
     if await session_manager.window_has_usage_limit_exceeded(wid):
         await _rotate_thread_after_usage_limit(
@@ -1027,10 +1026,10 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    await mark_window_working(context.bot, user.id, wid, thread_id)
 
     # Confirm to user
     await safe_reply(update.message, PHOTO_CONFIRMATION_MESSAGE)
+    await mark_window_working(context.bot, user.id, wid, thread_id)
 
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1099,7 +1098,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     await _safe_send_typing_action(update.message.chat, source="voice_handler")
-    clear_status_msg_info(user.id, thread_id)
+    await enqueue_status_update(context.bot, user.id, wid, None, thread_id=thread_id)
 
     if await session_manager.window_has_usage_limit_exceeded(wid):
         await _rotate_thread_after_usage_limit(
@@ -1116,9 +1115,9 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    await mark_window_working(context.bot, user.id, wid, thread_id)
 
     await safe_reply(update.message, f'🎤 "{text}"')
+    await mark_window_working(context.bot, user.id, wid, thread_id)
 
 
 # Active bash capture tasks: (user_id, thread_id) → asyncio.Task
