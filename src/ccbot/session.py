@@ -38,7 +38,7 @@ from .account_manager import ACCOUNT_HOME_DIR, list_account_homes
 from .config import config
 from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
-from .utils import atomic_write_json, read_cwd_from_jsonl
+from .utils import atomic_write_json, is_subagent_transcript, read_cwd_from_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -758,6 +758,18 @@ class SessionManager:
                         self.window_display_names[window_id] = new_wname
                         changed = True
                 continue
+            if self._is_subagent_session(new_sid, new_cwd, state.account_name):
+                logger.info(
+                    "Ignoring subagent session_map entry for window_id %s: sid=%s",
+                    window_id,
+                    new_sid,
+                )
+                if new_wname:
+                    state.window_name = new_wname
+                    if self.window_display_names.get(window_id) != new_wname:
+                        self.window_display_names[window_id] = new_wname
+                        changed = True
+                continue
             if state.session_id != new_sid or state.cwd != new_cwd:
                 logger.info(
                     "Session map: window_id %s updated sid=%s, cwd=%s",
@@ -1068,6 +1080,45 @@ class SessionManager:
         base_root = root if root is not None else config.codex_projects_path
         return base_root / encoded_cwd / f"{session_id}.jsonl"
 
+    def _find_session_file(
+        self,
+        session_id: str,
+        cwd: str,
+        *,
+        account_name: str = "",
+    ) -> Path | None:
+        if not session_id or not cwd:
+            return None
+        for root in _iter_transcript_roots(account_name):
+            candidate = self._build_session_file_path(session_id, cwd, root=root)
+            if candidate and candidate.exists():
+                return candidate
+
+        canonical_id = _canonical_session_id(session_id)
+        for root in _iter_transcript_roots(account_name):
+            try:
+                matches = list(root.rglob(f"{session_id}.jsonl"))
+                if not matches and canonical_id:
+                    matches = list(root.rglob(f"*{canonical_id}.jsonl"))
+            except OSError:
+                continue
+            if matches:
+                return matches[0]
+        return None
+
+    def _is_subagent_session(
+        self,
+        session_id: str,
+        cwd: str,
+        account_name: str = "",
+    ) -> bool:
+        file_path = self._find_session_file(
+            session_id,
+            cwd,
+            account_name=account_name,
+        )
+        return bool(file_path and is_subagent_transcript(file_path))
+
     async def _get_session_direct(
         self,
         session_id: str,
@@ -1076,27 +1127,10 @@ class SessionManager:
         account_name: str = "",
     ) -> CodexSession | None:
         """Get a CodexSession directly from session_id and cwd (no scanning)."""
-        file_path = None
-        for root in _iter_transcript_roots(account_name):
-            candidate = self._build_session_file_path(session_id, cwd, root=root)
-            if candidate and candidate.exists():
-                file_path = candidate
-                break
-
-        # Fallback: recursive search for Codex-style date-based session layout.
-        if not file_path or not file_path.exists():
-            for root in _iter_transcript_roots(account_name):
-                matches = list(root.rglob(f"{session_id}.jsonl"))
-                if not matches:
-                    canonical_id = _canonical_session_id(session_id)
-                    if canonical_id:
-                        matches = list(root.rglob(f"*{canonical_id}.jsonl"))
-                if matches:
-                    file_path = matches[0]
-                    logger.debug("Found session via recursive search: %s", file_path)
-                    break
-            else:
-                return None
+        file_path = self._find_session_file(session_id, cwd, account_name=account_name)
+        if not file_path:
+            return None
+        logger.debug("Found session transcript: %s", file_path)
 
         return await self._read_session_from_file(file_path, session_id=session_id)
 

@@ -319,6 +319,59 @@ class TestReadNewLinesOffsetRecovery:
         assert [message.text for message in messages] == ["External hello"]
 
     @pytest.mark.asyncio
+    async def test_skips_subagent_transcript_auto_bind(self, monitor, tmp_path):
+        """Do not let spawned-agent transcripts claim a Telegram topic window."""
+        jsonl_file = tmp_path / "rollout-subagent.jsonl"
+        jsonl_file.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "cwd": "/tmp/project",
+                        "source": {"subagent": {"thread_spawn": {}}},
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        state = SimpleNamespace(
+            session_id="",
+            cwd="/tmp/project",
+            window_name="project-1",
+        )
+        mock_sm = SimpleNamespace(
+            iter_thread_bindings=lambda: [(100, 1, "@1")],
+            get_window_state=lambda _wid: state,
+            register_session_to_window=MagicMock(),
+        )
+
+        with (
+            patch("ccbot.session_monitor.list_account_homes", return_value=[]),
+            patch("ccbot.session_monitor.tmux_manager") as mock_tmux,
+        ):
+            mock_tmux.list_windows = AsyncMock(
+                return_value=[
+                    SimpleNamespace(
+                        window_id="@1",
+                        cwd="/tmp/project",
+                        window_name="project-1",
+                        pane_current_command="node",
+                    )
+                ]
+            )
+
+            await monitor._auto_bind_session_to_window(
+                "rollout-subagent",
+                "/tmp/project",
+                mock_sm,
+                session_file=jsonl_file,
+            )
+
+        mock_sm.register_session_to_window.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_skips_shell_windows_during_auto_bind(self, monitor, tmp_path):
         """Do not auto-bind a transcript to a tmux window that fell back to zsh."""
         jsonl_file = tmp_path / "homes" / "plus1" / "session-7.jsonl"

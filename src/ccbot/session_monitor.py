@@ -19,7 +19,7 @@ from .monitor_state import MonitorState, TrackedSession
 from .session import _is_shell_pane_command, _iter_transcript_roots, _session_ids_match
 from .tmux_manager import tmux_manager
 from .transcript_parser import PendingToolInfo, TranscriptParser
-from .utils import read_cwd_from_jsonl
+from .utils import is_subagent_transcript, read_cwd_from_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +118,8 @@ class SessionMonitor:
     @classmethod
     def _can_auto_bind_transcript(cls, file_path: Path) -> bool:
         """Avoid auto-binding unrelated local Codex history when accounts exist."""
+        if is_subagent_transcript(file_path):
+            return False
         account_homes = list_account_homes()
         if not account_homes:
             return True
