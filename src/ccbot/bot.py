@@ -4,8 +4,8 @@ Registers all command/callback/message handlers and manages the bot lifecycle.
 Each Telegram topic maps 1:1 to a tmux window (Codex session).
 
 Core responsibilities:
-  - Command handlers: /start, /history, /screenshot, /esc, /kill, /unbind,
-    plus forwarding unknown /commands to Codex via tmux.
+  - Command handlers: /start, /history, /screenshot, /esc, /interrupt,
+    /kill, /unbind, plus forwarding unknown /commands to Codex via tmux.
   - Callback query handler: directory browser, history pagination,
     interactive UI navigation, screenshot refresh.
   - Topic-based routing: each named topic binds to one tmux window.
@@ -198,6 +198,7 @@ PHOTO_CONFIRMATION_MESSAGE = f"📷 Image sent to {PRODUCT_NAME}."
 SESSION_STILL_RUNNING_MESSAGE = f"The {PRODUCT_NAME} session is still running in tmux."
 HELP_COMMAND_DESCRIPTION = f"↗ Show {PRODUCT_NAME} help"
 ESC_COMMAND_DESCRIPTION = f"Send Escape to interrupt {PRODUCT_NAME}"
+INTERRUPT_COMMAND_DESCRIPTION = f"Interrupt {PRODUCT_NAME}"
 USAGE_COMMAND_DESCRIPTION = f"Show {PRODUCT_NAME} usage remaining"
 
 
@@ -520,8 +521,12 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
         return
 
-    # Send Escape control character (no enter)
-    await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
+    success = await tmux_manager.send_keys(
+        w.window_id, "Escape", enter=False, literal=False
+    )
+    if not success:
+        await safe_reply(update.message, "❌ Failed to send Escape.")
+        return
     await safe_reply(update.message, "⎋ Sent Escape")
 
 
@@ -2710,6 +2715,7 @@ async def post_init(application: Application) -> None:
         BotCommand("history", "Message history for this topic"),
         BotCommand("screenshot", "Terminal screenshot with control keys"),
         BotCommand("esc", ESC_COMMAND_DESCRIPTION),
+        BotCommand("interrupt", INTERRUPT_COMMAND_DESCRIPTION),
         BotCommand("kill", "Kill session and delete topic"),
         BotCommand("unbind", "Unbind topic from session (keeps window running)"),
         BotCommand("usage", USAGE_COMMAND_DESCRIPTION),
@@ -2820,7 +2826,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
-    application.add_handler(CommandHandler("esc", esc_command))
+    application.add_handler(CommandHandler(["esc", "interrupt"], esc_command))
     application.add_handler(CommandHandler("unbind", unbind_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
