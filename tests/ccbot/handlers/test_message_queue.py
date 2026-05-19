@@ -206,6 +206,39 @@ async def test_status_message_not_modified_keeps_existing_status(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_status_update_preserves_pending_clear():
+    """A fresh Working bubble must not reuse an old bubble above the user."""
+    queue: asyncio.Queue[message_queue.MessageTask] = asyncio.Queue()
+    lock = asyncio.Lock()
+
+    queue.put_nowait(
+        message_queue.MessageTask(
+            task_type="status_clear",
+            thread_id=42,
+        )
+    )
+
+    dropped = await message_queue._enqueue_coalesced_status_task(
+        queue,
+        message_queue.MessageTask(
+            task_type="status_update",
+            text="💭 Thinking (0s) · esc to interrupt",
+            window_id="@1",
+            thread_id=42,
+        ),
+        lock,
+    )
+
+    items = []
+    while not queue.empty():
+        items.append(queue.get_nowait())
+        queue.task_done()
+
+    assert dropped == 0
+    assert [item.task_type for item in items] == ["status_clear", "status_update"]
+
+
+@pytest.mark.asyncio
 async def test_status_updates_are_coalesced_behind_content(monkeypatch):
     """Queued Working timer edits should not bury real Codex output."""
     await message_queue.shutdown_workers()
