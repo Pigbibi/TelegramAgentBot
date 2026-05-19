@@ -236,13 +236,28 @@ async def _enqueue_coalesced_status_task(
     Status updates are ephemeral. Older pending status updates can bury actual
     Codex output behind a long queue of Working timer edits, so preserve content
     tasks and keep only the newest pending status task for the target topic.
+    A pending status_clear is different when the new task is status_update: it
+    intentionally deletes the old Telegram bubble before a fresh Working bubble
+    is sent below the user's latest message.
     """
     dropped = 0
 
     async with lock:
         items = _inspect_queue(queue)
+        kept_status_clear = False
         for item in items:
-            if item.task_type in ("status_update", "status_clear"):
+            if item.task_type == "status_update":
+                queue.task_done()
+                dropped += 1
+                continue
+
+            if item.task_type == "status_clear":
+                if task.task_type == "status_update" and not kept_status_clear:
+                    queue.put_nowait(item)
+                    queue.task_done()
+                    kept_status_clear = True
+                    continue
+
                 queue.task_done()
                 dropped += 1
                 continue

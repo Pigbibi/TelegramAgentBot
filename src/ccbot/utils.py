@@ -4,6 +4,7 @@ Provides:
   - ccbot_dir(): resolve config directory from CCBOT_DIR env var.
   - atomic_write_json(): crash-safe JSON file writes via temp+rename.
   - read_cwd_from_jsonl(): extract the cwd field from the first JSONL entry.
+  - is_subagent_transcript(): detect Codex spawned-agent transcripts.
 """
 
 import json
@@ -111,3 +112,27 @@ def read_cwd_from_jsonl(file_path: str | Path) -> str:
     except OSError:
         pass
     return ""
+
+
+def is_subagent_transcript(file_path: str | Path) -> bool:
+    """Return True when a Codex transcript belongs to a spawned subagent."""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if data.get("type") != "session_meta":
+                    continue
+                payload = data.get("payload")
+                if not isinstance(payload, dict):
+                    return False
+                source = payload.get("source")
+                return isinstance(source, dict) and "subagent" in source
+    except OSError:
+        pass
+    return False

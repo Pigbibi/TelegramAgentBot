@@ -191,6 +191,77 @@ class SessionMapLoadingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.window_states["@1"].session_id, "new-session")
         self.assertEqual(manager.window_states["@1"].launch_started_at, 0.0)
 
+    async def test_subagent_session_map_does_not_replace_bound_parent(
+        self,
+    ) -> None:
+        manager = SessionManager()
+        parent_sid = "rollout-2026-05-19T13-29-12-019e3eb5-a41f-71c3-92f6-4ce8b2a71a2a"
+        subagent_sid = (
+            "rollout-2026-05-19T15-14-03-019e3f15-a497-76c0-93b7-61c46a148344"
+        )
+        manager.window_states = {
+            "@34": WindowState(
+                session_id=parent_sid,
+                cwd="/tmp/project",
+                window_name="Projects",
+            )
+        }
+
+        with tempfile.TemporaryDirectory(prefix="ccbot-session-map-") as tmpdir:
+            root = Path(tmpdir)
+            session_map_file = root / "session_map.json"
+            transcript_file = root / f"{subagent_sid}.jsonl"
+            session_map_file.write_text(
+                json.dumps(
+                    {
+                        "ccbot:@34": {
+                            "session_id": subagent_sid,
+                            "cwd": "/tmp/project",
+                            "window_name": "Projects",
+                        }
+                    }
+                )
+            )
+            transcript_file.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {
+                            "id": "019e3f15-a497-76c0-93b7-61c46a148344",
+                            "cwd": "/tmp/project",
+                            "source": {"subagent": {"thread_spawn": {}}},
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(
+                    session_module.config, "session_map_file", session_map_file
+                ),
+                patch.object(session_module.config, "tmux_session_name", "ccbot"),
+                patch.object(session_module.config, "codex_projects_path", root),
+                patch.object(
+                    session_module.tmux_manager,
+                    "list_windows",
+                    AsyncMock(
+                        return_value=[
+                            SimpleNamespace(
+                                window_id="@34",
+                                cwd="/tmp/project",
+                                window_name="Projects",
+                            )
+                        ]
+                    ),
+                ),
+            ):
+                await manager.load_session_map()
+
+        self.assertEqual(manager.window_states["@34"].session_id, parent_sid)
+        self.assertEqual(manager.window_states["@34"].cwd, "/tmp/project")
+
     async def test_startup_keeps_missing_bound_window_for_recovery(self) -> None:
         manager = SessionManager()
         manager.window_states = {

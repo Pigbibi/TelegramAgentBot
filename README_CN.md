@@ -375,7 +375,7 @@ uv run ccbot
 | `/start` | 显示欢迎信息 |
 | `/history` | 查看当前 topic 的消息历史 |
 | `/screenshot` | 抓取当前终端截图 |
-| `/esc` | 给 Codex 发送 Escape |
+| `/esc`, `/interrupt` | 给 Codex 发送 Escape |
 | `/kill` | 杀掉绑定的 tmux 窗口并清理 topic 绑定 |
 | `/unbind` | 解绑 topic，但不杀当前 tmux 窗口 |
 | `/usage` | 打开 Codex 的 usage 界面并回传解析结果 |

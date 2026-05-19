@@ -385,7 +385,7 @@ uv run ccbot
 | `/start` | Show the welcome message |
 | `/history` | Show message history for the current topic |
 | `/screenshot` | Capture the current terminal pane |
-| `/esc` | Send Escape to Codex |
+| `/esc`, `/interrupt` | Send Escape to Codex |
 | `/kill` | Kill the bound tmux window and clean up the topic binding |
 | `/unbind` | Unbind the topic without killing the running tmux window |
 | `/usage` | Open Codex usage info in the TUI and send the parsed result |
