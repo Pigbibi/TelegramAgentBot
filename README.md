@@ -44,17 +44,17 @@ TelegramCodexBot is a Telegram controller for live Codex sessions:
 
 ```bash
 # with uv
-uv tool install git+https://github.com/Pigbibi/TelegramCodexCCBot.git
+uv tool install git+https://github.com/Pigbibi/TelegramCodexBot.git
 
 # or with pipx
-pipx install git+https://github.com/Pigbibi/TelegramCodexCCBot.git
+pipx install git+https://github.com/Pigbibi/TelegramCodexBot.git
 ```
 
 ### Option 2: install from source
 
 ```bash
-git clone https://github.com/Pigbibi/TelegramCodexCCBot.git
-cd TelegramCodexCCBot
+git clone https://github.com/Pigbibi/TelegramCodexBot.git
+cd TelegramCodexBot
 uv sync
 ```
 
@@ -63,8 +63,8 @@ uv sync
 For a new Mac or a fresh local setup:
 
 ```bash
-git clone https://github.com/Pigbibi/TelegramCodexCCBot.git
-cd TelegramCodexCCBot
+git clone https://github.com/Pigbibi/TelegramCodexBot.git
+cd TelegramCodexBot
 chmod +x scripts/bootstrap-macos.sh
 ./scripts/bootstrap-macos.sh
 ```
@@ -120,8 +120,8 @@ tail -n 50 ~/.ccbot/logs/ccbot.err.log
 For a Linux workstation or a VPS with systemd:
 
 ```bash
-git clone https://github.com/Pigbibi/TelegramCodexCCBot.git
-cd TelegramCodexCCBot
+git clone https://github.com/Pigbibi/TelegramCodexBot.git
+cd TelegramCodexBot
 chmod +x scripts/bootstrap-linux.sh
 ./scripts/bootstrap-linux.sh
 ```

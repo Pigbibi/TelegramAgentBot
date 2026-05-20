@@ -43,17 +43,17 @@ TelegramCodexBot 是一个通过 Telegram 远程控制 Codex 会话的工具：
 
 ```bash
 # 用 uv
-uv tool install git+https://github.com/Pigbibi/TelegramCodexCCBot.git
+uv tool install git+https://github.com/Pigbibi/TelegramCodexBot.git
 
 # 或 pipx
-pipx install git+https://github.com/Pigbibi/TelegramCodexCCBot.git
+pipx install git+https://github.com/Pigbibi/TelegramCodexBot.git
 ```
 
 ### 方式 2：从源码安装
 
 ```bash
-git clone https://github.com/Pigbibi/TelegramCodexCCBot.git
-cd TelegramCodexCCBot
+git clone https://github.com/Pigbibi/TelegramCodexBot.git
+cd TelegramCodexBot
 uv sync
 ```
 
@@ -62,8 +62,8 @@ uv sync
 新电脑或全新环境可以直接这样装：
 
 ```bash
-git clone https://github.com/Pigbibi/TelegramCodexCCBot.git
-cd TelegramCodexCCBot
+git clone https://github.com/Pigbibi/TelegramCodexBot.git
+cd TelegramCodexBot
 chmod +x scripts/bootstrap-macos.sh
 ./scripts/bootstrap-macos.sh
 ```
@@ -118,8 +118,8 @@ tail -n 50 ~/.ccbot/logs/ccbot.err.log
 如果目标机是 Linux 或带 systemd 的 VPS，可以直接这样装：
 
 ```bash
-git clone https://github.com/Pigbibi/TelegramCodexCCBot.git
-cd TelegramCodexCCBot
+git clone https://github.com/Pigbibi/TelegramCodexBot.git
+cd TelegramCodexBot
 chmod +x scripts/bootstrap-linux.sh
 ./scripts/bootstrap-linux.sh
 ```
