@@ -726,6 +726,30 @@ async def _create_agent_local_window(
     resume_session_id: str = "",
     account_name: str = "",
 ) -> tuple[bool, str, str, str, AgentTarget | None]:
+    success, message, display_name, window_id, target = await _create_agent_target(
+        cwd=cwd,
+        window_name=window_name,
+        resume_session_id=resume_session_id,
+        account_name=account_name,
+    )
+    if success and not window_id:
+        return (
+            False,
+            "Agent backend did not return a local window id",
+            display_name,
+            "",
+            target,
+        )
+    return success, message, display_name, window_id, target
+
+
+async def _create_agent_target(
+    *,
+    cwd: str,
+    window_name: str = "",
+    resume_session_id: str = "",
+    account_name: str = "",
+) -> tuple[bool, str, str, str, AgentTarget | None]:
     result = await create_agent_session(
         cwd=cwd,
         window_name=window_name,
@@ -734,10 +758,10 @@ async def _create_agent_local_window(
     )
     target = result.target
     window_id = target.window_id if target else ""
-    if result.ok and not window_id:
+    if result.ok and target is None:
         return (
             False,
-            "Agent backend did not return a local window id",
+            "Agent backend did not return a target",
             result.display_name,
             "",
             target,
@@ -2063,7 +2087,7 @@ async def _create_and_bind_window(
         created_wname,
         created_wid,
         created_target,
-    ) = await _create_agent_local_window(
+    ) = await _create_agent_target(
         cwd=selected_path,
         resume_session_id=resume_session_id or "",
         account_name=launch_account or "",
@@ -2071,6 +2095,86 @@ async def _create_and_bind_window(
     if success:
         if launch_account:
             remember_current_account(launch_account)
+        if created_target and created_target.backend_id != "local":
+            created_wname = created_wname or _format_remote_target(created_target)
+            logger.info(
+                "Remote agent target created: %s/%s session=%s at %s "
+                "(user=%d, thread=%s, resume=%s)",
+                created_target.backend_id,
+                created_target.node_id,
+                created_target.session_id,
+                selected_path,
+                user.id,
+                pending_thread_id,
+                resume_session_id,
+            )
+
+            if pending_thread_id is not None:
+                session_manager.bind_thread_target(
+                    user.id,
+                    pending_thread_id,
+                    created_target,
+                    window_name=created_wname,
+                )
+                resolved_chat = session_manager.resolve_chat_id(
+                    user.id,
+                    pending_thread_id,
+                )
+                status = "Resumed" if resume_session_id else "Created"
+                await safe_edit(
+                    query,
+                    f"✅ {message}\n\n{status}. Send messages here.",
+                )
+
+                pending_text = (
+                    context.user_data.get("_pending_thread_text")
+                    if context.user_data
+                    else None
+                )
+                if pending_text:
+                    pending_text = sanitize_forward_text(pending_text)
+                if context.user_data is not None:
+                    context.user_data.pop("_pending_thread_text", None)
+                    context.user_data.pop("_pending_thread_id", None)
+                if pending_text:
+                    send_ok, send_msg = await _send_message_to_agent(
+                        query.from_user.id,
+                        pending_thread_id,
+                        "",
+                        pending_text,
+                    )
+                    if not send_ok:
+                        logger.warning(
+                            "Failed to forward pending text to remote target: %s",
+                            send_msg,
+                        )
+                        await safe_send(
+                            context.bot,
+                            resolved_chat,
+                            f"❌ Failed to send pending message: {send_msg}",
+                            message_thread_id=pending_thread_id,
+                        )
+            else:
+                await safe_edit(query, f"✅ {message}")
+            if answer_callback:
+                try:
+                    await query.answer("Created")
+                except Exception:
+                    logger.debug("Callback query answer skipped: query expired")
+            return
+
+        if not created_wid:
+            await safe_edit(query, "❌ Agent backend did not return a local window id")
+            if pending_thread_id is not None and context.user_data is not None:
+                context.user_data.pop("_pending_thread_id", None)
+                context.user_data.pop("_pending_thread_text", None)
+            if answer_callback:
+                try:
+                    await query.answer("Failed")
+                except Exception:
+                    logger.debug("Callback query answer skipped: query expired")
+            return
+
         session_manager.prepare_window_launch(
             created_wid,
             cwd=str(selected_path),
@@ -2972,13 +3076,29 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 
     # Find users whose thread-bound window matches this session
     active_users = await session_manager.find_users_for_session(msg.session_id)
+    remote_users = session_manager.find_users_for_target_session(msg.session_id)
+    seen_targets = {(user_id, thread_id) for user_id, _wid, thread_id in active_users}
+    active_users.extend(
+        (user_id, wid, thread_id)
+        for user_id, wid, thread_id in remote_users
+        if (user_id, thread_id) not in seen_targets
+    )
 
     if not active_users:
         logger.info(f"No active users for session {msg.session_id}")
         return
 
     for user_id, wid, thread_id in active_users:
+        is_remote_target = not wid
         if msg.content_type == "usage_limit":
+            if is_remote_target:
+                await safe_send(
+                    bot,
+                    session_manager.resolve_chat_id(user_id, thread_id),
+                    "⚠️ This remote session has hit its usage limit.",
+                    message_thread_id=thread_id,
+                )
+                continue
             changed = session_manager.mark_window_usage_limit_exceeded(wid, True)
             if not changed:
                 continue
@@ -3008,7 +3128,11 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             continue
 
         # Handle interactive tools specially - capture terminal and send UI
-        if msg.tool_name in INTERACTIVE_TOOL_NAMES and msg.content_type == "tool_use":
+        if (
+            not is_remote_target
+            and msg.tool_name in INTERACTIVE_TOOL_NAMES
+            and msg.content_type == "tool_use"
+        ):
             # Mark interactive mode BEFORE sleeping so polling skips this window
             set_interactive_mode(user_id, wid, thread_id)
             # Flush pending messages (e.g. plan content) before sending interactive UI
@@ -3035,7 +3159,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 clear_interactive_mode(user_id, thread_id)
 
         # Any non-interactive message means the interaction is complete — delete the UI message
-        if get_interactive_msg_id(user_id, thread_id):
+        if not is_remote_target and get_interactive_msg_id(user_id, thread_id):
             await clear_interactive_msg(user_id, bot, thread_id)
 
         # Skip tool call notifications when TELEGRAM_CODEX_BOT_SHOW_TOOL_CALLS=false
@@ -3072,7 +3196,11 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 
             # Update user's read offset to current file position
             # This marks these messages as "read" for this user
-            session = await session_manager.resolve_session_for_window(wid)
+            session = (
+                await session_manager.resolve_session_for_window(wid)
+                if not is_remote_target
+                else None
+            )
             if session and session.file_path:
                 try:
                     file_size = Path(session.file_path).stat().st_size

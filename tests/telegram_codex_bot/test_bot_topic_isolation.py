@@ -170,6 +170,7 @@ class TestSessionPickerIsolation:
         class DummyCallbackQuery:
             def __init__(self) -> None:
                 self.answer = AsyncMock()
+                self.from_user = MagicMock(id=12345)
 
         class DummyUser:
             id = 12345
@@ -216,4 +217,71 @@ class TestSessionPickerIsolation:
             AgentTarget("local", "local", window_id="@1"),
             window_name="project",
         )
+        safe_edit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_create_and_bind_window_accepts_remote_backend_target(self):
+        """A backend plugin can create a session without a local tmux window."""
+
+        class DummyCallbackQuery:
+            def __init__(self) -> None:
+                self.answer = AsyncMock()
+                self.from_user = MagicMock(id=12345)
+
+        class DummyUser:
+            id = 12345
+
+        query = DummyCallbackQuery()
+        context = _make_context()
+        context.user_data = {
+            "_pending_thread_id": 42,
+            "_pending_thread_text": "hello remote",
+        }
+        user = DummyUser()
+        remote_target = AgentTarget("cluster", "macbook", session_id="remote-1")
+
+        with (
+            patch("telegram.CallbackQuery", DummyCallbackQuery),
+            patch("telegram.User", DummyUser),
+            patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+            patch(
+                "telegram_codex_bot.bot.safe_edit", new_callable=AsyncMock
+            ) as safe_edit,
+            patch("telegram_codex_bot.bot.get_default_account_name", return_value=""),
+            patch(
+                "telegram_codex_bot.bot.create_agent_session",
+                new_callable=AsyncMock,
+            ) as create_agent_session,
+            patch(
+                "telegram_codex_bot.bot._send_message_to_agent",
+                new_callable=AsyncMock,
+                return_value=(True, "sent"),
+            ) as send_message,
+        ):
+            create_agent_session.return_value = CreateSessionResult(
+                ok=True,
+                message="Created remote session on macbook",
+                target=remote_target,
+                display_name="macbook",
+            )
+            mock_sm.resolve_chat_id.return_value = -1001234567890
+
+            from telegram_codex_bot.bot import _create_and_bind_window
+
+            await _create_and_bind_window(
+                query,
+                context,
+                user,
+                "/tmp/project",
+                42,
+            )
+
+        mock_sm.prepare_window_launch.assert_not_called()
+        mock_sm.bind_thread_target.assert_called_once_with(
+            12345,
+            42,
+            remote_target,
+            window_name="macbook",
+        )
+        send_message.assert_awaited_once_with(12345, 42, "", "hello remote")
         safe_edit.assert_awaited_once()
