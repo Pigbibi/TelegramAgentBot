@@ -167,14 +167,17 @@ def main() -> None:
         )
         return
 
-    from .tmux_manager import tmux_manager
+    from .backends.registry import get_configured_backend
 
     logger.info("Allowed users: %s", config.allowed_users)
-    logger.info("Codex transcript root: %s", config.codex_projects_path)
-
-    # Ensure tmux session exists
-    session = tmux_manager.get_or_create_session()
-    logger.info("Tmux session '%s' ready", session.session_name)
+    backend = get_configured_backend()
+    backend_info = backend.info()
+    logger.info(
+        "Agent backend: %s (%s)",
+        backend_info.backend_id,
+        backend_info.display_name,
+    )
+    backend.prepare()
 
     logger.info("Starting Telegram bot...")
     from .bot import POLL_TIMEOUT_SECONDS, create_bot

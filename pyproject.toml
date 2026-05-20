@@ -18,6 +18,9 @@ dependencies = [
 telegram-codex-bot = "telegram_codex_bot.main:main"
 telegram-codex-bridge = "telegram_codex_bot.bridge:main"
 
+[project.entry-points."telegram_codex_bot.backends"]
+local = "telegram_codex_bot.backends.local:LocalTmuxBackend"
+
 [project.optional-dependencies]
 dev = [
     "pyright>=1.1.0",

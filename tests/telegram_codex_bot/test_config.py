@@ -38,6 +38,25 @@ class TestConfigValid:
         cfg = Config()
         assert cfg.tmux_session_name == "mysession"
 
+    def test_default_agent_backend_is_local(self):
+        cfg = Config()
+        assert cfg.agent_backend == "local"
+        assert cfg.backend_plugins == ()
+
+    def test_custom_agent_backend_and_plugins(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_CODEX_BOT_BACKEND", "cluster")
+        monkeypatch.setenv(
+            "TELEGRAM_CODEX_BOT_BACKEND_PLUGINS",
+            "plugin_one, plugin_two\nplugin_three",
+        )
+        cfg = Config()
+        assert cfg.agent_backend == "cluster"
+        assert cfg.backend_plugins == (
+            "plugin_one",
+            "plugin_two",
+            "plugin_three",
+        )
+
     def test_custom_monitor_poll_interval(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_CODEX_BOT_MONITOR_POLL_INTERVAL", "5.0")
         cfg = Config()
