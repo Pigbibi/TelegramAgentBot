@@ -21,6 +21,16 @@ class CaptureResult:
     missing: bool = False
 
 
+@dataclass(frozen=True)
+class ControlResult:
+    """Result of sending a control key to an agent terminal."""
+
+    target: AgentTarget
+    ok: bool
+    message: str = ""
+    missing: bool = False
+
+
 def local_target_from_window(window_id: str) -> AgentTarget:
     """Build a local target from a window ID and known session state."""
     state = session_manager.window_states.get(window_id)
@@ -87,3 +97,35 @@ async def capture_agent_output(
     backend = backend_for_target(target)
     text = await backend.capture(target, with_ansi=with_ansi)
     return CaptureResult(target=target, text=text)
+
+
+async def send_agent_control(
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+    key: str,
+) -> ControlResult | None:
+    """Send one control key to the target bound to a topic/window."""
+    target = target_for_context(user_id, thread_id, window_id)
+    if target is None:
+        return None
+
+    if target.backend_id == "local":
+        local_window_id = target.window_id or window_id
+        if not local_window_id:
+            return ControlResult(target=target, ok=False, missing=True)
+        window = await tmux_manager.find_window_by_id(local_window_id)
+        if not window:
+            return ControlResult(target=target, ok=False, missing=True)
+        target = LocalTmuxBackend.target_from_window(
+            window.window_id,
+            session_id=target.session_id,
+        )
+
+    backend = backend_for_target(target)
+    result = await backend.send_control(target, key)
+    return ControlResult(
+        target=target,
+        ok=result.ok,
+        message=result.message,
+    )

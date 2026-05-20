@@ -1,9 +1,11 @@
 """Tests for the bot-level Escape/interrupt command."""
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from telegram_codex_bot.agent_io import ControlResult
+from telegram_codex_bot.backends.base import AgentTarget
 
 
 def _make_update(user_id: int = 1, thread_id: int = 42) -> MagicMock:
@@ -27,28 +29,33 @@ class TestEscCommand:
     async def test_esc_command_sends_tmux_escape_key(self):
         update = _make_update()
         context = _make_context()
-        window = SimpleNamespace(window_id="@5")
 
         with (
             patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
             patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
             patch("telegram_codex_bot.bot.session_manager") as mock_sm,
-            patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
+            patch(
+                "telegram_codex_bot.bot.send_agent_control",
+                new_callable=AsyncMock,
+            ) as mock_send_control,
             patch(
                 "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
             ) as safe_reply,
         ):
             mock_sm.resolve_window_for_thread.return_value = "@5"
-            mock_tmux.find_window_by_id = AsyncMock(return_value=window)
-            mock_tmux.send_keys = AsyncMock(return_value=True)
+            mock_sm.resolve_target_for_thread.return_value = AgentTarget(
+                "local", "local", window_id="@5"
+            )
+            mock_send_control.return_value = ControlResult(
+                target=AgentTarget("local", "local", window_id="@5"),
+                ok=True,
+            )
 
             from telegram_codex_bot.bot import esc_command
 
             await esc_command(update, context)
 
-        mock_tmux.send_keys.assert_awaited_once_with(
-            "@5", "Escape", enter=False, literal=False
-        )
+        mock_send_control.assert_awaited_once_with(1, 42, "@5", "Escape")
         safe_reply.assert_awaited_once()
         assert safe_reply.await_args.args[1].endswith("Sent Escape")
 
@@ -56,20 +63,28 @@ class TestEscCommand:
     async def test_esc_command_reports_send_failure(self):
         update = _make_update()
         context = _make_context()
-        window = SimpleNamespace(window_id="@5")
 
         with (
             patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
             patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
             patch("telegram_codex_bot.bot.session_manager") as mock_sm,
-            patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
+            patch(
+                "telegram_codex_bot.bot.send_agent_control",
+                new_callable=AsyncMock,
+            ) as mock_send_control,
             patch(
                 "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
             ) as safe_reply,
         ):
             mock_sm.resolve_window_for_thread.return_value = "@5"
-            mock_tmux.find_window_by_id = AsyncMock(return_value=window)
-            mock_tmux.send_keys = AsyncMock(return_value=False)
+            mock_sm.resolve_target_for_thread.return_value = AgentTarget(
+                "local", "local", window_id="@5"
+            )
+            mock_send_control.return_value = ControlResult(
+                target=AgentTarget("local", "local", window_id="@5"),
+                ok=False,
+                message="failed",
+            )
 
             from telegram_codex_bot.bot import esc_command
 
