@@ -7,8 +7,6 @@
 
 这个版本的目标很直接：通过 Telegram 远程控制真实运行在 tmux 里的 Codex 会话，让手机端和桌面端可以围绕同一个终端会话来回切换，而不是再起一个独立 SDK 会话。
 
-https://github.com/user-attachments/assets/15ffb38e-5eb9-4720-93b9-412e4961dc93
-
 ## 功能概览
 
 TelegramCodexBot 是一个通过 Telegram 远程控制 Codex 会话的工具：
@@ -17,6 +15,7 @@ TelegramCodexBot 是一个通过 Telegram 远程控制 Codex 会话的工具：
 - 会话监控默认面向 `~/.codex` 下的现代 Codex transcript
 - Telegram 转发、topic 隔离、清理流程按长时间跑 Codex 的方式做了加固
 - 保留 tmux-first 的用法，手机和桌面都围绕同一个真实终端会话工作
+- 默认后端是本机 tmux，同时预留插件接口给中心 bot / 远端 agent 节点模式
 - 支持把 GitHub issue 中的结构化任务注入到 Codex tmux 会话
 
 ## 主要功能
@@ -30,6 +29,7 @@ TelegramCodexBot 是一个通过 Telegram 远程控制 Codex 会话的工具：
 - **topic / 窗口清理** —— 对 stale topic、stale tmux 窗口和残留绑定做更稳的清理
 - **额度失败转移** —— 某个账号打满后，下一条消息可以切到另一个已保存账号的新 session
 - **持久化状态** —— thread bindings、display name、offset、monitor state 重启后还能保留
+- **可插拔 agent backend** —— 默认仍是本机 tmux，高级用法可以通过插件接入中心 bot / 多 agent 节点
 
 ## 依赖前提
 
@@ -206,6 +206,8 @@ TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES=true
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `TELEGRAM_CODEX_BOT_DIR` | `~/.telegram-codex-bot` | 配置和状态目录 |
+| `TELEGRAM_CODEX_BOT_BACKEND` | `local` | agent backend ID。默认 `local` 保持单机 tmux 行为 |
+| `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS` | _(空)_ | 可选 backend 插件模块，多个用逗号分隔 |
 | `TELEGRAM_CODEX_BOT_TMUX_SESSION_NAME` | `telegram-codex-bot` | bot 使用的 tmux session 名称 |
 | `TELEGRAM_CODEX_BOT_CODEX_COMMAND` | `codex` | 创建新窗口时运行的命令 |
 | `TELEGRAM_CODEX_BOT_CODEX_PROJECTS_PATH` | `~/.codex` | transcript 扫描根目录 |
@@ -241,6 +243,35 @@ TELEGRAM_CODEX_BOT_PROJECT_ROOTS=Local=~/Projects,Remote=/mnt/remote-projects
 电脑/VPS 选择器，即使只配置了一个根目录。选中后才进入原来的目录浏览，并且不会
 浏览到该根目录之外。其他电脑或 VPS 需要先从运行 telegram-codex-bot 的机器挂载成本地路径，
 例如 SSHFS 或 NFS。
+
+### Agent Backend
+
+TelegramCodexBot 默认使用 `local` backend，也就是当前稳定的单机模式：
+Telegram 控制本机 tmux session，bot 读取本机 Codex transcript。
+
+单机模式是默认支持路径。backend 接口是为了把“中心 bot + 远端 agent 节点”这类
+多端能力做成可选插件，不影响普通本机使用。
+
+```ini
+TELEGRAM_CODEX_BOT_BACKEND=local
+```
+
+插件模块示例：
+
+```ini
+TELEGRAM_CODEX_BOT_BACKEND=cluster
+TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=my_cluster_backend
+```
+
+核心 backend 接口覆盖这些操作：`prepare()`、`start(message_callback)`、
+`stop()`、`create_session()`、`send_message()`、`send_control()`、`capture()`。
+默认 `local` backend 会把这些操作转给现有 tmux、session manager 和 transcript monitor。
+
+本地 target 会同时写入旧版 `thread_bindings` 和新版 `thread_targets`，方便回滚；
+非本地 backend 可以用 `backend_id`、`node_id`、`session_id` 来定位远端 agent，
+不必依赖 tmux window id。
+
+当前仓库不再内置旧项目的演示截图或视频，README 也不嵌入旧媒体。
 
 ### 更新
 
@@ -448,7 +479,7 @@ codex
 
 | 路径 | 说明 |
 | --- | --- |
-| `$TELEGRAM_CODEX_BOT_DIR/state.json` | thread 绑定、窗口状态、display name、offset，以及已隐藏的关闭会话 ID |
+| `$TELEGRAM_CODEX_BOT_DIR/state.json` | thread 绑定/target、窗口状态、display name、offset，以及已隐藏的关闭会话 ID |
 | `$TELEGRAM_CODEX_BOT_DIR/session_map.json` | hook 生成的 tmux window ↔ session 映射 |
 | `$TELEGRAM_CODEX_BOT_DIR/monitor_state.json` | monitor 的 byte offset |
 | `$TELEGRAM_CODEX_BOT_DIR/pending_topic_deletions.json` | 本地清理后延迟执行的 topic 删除队列 |
@@ -461,7 +492,10 @@ codex
 src/telegram_codex_bot/
 ├── __init__.py
 ├── account_manager.py
+├── agent_io.py
+├── backends/
 ├── bot.py
+├── bridge.py
 ├── config.py
 ├── hook.py
 ├── main.py

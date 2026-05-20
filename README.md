@@ -7,8 +7,6 @@
 
 Control Codex sessions remotely through Telegram while keeping tmux as the source of truth. This lets you monitor, answer, interrupt, resume, and clean up real terminal sessions from your phone without switching to a separate SDK session.
 
-https://github.com/user-attachments/assets/15ffb38e-5eb9-4720-93b9-412e4961dc93
-
 ## What it does
 
 TelegramCodexBot is a Telegram controller for live Codex sessions:
@@ -17,6 +15,7 @@ TelegramCodexBot is a Telegram controller for live Codex sessions:
 - transcript parsing and monitoring target modern Codex JSONL output under `~/.codex`
 - Telegram delivery and topic isolation are hardened for long-running Codex sessions
 - tmux stays the source of truth, so you can return to the same terminal session on desktop
+- the default backend is local tmux, with an optional plugin interface for center-bot / remote agent-node deployments
 - GitHub bridge support can inject structured tasks from issues into Codex tmux sessions
 
 ## Features
@@ -30,6 +29,7 @@ TelegramCodexBot is a Telegram controller for live Codex sessions:
 - **Topic cleanup** — stale topics, stale tmux windows, and dead bindings are cleaned up more safely
 - **Usage-limit failover** — when a session hits `usage_limit_exceeded`, the next message can rotate to another saved account in a fresh session
 - **Persistent state** — thread bindings, display names, offsets, and monitor state survive restarts
+- **Pluggable agent backend** — local tmux is the default, while advanced users can load a backend plugin for distributed center-bot / agent-node setups
 - **GitHub bridge** — optional `telegram-codex-bridge` CLI can poll GitHub issues and inject structured tasks into Codex tmux sessions
 
 ## Prerequisites
@@ -256,6 +256,10 @@ TelegramCodexBot starts with the `local` backend by default. This is the
 existing single-machine mode: Telegram talks to a local tmux session, and the
 bot monitors local Codex transcript files.
 
+Single-machine mode is the supported default. The backend interface exists so
+center-bot / remote agent-node deployments can be added without changing the
+normal local workflow.
+
 Optional backends can be loaded as plugins. A plugin can expose a backend
 through the `telegram_codex_bot.backends` entry point group, or through a module
 listed in `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS`.
@@ -279,6 +283,14 @@ starting the existing transcript monitor, and forwarding operations to the
 current local managers. Distributed center-bot and agent-node behavior should
 live in a plugin backend instead of being hardcoded into the default
 single-machine path.
+
+Thread bindings are stored in both the legacy local window form and the newer
+backend target form when the target is local. This keeps existing state files
+rollback-safe while allowing non-local backends to address an agent by
+`backend_id`, `node_id`, and `session_id` instead of a tmux window ID.
+
+At the moment this repository does not ship demo screenshots or videos. The
+README intentionally avoids embedding old project media.
 
 ### Updates
 
@@ -503,8 +515,10 @@ The window must live inside the configured `telegram-codex-bot` tmux session.
 src/telegram_codex_bot/
 ├── __init__.py
 ├── account_manager.py
+├── agent_io.py
 ├── backends/
 ├── bot.py
+├── bridge.py
 ├── config.py
 ├── hook.py
 ├── main.py
