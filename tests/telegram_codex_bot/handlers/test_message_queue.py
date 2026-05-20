@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 from telegram.error import BadRequest
 
+from telegram_codex_bot.agent_io import CaptureResult
+from telegram_codex_bot.backends.base import AgentTarget
 from telegram_codex_bot.handlers import message_queue
 
 
@@ -371,14 +373,14 @@ async def test_check_status_uses_synthetic_timer_after_content(monkeypatch):
         lambda user_id, thread_id=None: -100123,
     )
     monkeypatch.setattr(
-        message_queue.tmux_manager,
-        "find_window_by_id",
-        AsyncMock(return_value=SimpleNamespace(window_id="@9")),
-    )
-    monkeypatch.setattr(
-        message_queue.tmux_manager,
-        "capture_pane",
-        AsyncMock(return_value="output\nstill running without prompt chrome\n"),
+        message_queue,
+        "capture_agent_output",
+        AsyncMock(
+            return_value=CaptureResult(
+                target=AgentTarget("local", "local", window_id="@9"),
+                text="output\nstill running without prompt chrome\n",
+            )
+        ),
     )
 
     sent_texts: list[str] = []

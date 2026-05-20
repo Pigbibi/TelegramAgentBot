@@ -67,6 +67,7 @@ from .account_manager import (
     get_next_account_name,
     remember_current_account,
 )
+from .agent_io import capture_agent_output
 from .backends.base import AgentBackend
 from .backends.registry import get_configured_backend
 from .config import config
@@ -450,23 +451,36 @@ async def screenshot_command(
 
     thread_id = _get_thread_id(update)
     wid = session_manager.resolve_window_for_thread(user.id, thread_id)
-    if not wid:
+    target = session_manager.resolve_target_for_thread(user.id, thread_id)
+    if not wid and not target:
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
-    w = await tmux_manager.find_window_by_id(wid)
-    if not w:
-        display = session_manager.get_display_name(wid)
+    capture = await capture_agent_output(
+        user.id,
+        thread_id,
+        wid or "",
+        with_ansi=True,
+    )
+    if capture is None:
+        await safe_reply(update.message, "❌ No session bound to this topic.")
+        return
+    if capture.missing:
+        display = session_manager.get_display_name(wid or capture.target.window_id)
         await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
         return
 
-    text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
+    text = capture.text
     if not text:
         await safe_reply(update.message, "❌ Failed to capture pane content.")
         return
 
     png_bytes = await text_to_image(text, with_ansi=True)
-    keyboard = _build_screenshot_keyboard(wid)
+    keyboard = (
+        _build_screenshot_keyboard(capture.target.window_id)
+        if capture.target.window_id
+        else None
+    )
     await update.message.reply_document(
         document=io.BytesIO(png_bytes),
         filename="screenshot.png",
@@ -1163,7 +1177,10 @@ async def _capture_bash_output(
         last_output: str = ""
 
         for _ in range(30):
-            raw = await tmux_manager.capture_pane(window_id)
+            capture = await capture_agent_output(user_id, thread_id, window_id)
+            if capture is None or capture.missing:
+                return
+            raw = capture.text
             if raw is None:
                 return
 
@@ -1781,7 +1798,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     # Check for pending interactive UI before sending text.
     # This catches UIs (permission prompts, etc.) that status polling might have missed.
-    pane_text = await tmux_manager.capture_pane(w.window_id)
+    capture = await capture_agent_output(user.id, thread_id, wid)
+    pane_text = capture.text if capture and not capture.missing else None
     input_was_ready = is_codex_input_ready(pane_text or "")
     if pane_text and is_interactive_ui(pane_text):
         # UI detected — show it to user, then send text (acts as Enter)
@@ -2527,12 +2545,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Screenshot: Refresh
     elif data.startswith(CB_SCREENSHOT_REFRESH):
         window_id = data[len(CB_SCREENSHOT_REFRESH) :]
-        w = await tmux_manager.find_window_by_id(window_id)
-        if not w:
+        capture = await capture_agent_output(
+            user.id,
+            cb_thread_id,
+            window_id,
+            with_ansi=True,
+        )
+        if capture is None or capture.missing:
             await query.answer("Window no longer exists", show_alert=True)
             return
 
-        text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
+        text = capture.text
         if not text:
             await query.answer("Failed to capture pane", show_alert=True)
             return
@@ -2688,7 +2711,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         # Refresh screenshot after key press
         await asyncio.sleep(0.5)
-        text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
+        capture = await capture_agent_output(
+            user.id,
+            cb_thread_id,
+            window_id,
+            with_ansi=True,
+        )
+        text = capture.text if capture and not capture.missing else None
         if text:
             png_bytes = await text_to_image(text, with_ansi=True)
             keyboard = _build_screenshot_keyboard(window_id)

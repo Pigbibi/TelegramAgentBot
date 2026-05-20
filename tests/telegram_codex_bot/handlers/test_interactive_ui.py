@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from telegram_codex_bot.agent_io import CaptureResult
+from telegram_codex_bot.backends.base import AgentTarget
 from telegram_codex_bot.handlers.interactive_ui import (
     _build_interactive_keyboard,
     handle_interactive_ui,
@@ -52,19 +54,20 @@ class TestHandleInteractiveUI:
     ):
         """handle_interactive_ui captures Settings pane, sends message with keyboard."""
         window_id = "@5"
-        mock_window = MagicMock()
-        mock_window.window_id = window_id
 
         with (
             patch(
-                "telegram_codex_bot.handlers.interactive_ui.tmux_manager"
-            ) as mock_tmux,
+                "telegram_codex_bot.handlers.interactive_ui.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture,
             patch(
                 "telegram_codex_bot.handlers.interactive_ui.session_manager"
             ) as mock_sm,
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value=sample_pane_settings)
+            mock_capture.return_value = CaptureResult(
+                target=AgentTarget("local", "local", window_id=window_id),
+                text=sample_pane_settings,
+            )
             mock_sm.resolve_chat_id.return_value = 100
 
             result = await handle_interactive_ui(
@@ -82,17 +85,18 @@ class TestHandleInteractiveUI:
     async def test_handle_no_ui_returns_false(self, mock_bot: AsyncMock):
         """Returns False when no interactive UI detected in pane."""
         window_id = "@5"
-        mock_window = MagicMock()
-        mock_window.window_id = window_id
 
         with (
             patch(
-                "telegram_codex_bot.handlers.interactive_ui.tmux_manager"
-            ) as mock_tmux,
+                "telegram_codex_bot.handlers.interactive_ui.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture,
             patch("telegram_codex_bot.handlers.interactive_ui.session_manager"),
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value="$ echo hello\nhello\n$\n")
+            mock_capture.return_value = CaptureResult(
+                target=AgentTarget("local", "local", window_id=window_id),
+                text="$ echo hello\nhello\n$\n",
+            )
 
             result = await handle_interactive_ui(
                 mock_bot, user_id=1, window_id=window_id, thread_id=42
