@@ -1287,7 +1287,7 @@ async def _rotate_thread_after_usage_limit(
     send_ok, send_msg = await _send_to_window_when_codex_ready(created_wid, text)
     if send_ok:
         await mark_window_working(context.bot, user_id, created_wid, thread_id)
-        await _refresh_session_map_after_first_prompt(created_wid)
+        await _refresh_session_map_after_first_prompt(created_wid, text=text)
     if send_ok:
         await safe_send(
             context.bot,
@@ -1341,6 +1341,7 @@ async def _send_to_window_when_codex_ready(
 async def _refresh_session_map_after_first_prompt(
     window_id: str,
     *,
+    text: str | None = None,
     timeout: float = 20.0,
 ) -> bool:
     """Load the session_map entry that Codex writes after the first prompt starts."""
@@ -1350,6 +1351,19 @@ async def _refresh_session_map_after_first_prompt(
         window_id, timeout=timeout
     )
     if not hook_ok:
+        if text and await tmux_manager.prompt_still_pending(window_id, text):
+            logger.warning(
+                "Codex window %s still has the first prompt in the input row; "
+                "retrying Enter before waiting for session_map again",
+                window_id,
+            )
+            if await tmux_manager.send_control_key(window_id, "Enter"):
+                hook_ok = await session_manager.wait_for_session_map_entry(
+                    window_id,
+                    timeout=min(timeout, 10.0),
+                )
+                if hook_ok:
+                    return True
         logger.warning(
             "Codex window %s accepted input but did not register session_map",
             window_id,
@@ -1442,7 +1456,7 @@ async def _recover_missing_bound_window(
 
     send_ok, send_msg = await _send_to_window_when_codex_ready(created_wid, text)
     if send_ok:
-        await _refresh_session_map_after_first_prompt(created_wid)
+        await _refresh_session_map_after_first_prompt(created_wid, text=text)
         return True, f"Recovered window `{created_wname}` and forwarded your message."
     return (
         False,
@@ -1690,7 +1704,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(update.message, f"❌ {message}")
         return
     await mark_window_working(context.bot, user.id, wid, thread_id)
-    await _refresh_session_map_after_first_prompt(wid)
+    await _refresh_session_map_after_first_prompt(wid, text=text)
 
     # Start background capture for ! bash command output
     if input_was_ready and text.startswith("!") and len(text) > 1:
@@ -1846,7 +1860,10 @@ async def _create_and_bind_window(
                         created_wid,
                         pending_thread_id,
                     )
-                    await _refresh_session_map_after_first_prompt(created_wid)
+                    await _refresh_session_map_after_first_prompt(
+                        created_wid,
+                        text=pending_text,
+                    )
                 if not send_ok:
                     logger.warning("Failed to forward pending text: %s", send_msg)
                     await safe_send(

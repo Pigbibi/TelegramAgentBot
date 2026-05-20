@@ -488,5 +488,26 @@ class TestExistingWindowBinding:
         assert new_state.session_id == "session-1"
         assert new_state.cwd == "/tmp/project"
         send_when_ready.assert_awaited_once_with("@3", "continue")
-        refresh_session_map.assert_awaited_once_with("@3")
+        refresh_session_map.assert_awaited_once_with("@3", text="continue")
         safe_reply.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_refresh_session_map_retries_enter_when_first_prompt_is_pending():
+    from telegram_codex_bot.bot import _refresh_session_map_after_first_prompt
+
+    with (
+        patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+        patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
+    ):
+        mock_sm.get_window_state.return_value = MagicMock(session_id="")
+        mock_sm.wait_for_session_map_entry = AsyncMock(side_effect=[False, True])
+        mock_tmux.prompt_still_pending = AsyncMock(return_value=True)
+        mock_tmux.send_control_key = AsyncMock(return_value=True)
+
+        ok = await _refresh_session_map_after_first_prompt("@9", text="hello")
+
+    assert ok is True
+    assert mock_sm.wait_for_session_map_entry.await_count == 2
+    mock_tmux.prompt_still_pending.assert_awaited_once_with("@9", "hello")
+    mock_tmux.send_control_key.assert_awaited_once_with("@9", "Enter")

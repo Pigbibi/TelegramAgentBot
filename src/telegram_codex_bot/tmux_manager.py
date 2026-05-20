@@ -300,6 +300,69 @@ class TmuxManager:
                 return True
         return False
 
+    def _send_control_key_sync(self, window_id: str, key: str) -> bool:
+        """Send one tmux control key to a window."""
+        cmd = [*self._tmux_cli_prefix(), "send-keys", "-t", window_id, key]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                return True
+            stderr = result.stderr.strip() or f"exit {result.returncode}"
+            logger.error(
+                "Failed to send %s via tmux CLI to window %s: %s",
+                key,
+                window_id,
+                stderr,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to send %s via tmux CLI to window %s: %s",
+                key,
+                window_id,
+                e,
+            )
+
+        session = self.get_session()
+        if not session:
+            return False
+        try:
+            window = session.windows.get(window_id=window_id)
+            if not window:
+                return False
+            pane = window.active_pane
+            if not pane:
+                return False
+            if key == "Enter":
+                pane.send_keys("", enter=True, literal=False)
+            else:
+                pane.send_keys(key, enter=False, literal=False)
+            return True
+        except Exception as e:
+            logger.error(
+                "Failed to send %s to window %s: %s",
+                key,
+                window_id,
+                e,
+            )
+            return False
+
+    async def prompt_still_pending(self, window_id: str, text: str) -> bool:
+        """Return whether text still appears in the Codex input row."""
+        return await asyncio.to_thread(
+            self._pane_still_has_pending_literal_input,
+            window_id,
+            text,
+        )
+
+    async def send_control_key(self, window_id: str, key: str) -> bool:
+        """Send a control key such as Enter or Escape to a tmux window."""
+        return await asyncio.to_thread(self._send_control_key_sync, window_id, key)
+
     def get_or_create_session(self) -> libtmux.Session:
         """Get existing session or create a new one."""
         session = self.get_session()
@@ -510,56 +573,7 @@ class TmuxManager:
                 # fail to submit a prompt to the long-running Codex TUI even
                 # though the text itself was delivered. The raw tmux CLI
                 # `send-keys` has proven more reliable for control keys.
-                cmd = [*self._tmux_cli_prefix(), "send-keys", "-t", window_id, key]
-                try:
-                    result = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    if result.returncode == 0:
-                        return True
-                    stderr = result.stderr.strip() or f"exit {result.returncode}"
-                    logger.error(
-                        "Failed to send %s via tmux CLI to window %s: %s",
-                        key,
-                        window_id,
-                        stderr,
-                    )
-                except Exception as e:
-                    logger.error(
-                        "Failed to send %s via tmux CLI to window %s: %s",
-                        key,
-                        window_id,
-                        e,
-                    )
-
-                # Fallback to libtmux so we keep the previous behavior if the
-                # CLI path is unavailable for any reason.
-                session = self.get_session()
-                if not session:
-                    return False
-                try:
-                    window = session.windows.get(window_id=window_id)
-                    if not window:
-                        return False
-                    pane = window.active_pane
-                    if not pane:
-                        return False
-                    if key == "Enter":
-                        pane.send_keys("", enter=True, literal=False)
-                    else:
-                        pane.send_keys(key, enter=False, literal=False)
-                    return True
-                except Exception as e:
-                    logger.error(
-                        "Failed to send %s to window %s: %s",
-                        key,
-                        window_id,
-                        e,
-                    )
-                    return False
+                return self._send_control_key_sync(window_id, key)
 
             # Codex's ! command mode: send "!" first so the TUI
             # switches to bash mode, wait 1s, then send the rest.
