@@ -4,7 +4,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from telegram_codex_bot import agent_io
-from telegram_codex_bot.agent_io import capture_agent_output, send_agent_control
+from telegram_codex_bot.agent_io import (
+    capture_agent_output,
+    send_agent_control,
+    send_agent_message,
+)
 from telegram_codex_bot.backends.base import AgentTarget
 
 
@@ -13,6 +17,9 @@ class DummyBackend:
         self.backend_id = backend_id
         self.capture = AsyncMock(return_value=text)
         self.send_control = AsyncMock(
+            return_value=SimpleNamespace(ok=True, message="sent")
+        )
+        self.send_message = AsyncMock(
             return_value=SimpleNamespace(ok=True, message="sent")
         )
 
@@ -169,3 +176,79 @@ async def test_send_control_remote_target_uses_target_backend(monkeypatch):
     assert result.missing is False
     remote_backend.send_control.assert_awaited_once_with(remote_target, "Enter")
     configured_backend.send_control.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_message_local_target_verifies_window_and_uses_backend(
+    monkeypatch,
+):
+    backend = DummyBackend("local")
+    monkeypatch.setattr(agent_io, "get_configured_backend", lambda: backend)
+    monkeypatch.setattr(
+        agent_io.tmux_manager,
+        "find_window_by_id",
+        AsyncMock(return_value=SimpleNamespace(window_id="@2")),
+    )
+    monkeypatch.setattr(
+        agent_io.session_manager,
+        "resolve_target_for_thread",
+        lambda user_id, thread_id: AgentTarget("local", "local", window_id="@2"),
+    )
+
+    result = await send_agent_message(100, 42, "@2", "hello")
+
+    assert result is not None
+    assert result.ok is True
+    assert result.missing is False
+    backend.send_message.assert_awaited_once_with(
+        AgentTarget("local", "local", window_id="@2"),
+        "hello",
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_message_local_target_reports_missing_window(monkeypatch):
+    backend = DummyBackend("local")
+    monkeypatch.setattr(agent_io, "get_configured_backend", lambda: backend)
+    monkeypatch.setattr(
+        agent_io.tmux_manager,
+        "find_window_by_id",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        agent_io.session_manager,
+        "resolve_target_for_thread",
+        lambda user_id, thread_id: AgentTarget("local", "local", window_id="@2"),
+    )
+
+    result = await send_agent_message(100, 42, "@2", "hello")
+
+    assert result is not None
+    assert result.ok is False
+    assert result.missing is True
+    backend.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_message_remote_target_uses_target_backend(monkeypatch):
+    configured_backend = DummyBackend("local")
+    remote_backend = DummyBackend("cluster")
+    remote_target = AgentTarget("cluster", "macbook", session_id="remote-1")
+
+    monkeypatch.setattr(agent_io, "get_configured_backend", lambda: configured_backend)
+    monkeypatch.setattr(
+        agent_io, "load_backend", lambda *args, **kwargs: remote_backend
+    )
+    monkeypatch.setattr(
+        agent_io.session_manager,
+        "resolve_target_for_thread",
+        lambda user_id, thread_id: remote_target,
+    )
+
+    result = await send_agent_message(100, 42, "", "hello")
+
+    assert result is not None
+    assert result.ok is True
+    assert result.missing is False
+    remote_backend.send_message.assert_awaited_once_with(remote_target, "hello")
+    configured_backend.send_message.assert_not_awaited()

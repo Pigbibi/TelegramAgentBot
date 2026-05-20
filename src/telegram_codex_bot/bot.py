@@ -67,7 +67,7 @@ from .account_manager import (
     get_next_account_name,
     remember_current_account,
 )
-from .agent_io import capture_agent_output, send_agent_control
+from .agent_io import capture_agent_output, send_agent_control, send_agent_message
 from .backends.base import AgentBackend
 from .backends.registry import get_configured_backend
 from .config import config
@@ -664,6 +664,20 @@ async def _send_control_to_agent(
     return True, ""
 
 
+async def _send_message_to_agent(
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+    text: str,
+) -> tuple[bool, str]:
+    result = await send_agent_message(user_id, thread_id, window_id, text)
+    if result is None:
+        return False, "No session bound"
+    if result.missing:
+        return False, "Window not found (may have been closed)"
+    return result.ok, result.message
+
+
 async def topic_closed_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -841,27 +855,30 @@ async def forward_command_handler(
     # The full text is already a slash command like "/clear" or "/compact foo"
     cc_slash = cmd_text.split("@")[0]  # strip bot mention
     wid = session_manager.resolve_window_for_thread(user.id, thread_id)
-    if not wid:
+    target = session_manager.resolve_target_for_thread(user.id, thread_id)
+    if not wid and not target:
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
-    w = await tmux_manager.find_window_by_id(wid)
-    if not w:
-        display = session_manager.get_display_name(wid)
-        await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
-        return
-
-    display = session_manager.get_display_name(wid)
+    target_window_id = target.window_id if target else ""
+    display = session_manager.get_display_name(wid or target_window_id)
     logger.info(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
     )
     await _safe_send_typing_action(update.message.chat, source="history_command")
-    success, message = await session_manager.send_to_window(wid, cc_slash)
-    if success:
+    result = await send_agent_message(user.id, thread_id, wid or "", cc_slash)
+    if result is None:
+        await safe_reply(update.message, "❌ No session bound to this topic.")
+        return
+    if result.missing:
+        await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
+        return
+
+    if result.ok:
         await safe_reply(update.message, f"⚡ [{display}] Sent: {cc_slash}")
         # If /clear command was sent, clear the session association
         # so we can detect the new session after first message
-        if cc_slash.strip().lower() == "/clear":
+        if wid and cc_slash.strip().lower() == "/clear":
             logger.info("Clearing session for window %s after /clear", display)
             session_manager.clear_window_session(wid)
 
@@ -870,7 +887,7 @@ async def forward_command_handler(
         # interactive UIs every 1s (status_polling.py), so no
         # proactive detection needed here — the poller handles it.
     else:
-        await safe_reply(update.message, f"❌ {message}")
+        await safe_reply(update.message, f"❌ {result.message}")
 
 
 async def unsupported_content_handler(
@@ -1062,7 +1079,12 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    success, message = await session_manager.send_to_window(wid, text_to_send)
+    success, message = await _send_message_to_agent(
+        user.id,
+        thread_id,
+        wid,
+        text_to_send,
+    )
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
@@ -1151,7 +1173,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    success, message = await session_manager.send_to_window(wid, text)
+    success, message = await _send_message_to_agent(user.id, thread_id, wid, text)
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
@@ -1321,7 +1343,12 @@ async def _rotate_thread_after_usage_limit(
 
     resolved_chat = session_manager.resolve_chat_id(user_id, thread_id)
 
-    send_ok, send_msg = await _send_to_window_when_codex_ready(created_wid, text)
+    send_ok, send_msg = await _send_to_window_when_codex_ready(
+        user_id,
+        thread_id,
+        created_wid,
+        text,
+    )
     if send_ok:
         await mark_window_working(context.bot, user_id, created_wid, thread_id)
         await _refresh_session_map_after_first_prompt(
@@ -1350,6 +1377,8 @@ async def _rotate_thread_after_usage_limit(
 
 
 async def _send_to_window_when_codex_ready(
+    user_id: int,
+    thread_id: int | None,
     window_id: str,
     text: str,
     *,
@@ -1360,7 +1389,12 @@ async def _send_to_window_when_codex_ready(
     deadline = asyncio.get_event_loop().time() + timeout
     last_message = ""
     while asyncio.get_event_loop().time() < deadline:
-        pane_text = await tmux_manager.capture_pane(window_id)
+        capture = await capture_agent_output(user_id, thread_id, window_id)
+        if capture is None:
+            return False, "No session bound"
+        if capture.missing:
+            return False, "Window not found (may have been closed)"
+        pane_text = capture.text
         if not is_codex_input_ready(pane_text or ""):
             status = parse_status_update(pane_text or "")
             if status:
@@ -1369,7 +1403,12 @@ async def _send_to_window_when_codex_ready(
                 last_message = "Codex UI is not ready for input"
             await asyncio.sleep(interval)
             continue
-        send_ok, send_msg = await session_manager.send_to_window(window_id, text)
+        send_ok, send_msg = await _send_message_to_agent(
+            user_id,
+            thread_id,
+            window_id,
+            text,
+        )
         if send_ok:
             return True, send_msg
         last_message = send_msg
@@ -1594,7 +1633,12 @@ async def _recover_missing_bound_window(
     session_manager.remove_window_state(old_window_id)
     forget_missing_bound_window(user_id, thread_id, old_window_id)
 
-    send_ok, send_msg = await _send_to_window_when_codex_ready(created_wid, text)
+    send_ok, send_msg = await _send_to_window_when_codex_ready(
+        user_id,
+        thread_id,
+        created_wid,
+        text,
+    )
     if send_ok:
         await _refresh_session_map_after_first_prompt(
             created_wid,
@@ -1844,7 +1888,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Bound topics can receive text while Codex is working.  Sending directly
     # lets the TUI queue the prompt for the next turn instead of dropping it
     # after a local readiness timeout.
-    success, message = await session_manager.send_to_window(wid, text)
+    success, message = await _send_message_to_agent(user.id, thread_id, wid, text)
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
@@ -1995,6 +2039,8 @@ async def _create_and_bind_window(
                     context.user_data.pop("_pending_thread_text", None)
                     context.user_data.pop("_pending_thread_id", None)
                 send_ok, send_msg = await _send_to_window_when_codex_ready(
+                    query.from_user.id,
+                    pending_thread_id,
                     created_wid,
                     pending_text,
                 )
@@ -2511,8 +2557,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data.pop("_pending_thread_text", None)
             context.user_data.pop("_pending_thread_id", None)
         if pending_text:
-            send_ok, send_msg = await session_manager.send_to_window(
-                selected_wid, pending_text
+            send_ok, send_msg = await _send_message_to_agent(
+                user.id,
+                thread_id,
+                selected_wid,
+                pending_text,
             )
             if send_ok:
                 await mark_window_working(
