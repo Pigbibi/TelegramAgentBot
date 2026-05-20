@@ -276,6 +276,80 @@ async def test_failed_status_to_content_conversion_deletes_old_status(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_cancelled_status_to_content_conversion_keeps_tracking(monkeypatch):
+    """Shutdown cancellation must not orphan a still-visible Thinking bubble."""
+    message_queue._status_msg_info.clear()
+
+    bot = AsyncMock()
+    bot.edit_message_text.side_effect = asyncio.CancelledError()
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+
+    message_queue._status_msg_info[(1, 42)] = (
+        321,
+        "@4",
+        "💭 Thinking (4m 28s) · esc to interrupt",
+    )
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await message_queue._convert_status_to_content(
+                bot,
+                1,
+                42,
+                "@4",
+                "final content",
+            )
+
+        assert message_queue._status_msg_info[(1, 42)] == (
+            321,
+            "@4",
+            "💭 Thinking (4m 28s) · esc to interrupt",
+        )
+    finally:
+        message_queue._status_msg_info.clear()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_status_clear_keeps_tracking(monkeypatch):
+    """A cancelled clear can be retried after restart if tracking is preserved."""
+    message_queue._status_msg_info.clear()
+
+    bot = AsyncMock()
+    bot.delete_message.side_effect = asyncio.CancelledError()
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+
+    message_queue._status_msg_info[(1, 42)] = (
+        321,
+        "@4",
+        "💭 Thinking (4m 28s) · esc to interrupt",
+    )
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await message_queue._do_clear_status_message(
+                bot,
+                1,
+                42,
+            )
+
+        assert message_queue._status_msg_info[(1, 42)] == (
+            321,
+            "@4",
+            "💭 Thinking (4m 28s) · esc to interrupt",
+        )
+    finally:
+        message_queue._status_msg_info.clear()
+
+
+@pytest.mark.asyncio
 async def test_status_update_preserves_pending_clear():
     """A fresh Working bubble must not reuse an old bubble above the user."""
     queue: asyncio.Queue[message_queue.MessageTask] = asyncio.Queue()
