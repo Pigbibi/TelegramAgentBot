@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from telegram_codex_bot.agent_io import CaptureResult
+from telegram_codex_bot.backends.base import AgentTarget
 from telegram_codex_bot.handlers import status_polling
 from telegram_codex_bot.handlers.status_polling import (
     status_poll_loop,
@@ -24,6 +26,14 @@ def mock_bot():
     sent_msg.message_id = 999
     bot.send_message.return_value = sent_msg
     return bot
+
+
+def capture_result(window_id: str, text: str | None, *, missing: bool = False):
+    return CaptureResult(
+        target=AgentTarget("local", "local", window_id=window_id),
+        text=text,
+        missing=missing,
+    )
 
 
 @pytest.fixture
@@ -60,20 +70,18 @@ class TestStatusPollerSettingsDetection:
     ):
         """Poller captures Settings pane → handle_interactive_ui sends keyboard."""
         window_id = "@5"
-        mock_window = MagicMock()
-        mock_window.window_id = window_id
 
         with (
             patch(
-                "telegram_codex_bot.handlers.status_polling.tmux_manager"
-            ) as mock_tmux,
+                "telegram_codex_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture,
             patch(
                 "telegram_codex_bot.handlers.status_polling.handle_interactive_ui",
                 new_callable=AsyncMock,
             ) as mock_handle_ui,
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value=sample_pane_settings)
+            mock_capture.return_value = capture_result(window_id, sample_pane_settings)
             mock_handle_ui.return_value = True
 
             await update_status_message(
@@ -86,8 +94,6 @@ class TestStatusPollerSettingsDetection:
     async def test_normal_pane_no_interactive_ui(self, mock_bot: AsyncMock):
         """Normal pane text → no handle_interactive_ui call, just status check."""
         window_id = "@5"
-        mock_window = MagicMock()
-        mock_window.window_id = window_id
         normal_pane = (
             "some output\n"
             "✻ Reading file\n"
@@ -99,8 +105,9 @@ class TestStatusPollerSettingsDetection:
 
         with (
             patch(
-                "telegram_codex_bot.handlers.status_polling.tmux_manager"
-            ) as mock_tmux,
+                "telegram_codex_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture,
             patch(
                 "telegram_codex_bot.handlers.status_polling.handle_interactive_ui",
                 new_callable=AsyncMock,
@@ -110,8 +117,7 @@ class TestStatusPollerSettingsDetection:
                 new_callable=AsyncMock,
             ),
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value=normal_pane)
+            mock_capture.return_value = capture_result(window_id, normal_pane)
 
             await update_status_message(
                 mock_bot, user_id=1, window_id=window_id, thread_id=42
@@ -123,8 +129,6 @@ class TestStatusPollerSettingsDetection:
     async def test_idle_pane_clears_stale_status(self, mock_bot: AsyncMock):
         """Idle panes clear any old Working status message."""
         window_id = "@5"
-        mock_window = MagicMock()
-        mock_window.window_id = window_id
         idle_pane = (
             "─ Worked for 2m 04s ─────────────────────────\n\n"
             "• Final answer already rendered\n\n"
@@ -135,8 +139,9 @@ class TestStatusPollerSettingsDetection:
 
         with (
             patch(
-                "telegram_codex_bot.handlers.status_polling.tmux_manager"
-            ) as mock_tmux,
+                "telegram_codex_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture,
             patch(
                 "telegram_codex_bot.handlers.status_polling.handle_interactive_ui",
                 new_callable=AsyncMock,
@@ -146,8 +151,7 @@ class TestStatusPollerSettingsDetection:
                 new_callable=AsyncMock,
             ) as mock_enqueue_status,
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value=idle_pane)
+            mock_capture.return_value = capture_result(window_id, idle_pane)
 
             await update_status_message(
                 mock_bot, user_id=1, window_id=window_id, thread_id=42
@@ -166,8 +170,6 @@ class TestStatusPollerSettingsDetection:
     async def test_public_progress_block_is_sent_as_status(self, mock_bot: AsyncMock):
         """Recent public progress should show up in Telegram status updates."""
         window_id = "@5"
-        mock_window = MagicMock()
-        mock_window.window_id = window_id
         pane = (
             '• Searched site:msci.com \\"MSCI USA Momentum Index\\"\n'
             "✻ Searching the web\n"
@@ -179,8 +181,9 @@ class TestStatusPollerSettingsDetection:
 
         with (
             patch(
-                "telegram_codex_bot.handlers.status_polling.tmux_manager"
-            ) as mock_tmux,
+                "telegram_codex_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture,
             patch(
                 "telegram_codex_bot.handlers.status_polling.handle_interactive_ui",
                 new_callable=AsyncMock,
@@ -190,8 +193,7 @@ class TestStatusPollerSettingsDetection:
                 new_callable=AsyncMock,
             ) as mock_enqueue_status,
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value=pane)
+            mock_capture.return_value = capture_result(window_id, pane)
 
             await update_status_message(
                 mock_bot, user_id=1, window_id=window_id, thread_id=42
@@ -211,8 +213,6 @@ class TestStatusPollerSettingsDetection:
     ):
         """Active Working status should still display while content is queued."""
         window_id = "@5"
-        mock_window = MagicMock()
-        mock_window.window_id = window_id
         pane = (
             "• Working (1m 07s • esc to interrupt)\n"
             "──────────────────────────────────────\n"
@@ -223,8 +223,9 @@ class TestStatusPollerSettingsDetection:
 
         with (
             patch(
-                "telegram_codex_bot.handlers.status_polling.tmux_manager"
-            ) as mock_tmux,
+                "telegram_codex_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture,
             patch(
                 "telegram_codex_bot.handlers.status_polling.handle_interactive_ui",
                 new_callable=AsyncMock,
@@ -234,8 +235,7 @@ class TestStatusPollerSettingsDetection:
                 new_callable=AsyncMock,
             ) as mock_enqueue_status,
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value=pane)
+            mock_capture.return_value = capture_result(window_id, pane)
 
             await update_status_message(
                 mock_bot,
@@ -289,8 +289,6 @@ class TestStatusPollerSettingsDetection:
         from telegram_codex_bot.handlers import working_status
 
         window_id = "@5"
-        mock_window = MagicMock()
-        mock_window.window_id = window_id
         busy_without_status = "output\nstill running without prompt chrome\n"
         idle_pane = (
             "─ Worked for 2m 04s ─────────────────────────\n\n"
@@ -306,8 +304,9 @@ class TestStatusPollerSettingsDetection:
 
         with (
             patch(
-                "telegram_codex_bot.handlers.status_polling.tmux_manager"
-            ) as mock_tmux,
+                "telegram_codex_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture,
             patch(
                 "telegram_codex_bot.handlers.status_polling.handle_interactive_ui",
                 new_callable=AsyncMock,
@@ -317,10 +316,10 @@ class TestStatusPollerSettingsDetection:
                 new_callable=AsyncMock,
             ) as mock_enqueue_status,
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(
-                side_effect=[busy_without_status, idle_pane]
-            )
+            mock_capture.side_effect = [
+                capture_result(window_id, busy_without_status),
+                capture_result(window_id, idle_pane),
+            ]
 
             await update_status_message(
                 mock_bot, user_id=1, window_id=window_id, thread_id=42
@@ -353,8 +352,6 @@ class TestStatusPollerSettingsDetection:
     ):
         """A transient prompt row before any output should not erase the timer."""
         window_id = "@5"
-        mock_window = MagicMock()
-        mock_window.window_id = window_id
         idle_like_pane = (
             "› Find and fix a bug in @filename\n"
             "──────────────────────────────────────\n"
@@ -366,8 +363,9 @@ class TestStatusPollerSettingsDetection:
 
         with (
             patch(
-                "telegram_codex_bot.handlers.status_polling.tmux_manager"
-            ) as mock_tmux,
+                "telegram_codex_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture,
             patch(
                 "telegram_codex_bot.handlers.status_polling.handle_interactive_ui",
                 new_callable=AsyncMock,
@@ -377,8 +375,7 @@ class TestStatusPollerSettingsDetection:
                 new_callable=AsyncMock,
             ) as mock_enqueue_status,
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value=idle_like_pane)
+            mock_capture.return_value = capture_result(window_id, idle_like_pane)
 
             await update_status_message(
                 mock_bot, user_id=1, window_id=window_id, thread_id=42
@@ -396,8 +393,6 @@ class TestStatusPollerSettingsDetection:
     ):
         """Public progress should not replace the visible elapsed timer."""
         window_id = "@5"
-        mock_window = MagicMock()
-        mock_window.window_id = window_id
         pane = (
             '• Searched site:msci.com "MSCI USA Momentum Index"\n'
             "✻ Searching the web\n"
@@ -412,8 +407,9 @@ class TestStatusPollerSettingsDetection:
 
         with (
             patch(
-                "telegram_codex_bot.handlers.status_polling.tmux_manager"
-            ) as mock_tmux,
+                "telegram_codex_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture,
             patch(
                 "telegram_codex_bot.handlers.status_polling.handle_interactive_ui",
                 new_callable=AsyncMock,
@@ -423,8 +419,7 @@ class TestStatusPollerSettingsDetection:
                 new_callable=AsyncMock,
             ) as mock_enqueue_status,
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value=pane)
+            mock_capture.return_value = capture_result(window_id, pane)
 
             await update_status_message(
                 mock_bot, user_id=1, window_id=window_id, thread_id=42
@@ -442,8 +437,6 @@ class TestStatusPollerSettingsDetection:
     ):
         """Queue-busy suppression remains for less important status updates."""
         window_id = "@5"
-        mock_window = MagicMock()
-        mock_window.window_id = window_id
         pane = (
             "✻ Reading file\n"
             "──────────────────────────────────────\n"
@@ -454,8 +447,9 @@ class TestStatusPollerSettingsDetection:
 
         with (
             patch(
-                "telegram_codex_bot.handlers.status_polling.tmux_manager"
-            ) as mock_tmux,
+                "telegram_codex_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture,
             patch(
                 "telegram_codex_bot.handlers.status_polling.handle_interactive_ui",
                 new_callable=AsyncMock,
@@ -465,8 +459,7 @@ class TestStatusPollerSettingsDetection:
                 new_callable=AsyncMock,
             ) as mock_enqueue_status,
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value=pane)
+            mock_capture.return_value = capture_result(window_id, pane)
 
             await update_status_message(
                 mock_bot,
@@ -489,24 +482,26 @@ class TestStatusPollerSettingsDetection:
         Uses real handle_interactive_ui (not mocked) to verify the full path.
         """
         window_id = "@5"
-        mock_window = MagicMock()
-        mock_window.window_id = window_id
 
         with (
             patch(
-                "telegram_codex_bot.handlers.status_polling.tmux_manager"
-            ) as mock_tmux_poll,
+                "telegram_codex_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture_poll,
             patch(
-                "telegram_codex_bot.handlers.interactive_ui.tmux_manager"
-            ) as mock_tmux_ui,
+                "telegram_codex_bot.handlers.interactive_ui.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture_ui,
             patch(
                 "telegram_codex_bot.handlers.interactive_ui.session_manager"
             ) as mock_sm,
         ):
-            mock_tmux_poll.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux_poll.capture_pane = AsyncMock(return_value=sample_pane_settings)
-            mock_tmux_ui.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux_ui.capture_pane = AsyncMock(return_value=sample_pane_settings)
+            mock_capture_poll.return_value = capture_result(
+                window_id, sample_pane_settings
+            )
+            mock_capture_ui.return_value = capture_result(
+                window_id, sample_pane_settings
+            )
             mock_sm.resolve_chat_id.return_value = 100
 
             await update_status_message(

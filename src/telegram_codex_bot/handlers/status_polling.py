@@ -25,6 +25,7 @@ from telegram.error import BadRequest
 
 from ..config import config
 from ..session import session_manager
+from ..agent_io import capture_agent_output
 from ..terminal_parser import is_interactive_ui
 from ..tmux_manager import tmux_manager
 from .interactive_ui import (
@@ -121,8 +122,8 @@ async def update_status_message(
     Also detects permission prompt UIs (not triggered via JSONL) and enters
     interactive mode when found.
     """
-    w = await tmux_manager.find_window_by_id(window_id)
-    if not w:
+    capture = await capture_agent_output(user_id, thread_id, window_id)
+    if capture is None or capture.missing:
         clear_window_working(user_id, window_id, thread_id)
         # Window gone, enqueue clear (unless skipping status)
         if not skip_status:
@@ -131,7 +132,7 @@ async def update_status_message(
             )
         return
 
-    pane_text = await tmux_manager.capture_pane(w.window_id)
+    pane_text = capture.text
     if not pane_text:
         # Transient capture failure - keep existing status message
         return

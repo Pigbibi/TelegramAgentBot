@@ -29,7 +29,7 @@ from telegram.error import BadRequest, RetryAfter
 
 from ..markdown_v2 import convert_markdown
 from ..session import session_manager
-from ..tmux_manager import tmux_manager
+from ..agent_io import capture_agent_output
 from .message_sender import (
     NO_LINK_PREVIEW,
     PARSE_MODE,
@@ -727,11 +727,10 @@ async def _check_and_send_status(
     queue = get_message_queue(user_id, thread_id)
     if queue and not queue.empty():
         return
-    w = await tmux_manager.find_window_by_id(window_id)
-    if not w:
+    capture = await capture_agent_output(user_id, thread_id, window_id)
+    if capture is None or capture.missing:
         return
-
-    pane_text = await tmux_manager.capture_pane(w.window_id)
+    pane_text = capture.text
     if not pane_text:
         return
 
