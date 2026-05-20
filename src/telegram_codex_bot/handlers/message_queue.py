@@ -615,7 +615,7 @@ async def _convert_status_to_content(
     Returns the message_id if converted successfully, None otherwise.
     """
     skey = (user_id, thread_id_or_0)
-    info = _pop_status_info(skey)
+    info = _status_msg_info.get(skey)
     if not info:
         return None
 
@@ -625,8 +625,11 @@ async def _convert_status_to_content(
         # Different window, just delete the old status
         try:
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except RetryAfter:
+            raise
         except Exception:
             pass
+        _pop_status_info(skey)
         return None
 
     # Edit status message to show content
@@ -638,6 +641,7 @@ async def _convert_status_to_content(
             parse_mode=PARSE_MODE,
             link_preview_options=NO_LINK_PREVIEW,
         )
+        _pop_status_info(skey)
         return msg_id
     except RetryAfter:
         raise
@@ -651,6 +655,7 @@ async def _convert_status_to_content(
                 text=plain,
                 link_preview_options=NO_LINK_PREVIEW,
             )
+            _pop_status_info(skey)
             return msg_id
         except RetryAfter:
             raise
@@ -667,6 +672,7 @@ async def _convert_status_to_content(
                     msg_id,
                     delete_exc,
                 )
+            _pop_status_info(skey)
             return None
 
 
@@ -739,7 +745,6 @@ async def _process_status_update_task(
                         _set_status_info(skey, (msg_id, wid, status_text))
                         return
                     logger.debug(f"Failed to edit status message: {e}")
-                    _pop_status_info(skey)
                     await _do_send_status_message(bot, user_id, tid, wid, status_text)
     else:
         # No existing status message, send new
@@ -759,12 +764,15 @@ async def _do_send_status_message(
     chat_id = session_manager.resolve_chat_id(user_id, thread_id)
     # Safety net: delete any orphaned status message before sending a new one.
     # This catches edge cases where tracking was cleared without deleting the message.
-    old = _pop_status_info(skey)
+    old = _status_msg_info.get(skey)
     if old:
         try:
             await bot.delete_message(chat_id=chat_id, message_id=old[0])
+        except RetryAfter:
+            raise
         except Exception:
             pass
+        _pop_status_info(skey)
     # Send typing indicator when Codex is working
     if "esc to interrupt" in text.lower():
         try:
@@ -790,14 +798,17 @@ async def _do_clear_status_message(
 ) -> None:
     """Delete the status message for a user (internal, called from worker)."""
     skey = (user_id, thread_id_or_0)
-    info = _pop_status_info(skey)
+    info = _status_msg_info.get(skey)
     if info:
         msg_id = info[0]
         chat_id = session_manager.resolve_chat_id(user_id, thread_id_or_0 or None)
         try:
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except RetryAfter:
+            raise
         except Exception as e:
             logger.debug(f"Failed to delete status message {msg_id}: {e}")
+        _pop_status_info(skey)
 
 
 async def _check_and_send_status(
