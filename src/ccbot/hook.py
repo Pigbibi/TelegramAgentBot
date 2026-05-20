@@ -35,7 +35,7 @@ _CONFIG_SECTION_RE = re.compile(r"^\s*\[(.+?)\]\s*$")
 _CODEX_HOOKS_FLAG_RE = re.compile(r"^\s*codex_hooks\s*=")
 
 _SESSION_START_MATCHER = "startup|resume"
-_HOOK_STATUS_MESSAGE = "Registering CCBot session"
+_HOOK_STATUS_MESSAGE = "Registering Codex session"
 _HOOK_TIMEOUT_SECONDS = 5
 
 # The hook command suffix for detection

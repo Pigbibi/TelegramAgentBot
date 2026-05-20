@@ -1,4 +1,4 @@
-"""Telegram bot handlers — the main UI layer of CCBot.
+"""Telegram bot handlers for TelegramCodexBot.
 
 Registers all command/callback/message handlers and manages the bot lifecycle.
 Each Telegram topic maps 1:1 to a tmux window (Codex session).
@@ -2610,8 +2610,8 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             if next_account:
                 note += (
                     f"\nThe window is now marked as exhausted. On your next "
-                    f"message, CCBot will open a new `{next_account}` session "
-                    "automatically."
+                    f"message, TelegramCodexBot will open a new `{next_account}` "
+                    "session automatically."
                 )
             else:
                 note += (
