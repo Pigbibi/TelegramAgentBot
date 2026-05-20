@@ -207,7 +207,7 @@ PHOTO_CONFIRMATION_MESSAGE = f"📷 Image sent to {PRODUCT_NAME}."
 SESSION_STILL_RUNNING_MESSAGE = f"The {PRODUCT_NAME} session is still running in tmux."
 HELP_COMMAND_DESCRIPTION = f"↗ Show {PRODUCT_NAME} help"
 ESC_COMMAND_DESCRIPTION = f"Send Escape to interrupt {PRODUCT_NAME}"
-INTERRUPT_COMMAND_DESCRIPTION = f"Interrupt {PRODUCT_NAME}"
+INTERRUPT_COMMAND_DESCRIPTION = f"Interrupt {PRODUCT_NAME} or send a message"
 USAGE_COMMAND_DESCRIPTION = f"Show {PRODUCT_NAME} usage remaining"
 
 
@@ -568,6 +568,138 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await safe_reply(update.message, "❌ Failed to send Escape.")
         return
     await safe_reply(update.message, "⎋ Sent Escape")
+
+
+async def interrupt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send Escape, then submit an optional replacement message."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    parts = (update.message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await esc_command(update, context)
+        return
+
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        await safe_reply(update.message, "❌ Please use a named topic.")
+        return
+
+    chat = update.effective_chat
+    if chat and chat.type in ("group", "supergroup"):
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+
+    payload = sanitize_forward_text(parts[1])
+    if not payload:
+        await safe_reply(
+            update.message,
+            "❌ This message only contained wrapper metadata and no forwardable text.",
+        )
+        return
+
+    wid = session_manager.resolve_window_for_thread(user.id, thread_id)
+    target = session_manager.resolve_target_for_thread(user.id, thread_id)
+    if not wid and not target:
+        await safe_reply(update.message, "❌ No session bound to this topic.")
+        return
+
+    w = None
+    if wid:
+        w = await tmux_manager.find_window_by_id(wid)
+        if not w:
+            display = session_manager.get_display_name(wid)
+            await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
+            return
+
+    await _safe_send_typing_action(update.message.chat, source="interrupt_command")
+    if wid:
+        await enqueue_status_update(
+            context.bot, user.id, wid, None, thread_id=thread_id
+        )
+    else:
+        clear_status_msg_info(user.id, thread_id)
+    _cancel_bash_capture(user.id, thread_id)
+
+    pane_text = None
+    input_was_ready = False
+    if wid:
+        capture = await capture_agent_output(user.id, thread_id, wid)
+        pane_text = capture.text if capture and not capture.missing else None
+        input_was_ready = is_codex_input_ready(pane_text or "")
+        if pane_text and is_interactive_ui(pane_text):
+            await handle_interactive_ui(context.bot, user.id, wid, thread_id)
+            await asyncio.sleep(0.3)
+
+        if w and await session_manager.window_has_usage_limit_exceeded(wid):
+            handled = await _rotate_thread_after_usage_limit(
+                context=context,
+                user_id=user.id,
+                thread_id=thread_id,
+                current_window_id=wid,
+                current_window_cwd=w.cwd,
+                text=payload,
+            )
+            if handled:
+                return
+
+    if input_was_ready:
+        success, message = await _send_message_to_agent(
+            user.id,
+            thread_id,
+            wid or "",
+            payload,
+        )
+    else:
+        ok, control_message = await _send_control_to_agent(
+            user.id,
+            thread_id,
+            wid or "",
+            "Escape",
+        )
+        if not ok:
+            await safe_reply(update.message, f"❌ {control_message}")
+            return
+
+        await asyncio.sleep(0.3)
+        if wid:
+            success, message = await _send_to_window_when_codex_ready(
+                user.id,
+                thread_id,
+                wid,
+                payload,
+                timeout=15.0,
+                interval=0.25,
+            )
+            if not success:
+                logger.warning(
+                    "Codex did not become ready after interrupt in window %s: %s; "
+                    "falling back to direct send",
+                    wid,
+                    message,
+                )
+                success, message = await _send_message_to_agent(
+                    user.id,
+                    thread_id,
+                    wid,
+                    payload,
+                )
+        else:
+            success, message = await _send_message_to_agent(
+                user.id,
+                thread_id,
+                "",
+                payload,
+            )
+
+    if not success:
+        await safe_reply(update.message, f"❌ {message}")
+        return
+    if wid:
+        await mark_window_working(context.bot, user.id, wid, thread_id)
+        await _refresh_session_map_after_first_prompt(wid)
 
 
 async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1164,7 +1296,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         text_to_send = f"(image attached: {file_path})"
 
     await _safe_send_typing_action(update.message.chat, source="photo_handler")
-    clear_status_msg_info(user.id, thread_id)
+    await enqueue_status_update(context.bot, user.id, wid, None, thread_id=thread_id)
 
     if await session_manager.window_has_usage_limit_exceeded(wid):
         await _rotate_thread_after_usage_limit(
@@ -1186,10 +1318,10 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    await mark_window_working(context.bot, user.id, wid, thread_id)
 
     # Confirm to user
     await safe_reply(update.message, PHOTO_CONFIRMATION_MESSAGE)
+    await mark_window_working(context.bot, user.id, wid, thread_id)
 
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1263,7 +1395,12 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     await _safe_send_typing_action(update.message.chat, source="voice_handler")
-    clear_status_msg_info(user.id, thread_id)
+    if wid:
+        await enqueue_status_update(
+            context.bot, user.id, wid, None, thread_id=thread_id
+        )
+    else:
+        clear_status_msg_info(user.id, thread_id)
 
     if wid and w and await session_manager.window_has_usage_limit_exceeded(wid):
         await _rotate_thread_after_usage_limit(
@@ -1280,10 +1417,10 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    if wid:
-        await mark_window_working(context.bot, user.id, wid, thread_id)
 
     await safe_reply(update.message, f'🎤 "{text}"')
+    if wid:
+        await mark_window_working(context.bot, user.id, wid, thread_id)
 
 
 # Active bash capture tasks: (user_id, thread_id) → asyncio.Task
@@ -3342,7 +3479,8 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
-    application.add_handler(CommandHandler(["esc", "interrupt"], esc_command))
+    application.add_handler(CommandHandler("esc", esc_command))
+    application.add_handler(CommandHandler("interrupt", interrupt_command))
     application.add_handler(CommandHandler("unbind", unbind_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CallbackQueryHandler(callback_handler))

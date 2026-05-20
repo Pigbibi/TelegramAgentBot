@@ -528,6 +528,114 @@ class TestExistingWindowBinding:
         )
 
     @pytest.mark.asyncio
+    async def test_interrupt_command_interrupts_busy_codex_before_forwarding_text(self):
+        update = _make_text_update("/interrupt interrupt me")
+        context = _make_context()
+
+        fake_window = MagicMock()
+        fake_window.window_id = "@1"
+        fake_window.window_name = "Projects"
+        fake_window.cwd = "/tmp/project"
+        capture = MagicMock()
+        capture.text = "• Working (12s • esc to interrupt)"
+        capture.missing = False
+
+        with (
+            patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
+            patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+            patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
+            patch(
+                "telegram_codex_bot.bot.enqueue_status_update", new_callable=AsyncMock
+            ),
+            patch(
+                "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
+            ) as safe_reply,
+            patch(
+                "telegram_codex_bot.bot.capture_agent_output",
+                new_callable=AsyncMock,
+                return_value=capture,
+            ),
+            patch(
+                "telegram_codex_bot.bot._send_control_to_agent",
+                new_callable=AsyncMock,
+                return_value=(True, ""),
+            ) as send_control,
+            patch(
+                "telegram_codex_bot.bot._send_to_window_when_codex_ready",
+                new_callable=AsyncMock,
+                return_value=(True, "Sent"),
+            ) as send_when_ready,
+            patch(
+                "telegram_codex_bot.bot._send_message_to_agent",
+                new_callable=AsyncMock,
+            ) as send_message,
+            patch(
+                "telegram_codex_bot.bot._refresh_session_map_after_first_prompt",
+                new_callable=AsyncMock,
+            ),
+            patch("telegram_codex_bot.bot.mark_window_working", new_callable=AsyncMock),
+            patch("telegram_codex_bot.bot._cancel_bash_capture"),
+            patch("telegram_codex_bot.bot.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            mock_sm.resolve_window_for_thread.return_value = "@1"
+            mock_sm.resolve_target_for_thread.return_value = AgentTarget(
+                "local",
+                "local",
+                window_id="@1",
+            )
+            mock_sm.window_has_usage_limit_exceeded = AsyncMock(return_value=False)
+            mock_tmux.find_window_by_id = AsyncMock(return_value=fake_window)
+
+            from telegram_codex_bot.bot import interrupt_command
+
+            await interrupt_command(update, context)
+
+        send_control.assert_awaited_once_with(12345, 42, "@1", "Escape")
+        send_when_ready.assert_awaited_once_with(
+            12345,
+            42,
+            "@1",
+            "interrupt me",
+            timeout=15.0,
+            interval=0.25,
+        )
+        send_message.assert_not_awaited()
+        safe_reply.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_interrupt_command_without_payload_sends_escape(self):
+        update = _make_text_update("/interrupt")
+        context = _make_context()
+
+        with (
+            patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
+            patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+            patch(
+                "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
+            ) as safe_reply,
+            patch(
+                "telegram_codex_bot.bot.send_agent_control",
+                new_callable=AsyncMock,
+            ) as send_control,
+        ):
+            mock_sm.resolve_window_for_thread.return_value = "@1"
+            mock_sm.resolve_target_for_thread.return_value = AgentTarget(
+                "local",
+                "local",
+                window_id="@1",
+            )
+            send_control.return_value = MagicMock(ok=True, missing=False, message="")
+
+            from telegram_codex_bot.bot import interrupt_command
+
+            await interrupt_command(update, context)
+
+        send_control.assert_awaited_once()
+        safe_reply.assert_awaited_once_with(update.message, "⎋ Sent Escape")
+
+    @pytest.mark.asyncio
     async def test_bound_topic_recovers_missing_window_and_forwards_text(self):
         update = _make_text_update("continue")
         context = _make_context()
