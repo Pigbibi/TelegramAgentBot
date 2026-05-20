@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -8,6 +9,35 @@ from telegram.error import BadRequest
 from telegram_codex_bot.agent_io import CaptureResult
 from telegram_codex_bot.backends.base import AgentTarget
 from telegram_codex_bot.handlers import message_queue
+
+
+def test_status_message_info_persists_for_restart(monkeypatch, tmp_path):
+    """Tracked Working/Thinking bubbles survive process restarts."""
+    status_file = tmp_path / "status_messages.json"
+    monkeypatch.setattr(message_queue, "_STATUS_MESSAGES_FILE", status_file)
+    message_queue._status_msg_info.clear()
+
+    try:
+        message_queue._set_status_info(
+            (1, 42),
+            (321, "@4", "💭 Thinking (0s) · esc to interrupt"),
+        )
+
+        assert json.loads(status_file.read_text()) == {
+            "1:42": {
+                "message_id": 321,
+                "window_id": "@4",
+                "text": "💭 Thinking (0s) · esc to interrupt",
+            }
+        }
+        assert message_queue._load_status_msg_info(status_file) == {
+            (1, 42): (321, "@4", "💭 Thinking (0s) · esc to interrupt")
+        }
+
+        message_queue._pop_status_info((1, 42))
+        assert json.loads(status_file.read_text()) == {}
+    finally:
+        message_queue._status_msg_info.clear()
 
 
 @pytest.mark.asyncio
