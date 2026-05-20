@@ -490,7 +490,7 @@ The window must live inside the configured `telegram-codex-bot` tmux session.
 
 | Path | Description |
 | --- | --- |
-| `$TELEGRAM_CODEX_BOT_DIR/state.json` | Thread bindings, window state, display names, offsets, and hidden closed-session IDs |
+| `$TELEGRAM_CODEX_BOT_DIR/state.json` | Thread bindings/targets, window state, display names, offsets, and hidden closed-session IDs |
 | `$TELEGRAM_CODEX_BOT_DIR/session_map.json` | Hook-generated tmux window ↔ session mappings |
 | `$TELEGRAM_CODEX_BOT_DIR/monitor_state.json` | Monitor byte offsets per session |
 | `$TELEGRAM_CODEX_BOT_DIR/pending_topic_deletions.json` | Deferred topic deletions after local cleanup |

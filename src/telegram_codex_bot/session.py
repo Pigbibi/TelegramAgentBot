@@ -35,6 +35,7 @@ from typing import Any
 import aiofiles
 
 from .account_manager import ACCOUNT_HOME_DIR, list_account_homes
+from .backends.base import AgentTarget
 from .config import config
 from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
@@ -195,6 +196,7 @@ class SessionManager:
     window_states: window_id -> WindowState (session_id, cwd, window_name)
     user_window_offsets: user_id -> {window_id -> byte_offset}
     thread_bindings: user_id -> {thread_id -> window_id}
+    thread_targets: user_id -> {thread_id -> AgentTarget}
     window_display_names: window_id -> window_name (for display)
     group_chat_ids: "user_id:thread_id" -> group chat_id (for supergroup routing)
     """
@@ -202,6 +204,7 @@ class SessionManager:
     window_states: dict[str, WindowState] = field(default_factory=dict)
     user_window_offsets: dict[int, dict[str, int]] = field(default_factory=dict)
     thread_bindings: dict[int, dict[int, str]] = field(default_factory=dict)
+    thread_targets: dict[int, dict[int, AgentTarget]] = field(default_factory=dict)
     # window_id -> display name (window_name)
     window_display_names: dict[str, str] = field(default_factory=dict)
     # "user_id:thread_id" -> group chat_id (for supergroup forum topic routing)
@@ -221,6 +224,42 @@ class SessionManager:
     def __post_init__(self) -> None:
         self._load_state()
 
+    @staticmethod
+    def _target_to_dict(target: AgentTarget) -> dict[str, str]:
+        data: dict[str, str] = {
+            "backend_id": target.backend_id,
+            "node_id": target.node_id,
+        }
+        if target.session_id:
+            data["session_id"] = target.session_id
+        if target.window_id:
+            data["window_id"] = target.window_id
+        return data
+
+    @staticmethod
+    def _target_from_dict(data: Any) -> AgentTarget | None:
+        if not isinstance(data, dict):
+            return None
+        backend_id = str(data.get("backend_id") or "").strip()
+        node_id = str(data.get("node_id") or "").strip()
+        if not backend_id or not node_id:
+            return None
+        return AgentTarget(
+            backend_id=backend_id,
+            node_id=node_id,
+            session_id=str(data.get("session_id") or ""),
+            window_id=str(data.get("window_id") or ""),
+        )
+
+    @staticmethod
+    def _local_target(window_id: str, *, session_id: str = "") -> AgentTarget:
+        return AgentTarget(
+            backend_id="local",
+            node_id="local",
+            session_id=session_id,
+            window_id=window_id,
+        )
+
     def _save_state(self) -> None:
         state: dict[str, Any] = {
             "window_states": {k: v.to_dict() for k, v in self.window_states.items()},
@@ -230,6 +269,13 @@ class SessionManager:
             "thread_bindings": {
                 str(uid): {str(tid): wid for tid, wid in bindings.items()}
                 for uid, bindings in self.thread_bindings.items()
+            },
+            "thread_targets": {
+                str(uid): {
+                    str(tid): self._target_to_dict(target)
+                    for tid, target in targets.items()
+                }
+                for uid, targets in self.thread_targets.items()
             },
             "window_display_names": self.window_display_names,
             "group_chat_ids": self.group_chat_ids,
@@ -264,6 +310,15 @@ class SessionManager:
                     int(uid): {int(tid): wid for tid, wid in bindings.items()}
                     for uid, bindings in state.get("thread_bindings", {}).items()
                 }
+                self.thread_targets = {}
+                for uid, targets in state.get("thread_targets", {}).items():
+                    parsed_targets: dict[int, AgentTarget] = {}
+                    for tid, target_data in targets.items():
+                        target = self._target_from_dict(target_data)
+                        if target is not None:
+                            parsed_targets[int(tid)] = target
+                    if parsed_targets:
+                        self.thread_targets[int(uid)] = parsed_targets
                 self.window_display_names = state.get("window_display_names", {})
                 self.group_chat_ids = {
                     k: int(v) for k, v in state.get("group_chat_ids", {}).items()
@@ -306,6 +361,7 @@ class SessionManager:
                 self.window_states = {}
                 self.user_window_offsets = {}
                 self.thread_bindings = {}
+                self.thread_targets = {}
                 self.window_display_names = {}
                 self.group_chat_ids = {}
                 self.hidden_session_ids = set()
@@ -335,6 +391,12 @@ class SessionManager:
             for wid in bindings.values()
             if self._is_window_id(wid)
         }
+        bound_window_ids.update(
+            target.window_id
+            for targets in self.thread_targets.values()
+            for target in targets.values()
+            if target.backend_id == "local" and self._is_window_id(target.window_id)
+        )
 
         def is_recoverable_missing_window(window_id: str) -> bool:
             state = self.window_states.get(window_id)
@@ -463,6 +525,73 @@ class SessionManager:
         for uid in empty_users:
             del self.thread_bindings[uid]
 
+        # --- Migrate local thread_targets while keeping non-local targets intact ---
+        for uid, targets in list(self.thread_targets.items()):
+            new_targets: dict[int, AgentTarget] = {}
+            for tid, target in targets.items():
+                if target.backend_id != "local":
+                    new_targets[tid] = target
+                    continue
+
+                window_id = target.window_id
+                if self._is_window_id(window_id):
+                    if window_id in live_ids:
+                        new_targets[tid] = target
+                    else:
+                        display = self.window_display_names.get(window_id, window_id)
+                        new_id = live_by_name.get(display)
+                        if new_id:
+                            logger.info(
+                                "Re-resolved thread target %s -> %s (name=%s)",
+                                window_id,
+                                new_id,
+                                display,
+                            )
+                            new_targets[tid] = AgentTarget(
+                                backend_id=target.backend_id,
+                                node_id=target.node_id,
+                                session_id=target.session_id,
+                                window_id=new_id,
+                            )
+                            self.window_display_names[new_id] = display
+                            changed = True
+                        elif (
+                            window_id in new_window_states
+                            and is_recoverable_missing_window(window_id)
+                        ):
+                            new_targets[tid] = target
+                        else:
+                            logger.info(
+                                "Dropping stale thread target: user=%d, thread=%d, wid=%s",
+                                uid,
+                                tid,
+                                window_id,
+                            )
+                            changed = True
+                else:
+                    new_id = live_by_name.get(window_id)
+                    if new_id:
+                        new_targets[tid] = AgentTarget(
+                            backend_id=target.backend_id,
+                            node_id=target.node_id,
+                            session_id=target.session_id,
+                            window_id=new_id,
+                        )
+                        self.window_display_names[new_id] = window_id
+                        changed = True
+                    else:
+                        logger.info(
+                            "Dropping old-format thread target: user=%d, thread=%d, name=%s",
+                            uid,
+                            tid,
+                            window_id,
+                        )
+                        changed = True
+            if new_targets:
+                self.thread_targets[uid] = new_targets
+            else:
+                del self.thread_targets[uid]
+
         # --- Prune display names and chat mappings that no longer have live state ---
         valid_window_ids = set(self.window_states)
         stale_display_ids = [
@@ -480,6 +609,11 @@ class SessionManager:
             for uid, bindings in self.thread_bindings.items()
             for tid in bindings
         }
+        valid_thread_keys.update(
+            f"{uid}:{tid}"
+            for uid, targets in self.thread_targets.items()
+            for tid in targets
+        )
         stale_chat_keys = [
             key for key in self.group_chat_ids if key not in valid_thread_keys
         ]
@@ -1085,6 +1219,22 @@ class SessionManager:
         for user_id in empty_binding_users:
             del self.thread_bindings[user_id]
 
+        empty_target_users: list[int] = []
+        for user_id, targets in self.thread_targets.items():
+            stale_thread_ids = [
+                thread_id
+                for thread_id, target in targets.items()
+                if target.backend_id == "local" and target.window_id == window_id
+            ]
+            for thread_id in stale_thread_ids:
+                del targets[thread_id]
+                changed = True
+            if not targets:
+                empty_target_users.append(user_id)
+
+        for user_id in empty_target_users:
+            del self.thread_targets[user_id]
+
         if changed:
             self._save_state()
             logger.info("Removed persisted window state for window_id %s", window_id)
@@ -1450,7 +1600,13 @@ class SessionManager:
         if user_id not in self.thread_bindings:
             self.thread_bindings[user_id] = {}
         self.thread_bindings[user_id][thread_id] = window_id
+        if user_id not in self.thread_targets:
+            self.thread_targets[user_id] = {}
         state = self.window_states.get(window_id)
+        self.thread_targets[user_id][thread_id] = self._local_target(
+            window_id,
+            session_id=state.session_id if state else "",
+        )
         if state and state.session_id:
             canonical_id = _canonical_session_id(state.session_id)
             if canonical_id:
@@ -1470,16 +1626,27 @@ class SessionManager:
     def unbind_thread(self, user_id: int, thread_id: int) -> str | None:
         """Remove a thread binding. Returns the previously bound window_id, or None."""
         bindings = self.thread_bindings.get(user_id)
+        targets = self.thread_targets.get(user_id)
+        target = targets.get(thread_id) if targets else None
         if not bindings or thread_id not in bindings:
+            if targets and thread_id in targets:
+                del targets[thread_id]
+                if not targets:
+                    del self.thread_targets[user_id]
+                self._save_state()
             return None
         window_id = bindings.pop(thread_id)
         if not bindings:
             del self.thread_bindings[user_id]
+        if targets and thread_id in targets:
+            del targets[thread_id]
+            if not targets:
+                del self.thread_targets[user_id]
         self._save_state()
         logger.info(
             "Unbound thread %d (was %s) for user %d",
             thread_id,
-            window_id,
+            target.window_id if target and target.window_id else window_id,
             user_id,
         )
         return window_id
@@ -1490,6 +1657,83 @@ class SessionManager:
         if not bindings:
             return None
         return bindings.get(thread_id)
+
+    def bind_thread_target(
+        self,
+        user_id: int,
+        thread_id: int,
+        target: AgentTarget,
+        *,
+        window_name: str = "",
+    ) -> None:
+        """Bind a Telegram topic thread to an agent target.
+
+        Local targets are dual-written to the legacy window_id binding so
+        existing handlers and rollback paths keep working during migration.
+        """
+        if user_id not in self.thread_targets:
+            self.thread_targets[user_id] = {}
+        self.thread_targets[user_id][thread_id] = target
+
+        if target.backend_id == "local" and target.window_id:
+            if user_id not in self.thread_bindings:
+                self.thread_bindings[user_id] = {}
+            self.thread_bindings[user_id][thread_id] = target.window_id
+            state = self.window_states.get(target.window_id)
+            session_id = target.session_id or (state.session_id if state else "")
+            canonical_id = _canonical_session_id(session_id)
+            if canonical_id:
+                self.topic_managed_session_ids.add(canonical_id)
+            if window_name:
+                self.window_display_names[target.window_id] = window_name
+        else:
+            bindings = self.thread_bindings.get(user_id)
+            if bindings and thread_id in bindings:
+                del bindings[thread_id]
+                if not bindings:
+                    del self.thread_bindings[user_id]
+        self._save_state()
+        logger.info(
+            "Bound thread %d -> target %s/%s (window=%s) for user %d",
+            thread_id,
+            target.backend_id,
+            target.node_id,
+            target.window_id,
+            user_id,
+        )
+
+    def get_target_for_thread(
+        self,
+        user_id: int,
+        thread_id: int,
+    ) -> AgentTarget | None:
+        """Look up the backend target bound to a thread.
+
+        Falls back to the legacy local window binding without persisting a new
+        shape. This keeps old state readable and rollback-safe.
+        """
+        targets = self.thread_targets.get(user_id)
+        if targets and thread_id in targets:
+            return targets[thread_id]
+
+        window_id = self.get_window_for_thread(user_id, thread_id)
+        if not window_id:
+            return None
+        state = self.window_states.get(window_id)
+        return self._local_target(
+            window_id,
+            session_id=state.session_id if state else "",
+        )
+
+    def resolve_target_for_thread(
+        self,
+        user_id: int,
+        thread_id: int | None,
+    ) -> AgentTarget | None:
+        """Resolve the backend target for a user's thread."""
+        if thread_id is None:
+            return None
+        return self.get_target_for_thread(user_id, thread_id)
 
     def resolve_window_for_thread(
         self,
