@@ -9,6 +9,7 @@ import pytest
 
 from telegram_codex_bot.config import config
 from telegram_codex_bot import session as session_module
+from telegram_codex_bot.backends.base import AgentTarget
 from telegram_codex_bot.session import SessionManager
 
 
@@ -24,11 +25,70 @@ class TestThreadBindings:
     def test_bind_and_get(self, mgr: SessionManager) -> None:
         mgr.bind_thread(100, 1, "@1")
         assert mgr.get_window_for_thread(100, 1) == "@1"
+        assert mgr.get_target_for_thread(100, 1) == AgentTarget(
+            backend_id="local",
+            node_id="local",
+            window_id="@1",
+        )
+
+    def test_get_target_falls_back_to_legacy_window_binding(
+        self, mgr: SessionManager
+    ) -> None:
+        mgr.thread_bindings = {100: {1: "@1"}}
+        mgr.get_window_state("@1").session_id = "sid-1"
+
+        assert mgr.get_target_for_thread(100, 1) == AgentTarget(
+            backend_id="local",
+            node_id="local",
+            session_id="sid-1",
+            window_id="@1",
+        )
+
+    def test_bind_thread_target_dual_writes_local_window_binding(
+        self, mgr: SessionManager
+    ) -> None:
+        target = AgentTarget(
+            backend_id="local",
+            node_id="local",
+            session_id="sid-1",
+            window_id="@1",
+        )
+
+        mgr.bind_thread_target(100, 1, target, window_name="Project")
+
+        assert mgr.get_window_for_thread(100, 1) == "@1"
+        assert mgr.get_target_for_thread(100, 1) == target
+        assert mgr.window_display_names["@1"] == "Project"
+
+    def test_bind_thread_target_keeps_remote_target_without_legacy_window(
+        self, mgr: SessionManager
+    ) -> None:
+        mgr.bind_thread(100, 1, "@1")
+        target = AgentTarget(
+            backend_id="cluster",
+            node_id="macbook",
+            session_id="remote-session",
+        )
+
+        mgr.bind_thread_target(100, 1, target)
+
+        assert mgr.get_window_for_thread(100, 1) is None
+        assert mgr.get_target_for_thread(100, 1) == target
+        assert mgr.resolve_target_for_thread(100, 1) == target
 
     def test_bind_unbind_get_returns_none(self, mgr: SessionManager) -> None:
         mgr.bind_thread(100, 1, "@1")
         mgr.unbind_thread(100, 1)
         assert mgr.get_window_for_thread(100, 1) is None
+        assert mgr.get_target_for_thread(100, 1) is None
+
+    def test_unbind_remote_target_clears_target(self, mgr: SessionManager) -> None:
+        target = AgentTarget(backend_id="cluster", node_id="macbook")
+        mgr.bind_thread_target(100, 1, target)
+
+        assert mgr.unbind_thread(100, 1) is None
+
+        assert mgr.get_target_for_thread(100, 1) is None
 
     def test_unbind_nonexistent_returns_none(self, mgr: SessionManager) -> None:
         assert mgr.unbind_thread(100, 999) is None
@@ -57,6 +117,36 @@ class TestThreadBindings:
         mgr.bind_thread(100, 1, "@1")
 
         assert "sid-1" in mgr.topic_managed_session_ids
+
+    def test_load_state_reads_thread_targets(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        state_file = tmp_path / "state.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "thread_targets": {
+                        "100": {
+                            "1": {
+                                "backend_id": "cluster",
+                                "node_id": "macbook",
+                                "session_id": "sid-1",
+                            }
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(config, "state_file", state_file)
+
+        loaded = SessionManager()
+
+        assert loaded.get_target_for_thread(100, 1) == AgentTarget(
+            backend_id="cluster",
+            node_id="macbook",
+            session_id="sid-1",
+        )
 
 
 class TestSendToWindow:
@@ -303,6 +393,16 @@ class TestWindowState:
         state.session_id = "abc"
         mgr.clear_window_session("@1")
         assert mgr.get_window_state("@1").session_id == ""
+
+    def test_remove_window_state_clears_local_thread_targets(
+        self, mgr: SessionManager
+    ) -> None:
+        mgr.bind_thread(100, 1, "@1")
+
+        mgr.remove_window_state("@1")
+
+        assert mgr.get_window_for_thread(100, 1) is None
+        assert mgr.get_target_for_thread(100, 1) is None
 
     def test_prepare_window_launch_sets_account_and_clears_quota_flag(
         self, mgr: SessionManager
