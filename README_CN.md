@@ -263,6 +263,9 @@ TELEGRAM_CODEX_BOT_BACKEND=cluster
 TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=my_cluster_backend
 ```
 
+真正的中心 bot / agent 节点插件设计记录在
+`docs/agent_backend_plugins.md`。
+
 核心 backend 接口覆盖这些操作：`prepare()`、`start(message_callback)`、
 `stop()`、`create_session()`、`send_message()`、`send_control()`、`capture()`。
 默认 `local` backend 会把这些操作转给现有 tmux、session manager 和 transcript monitor。

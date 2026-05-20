@@ -264,6 +264,9 @@ Optional backends can be loaded as plugins. A plugin can expose a backend
 through the `telegram_codex_bot.backends` entry point group, or through a module
 listed in `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS`.
 
+Design notes for a real center-bot / agent-node plugin live in
+`docs/agent_backend_plugins.md`.
+
 ```ini
 TELEGRAM_CODEX_BOT_BACKEND=local
 ```
