@@ -210,6 +210,31 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(pending)
 
+    def test_pane_pending_literal_input_detects_wrapped_chinese_input(self) -> None:
+        manager = tmux_manager_module.TmuxManager(
+            session_name="telegram-codex-bot-test"
+        )
+        prompt = "本机有个first trade的对话窗口也有不回复的问题，都一起处理掉"
+        capture = (
+            "previous transcript\n"
+            "› 本机有个first trade的对话窗口也有不回复的问题，都一起处理\n"
+            "  掉\n"
+            "\n"
+            "  gpt-5.5 xhigh · ~/Projects\n"
+        )
+
+        with patch(
+            "telegram_codex_bot.tmux_manager.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["tmux", "capture-pane"],
+                returncode=0,
+                stdout=capture,
+            ),
+        ):
+            pending = manager._pane_still_has_pending_literal_input("@9", prompt)
+
+        self.assertTrue(pending)
+
     def test_pane_pending_literal_input_ignores_submitted_transcript(self) -> None:
         manager = tmux_manager_module.TmuxManager(
             session_name="telegram-codex-bot-test"

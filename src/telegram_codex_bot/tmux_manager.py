@@ -107,13 +107,49 @@ class TmuxManager:
         return min(max(0.5, 0.5 + char_delay + line_delay), 5.0)
 
     @staticmethod
-    def _first_prompt_fragment(text: str) -> str:
-        """Return a short fragment suitable for checking pending TUI input."""
+    def _prompt_fragments(text: str) -> list[str]:
+        """Return short fragments suitable for checking pending TUI input."""
+        fragments: list[str] = []
         for line in text.splitlines():
-            fragment = line.strip()
-            if fragment:
-                return fragment[:40]
-        return text.strip()[:40]
+            fragment = " ".join(line.strip().split())
+            if not fragment:
+                continue
+            if len(fragment) <= 16:
+                fragments.append(fragment)
+            else:
+                fragments.append(fragment[:24])
+                fragments.append(fragment[:16])
+            if len(fragments) >= 6:
+                break
+
+        if not fragments:
+            fallback = " ".join(text.strip().split())
+            if fallback:
+                fragments.append(fallback[:24])
+
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for fragment in fragments:
+            if len(fragment) < 4:
+                continue
+            if fragment not in seen:
+                seen.add(fragment)
+                deduped.append(fragment)
+        return deduped
+
+    @staticmethod
+    def _input_candidate_lines(tail_lines: list[str]) -> list[str]:
+        """Return the pane tail lines most likely to contain the active input row."""
+        footer_index: int | None = None
+        for index in range(len(tail_lines) - 1, -1, -1):
+            stripped = tail_lines[index].strip()
+            if "· ~" in stripped or re.search(r"\bgpt-[\w.]+", stripped):
+                footer_index = index
+                break
+
+        if footer_index is not None:
+            return tail_lines[max(0, footer_index - 10) : footer_index]
+        return tail_lines[-12:]
 
     def get_session(self) -> libtmux.Session | None:
         """Get the tmux session if it exists."""
@@ -234,9 +270,9 @@ class TmuxManager:
 
     def _pane_still_has_pending_literal_input(self, window_id: str, text: str) -> bool:
         """Return True if the pasted prompt still appears in Codex's input row."""
-        fragment = self._first_prompt_fragment(text)
+        fragments = self._prompt_fragments(text)
         may_render_as_folded_paste = len(text) > 1000 or "\n" in text
-        if not fragment and not may_render_as_folded_paste:
+        if not fragments and not may_render_as_folded_paste:
             return False
 
         pane_text = self._capture_pane_tail(window_id, start=-30)
@@ -247,11 +283,20 @@ class TmuxManager:
         if any(_ACTIVE_WORKING_RE.search(line.strip()) for line in tail_lines):
             return False
 
-        for line in tail_lines:
+        input_seen = False
+        for line in self._input_candidate_lines(tail_lines):
             stripped = line.strip()
-            if stripped.startswith("›") and fragment in stripped:
-                return True
-            if may_render_as_folded_paste and _FOLDED_PASTE_INPUT_RE.match(stripped):
+            is_input_start = stripped.startswith(("›", "❯"))
+            is_input_continuation = input_seen and line[:1].isspace()
+            if is_input_start:
+                input_seen = True
+                if may_render_as_folded_paste and _FOLDED_PASTE_INPUT_RE.match(
+                    stripped
+                ):
+                    return True
+            if (is_input_start or is_input_continuation) and any(
+                fragment in stripped for fragment in fragments
+            ):
                 return True
         return False
 
@@ -551,7 +596,7 @@ class TmuxManager:
                 await asyncio.sleep(0.2)
             if not await asyncio.to_thread(_send_control_key, "Enter"):
                 return False
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.5)
             if await asyncio.to_thread(
                 self._pane_still_has_pending_literal_input,
                 window_id,
@@ -570,7 +615,7 @@ class TmuxManager:
                     await asyncio.sleep(0.2)
                 if not await asyncio.to_thread(_send_control_key, "Enter"):
                     return False
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(0.5)
                 if await asyncio.to_thread(
                     self._pane_still_has_pending_literal_input,
                     window_id,
