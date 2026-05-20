@@ -572,7 +572,17 @@ async def _convert_status_to_content(
             raise
         except Exception as e:
             logger.debug(f"Failed to convert status to content: {e}")
-            # Message might be deleted or too old, caller will send new message
+            # The caller will send content as a fresh message. Delete the old
+            # status bubble so it does not remain above the content while a new
+            # Working bubble is sent below it.
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception as delete_exc:
+                logger.debug(
+                    "Failed to delete unconverted status message %s: %s",
+                    msg_id,
+                    delete_exc,
+                )
             return None
 
 

@@ -206,6 +206,44 @@ async def test_status_message_not_modified_keeps_existing_status(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_failed_status_to_content_conversion_deletes_old_status(monkeypatch):
+    """A failed status conversion must not leave a stale Thinking bubble."""
+    message_queue._status_msg_info.clear()
+
+    bot = AsyncMock()
+    bot.edit_message_text.side_effect = [
+        BadRequest("Can't parse entities"),
+        BadRequest("Message text is empty"),
+    ]
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+
+    message_queue._status_msg_info[(1, 42)] = (
+        321,
+        "@4",
+        "💭 Thinking (4m 28s) · esc to interrupt",
+    )
+
+    try:
+        converted = await message_queue._convert_status_to_content(
+            bot,
+            1,
+            42,
+            "@4",
+            "final content",
+        )
+
+        assert converted is None
+        bot.delete_message.assert_awaited_once_with(chat_id=-100123, message_id=321)
+        assert (1, 42) not in message_queue._status_msg_info
+    finally:
+        message_queue._status_msg_info.clear()
+
+
+@pytest.mark.asyncio
 async def test_status_update_preserves_pending_clear():
     """A fresh Working bubble must not reuse an old bubble above the user."""
     queue: asyncio.Queue[message_queue.MessageTask] = asyncio.Queue()
