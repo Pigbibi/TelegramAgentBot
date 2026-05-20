@@ -16,10 +16,12 @@ Key components:
 
 import os
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from ..backends.browser import BrowserRoot, DirectoryListing
 from ..session import CodexSession
 
 from ..config import ProjectRoot, config
@@ -47,10 +49,12 @@ STATE_KEY = "state"
 STATE_SELECTING_ROOT = "selecting_root"
 STATE_BROWSING_DIRECTORY = "browsing_directory"
 STATE_SELECTING_WINDOW = "selecting_window"
-ROOTS_KEY = "project_roots"  # Cache of (label, path) tuples
+ROOTS_KEY = "project_roots"  # Cache of root tuples
 BROWSE_PATH_KEY = "browse_path"
 BROWSE_ROOT_LABEL_KEY = "browse_root_label"
 BROWSE_ROOT_PATH_KEY = "browse_root_path"
+BROWSE_BACKEND_ID_KEY = "browse_backend_id"
+BROWSE_NODE_ID_KEY = "browse_node_id"
 BROWSE_PAGE_KEY = "browse_page"
 BROWSE_DIRS_KEY = "browse_dirs"  # Cache of subdirs for current path
 UNBOUND_WINDOWS_KEY = "unbound_windows"  # Cache of (name, cwd) tuples
@@ -66,6 +70,8 @@ def clear_browse_state(user_data: dict | None) -> None:
         user_data.pop(BROWSE_PATH_KEY, None)
         user_data.pop(BROWSE_ROOT_LABEL_KEY, None)
         user_data.pop(BROWSE_ROOT_PATH_KEY, None)
+        user_data.pop(BROWSE_BACKEND_ID_KEY, None)
+        user_data.pop(BROWSE_NODE_ID_KEY, None)
         user_data.pop(BROWSE_PAGE_KEY, None)
         user_data.pop(BROWSE_DIRS_KEY, None)
 
@@ -102,6 +108,25 @@ def build_project_root_picker(
     Returns: (text, keyboard, cached_roots).
     """
     cached_roots = [(root.label, str(root.path)) for root in roots]
+    text, keyboard = _build_root_picker_text_and_keyboard(roots)
+    return text, keyboard, cached_roots
+
+
+def build_backend_root_picker(
+    roots: list[BrowserRoot],
+) -> tuple[str, InlineKeyboardMarkup, list[tuple[str, str, str, str]]]:
+    """Build root picker UI for backend-provided roots."""
+    cached_roots = [
+        (root.label, root.path, root.backend_id, root.node_id) for root in roots
+    ]
+    text, keyboard = _build_root_picker_text_and_keyboard(roots)
+    return text, keyboard, cached_roots
+
+
+def _build_root_picker_text_and_keyboard(
+    roots: Sequence[ProjectRoot | BrowserRoot],
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build common root picker text and buttons."""
     lines = [
         "*Select Computer / VPS*\n",
         "Pick where this new Codex session should start.\n",
@@ -121,7 +146,7 @@ def build_project_root_picker(
         )
 
     buttons.append([InlineKeyboardButton("Cancel", callback_data=CB_ROOT_CANCEL)])
-    return "\n".join(lines), InlineKeyboardMarkup(buttons), cached_roots
+    return "\n".join(lines), InlineKeyboardMarkup(buttons)
 
 
 def build_window_picker(
@@ -218,6 +243,23 @@ def build_directory_browser(
     except (PermissionError, OSError):
         subdirs = []
 
+    listing = DirectoryListing(
+        path=str(path),
+        subdirs=subdirs,
+        root_label=root_label or "",
+        root_path=str(root) if root else root_path or "",
+        can_go_up=path != path.parent and (root is None or path != root),
+    )
+    return build_directory_browser_from_listing(listing, page=page)
+
+
+def build_directory_browser_from_listing(
+    listing: DirectoryListing,
+    page: int = 0,
+) -> tuple[str, InlineKeyboardMarkup, list[str]]:
+    """Build directory browser UI from a backend-provided listing."""
+
+    subdirs = listing.subdirs
     total_pages = max(1, (len(subdirs) + DIRS_PER_PAGE - 1) // DIRS_PER_PAGE)
     page = max(0, min(page, total_pages - 1))
     start = page * DIRS_PER_PAGE
@@ -253,22 +295,17 @@ def build_directory_browser(
         buttons.append(nav)
 
     action_row: list[InlineKeyboardButton] = []
-    # Allow going up unless at filesystem root
-    if path != path.parent and (root is None or path != root):
+    if listing.can_go_up:
         action_row.append(InlineKeyboardButton("..", callback_data=CB_DIR_UP))
     action_row.append(InlineKeyboardButton("Select", callback_data=CB_DIR_CONFIRM))
     action_row.append(InlineKeyboardButton("Cancel", callback_data=CB_DIR_CANCEL))
     buttons.append(action_row)
 
-    display_path = str(path).replace(str(Path.home()), "~")
+    display_path = listing.path.replace(str(Path.home()), "~")
     root_line = ""
-    if root_label:
-        display_root = (
-            str(root or Path(root_path or "")).replace(str(Path.home()), "~")
-            if root_path
-            else ""
-        )
-        root_line = f"Root: `{root_label}`"
+    if listing.root_label:
+        display_root = listing.root_path.replace(str(Path.home()), "~")
+        root_line = f"Root: `{listing.root_label}`"
         if display_root:
             root_line += f" — {display_root}"
         root_line += "\n"

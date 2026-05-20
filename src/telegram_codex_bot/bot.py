@@ -36,9 +36,10 @@ import asyncio
 import io
 import json
 import logging
+import posixpath
 import time
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 from telegram import (
     Bot,
@@ -74,6 +75,7 @@ from .agent_io import (
     send_agent_message,
 )
 from .backends.base import AgentBackend, AgentTarget
+from .backends.browser import AgentBrowser, DirectoryListing
 from .backends.registry import get_configured_backend
 from .config import config
 from .handlers.callback_data import (
@@ -105,7 +107,9 @@ from .handlers.callback_data import (
     CB_WIN_NEW,
 )
 from .handlers.directory_browser import (
+    BROWSE_BACKEND_ID_KEY,
     BROWSE_DIRS_KEY,
+    BROWSE_NODE_ID_KEY,
     BROWSE_PAGE_KEY,
     BROWSE_PATH_KEY,
     BROWSE_ROOT_LABEL_KEY,
@@ -118,7 +122,9 @@ from .handlers.directory_browser import (
     STATE_SELECTING_SESSION,
     STATE_SELECTING_WINDOW,
     UNBOUND_WINDOWS_KEY,
+    build_backend_root_picker,
     build_directory_browser,
+    build_directory_browser_from_listing,
     build_project_root_picker,
     build_session_picker,
     build_window_picker,
@@ -235,6 +241,13 @@ class _DirectoryBrowserKwargs(TypedDict, total=False):
     root_path: str
 
 
+class _RootSelection(TypedDict):
+    label: str
+    path: str
+    backend_id: str
+    node_id: str
+
+
 def _default_directory_browser_path(root_path: str | None = None) -> str:
     """Choose a generic starting directory for the project browser."""
     if root_path:
@@ -270,6 +283,145 @@ def _directory_browser_kwargs(user_data: dict | None) -> _DirectoryBrowserKwargs
     return kwargs
 
 
+def _browse_backend_context(user_data: dict | None) -> tuple[str, str]:
+    """Return selected backend/node for a remote directory browser."""
+    if not user_data:
+        return "", ""
+    backend_id = user_data.get(BROWSE_BACKEND_ID_KEY)
+    node_id = user_data.get(BROWSE_NODE_ID_KEY)
+    return (
+        backend_id if isinstance(backend_id, str) else "",
+        node_id if isinstance(node_id, str) else "",
+    )
+
+
+def _as_browser(backend: AgentBackend | None) -> AgentBrowser | None:
+    """Return backend as AgentBrowser when it exposes the optional methods."""
+    if backend is None:
+        return None
+    required = ("list_roots", "list_directory", "list_sessions")
+    if not all(callable(getattr(backend, attr, None)) for attr in required):
+        return None
+    return cast(AgentBrowser, backend)
+
+
+def _active_remote_root_browser() -> AgentBrowser | None:
+    """Return the configured non-local backend browser for root selection."""
+    backend = agent_backend
+    if backend is None:
+        return None
+    try:
+        info = backend.info()
+    except Exception:
+        logger.exception("Unable to read backend info for root browser")
+        return None
+    if backend.backend_id == "local" or info.mode == "local":
+        return None
+    return _as_browser(backend)
+
+
+def _browser_for_backend_id(backend_id: str) -> AgentBrowser | None:
+    """Return the active backend browser matching a cached root selection."""
+    if not backend_id:
+        return None
+    backend = agent_backend or get_configured_backend()
+    if backend.backend_id != backend_id:
+        return None
+    return _as_browser(backend)
+
+
+def _parse_root_selection(entry: object) -> _RootSelection | None:
+    """Parse cached root tuples from old local or new backend root pickers."""
+    if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+        return None
+    label, path = entry[0], entry[1]
+    if not isinstance(label, str) or not isinstance(path, str):
+        return None
+    backend_id = entry[2] if len(entry) > 2 and isinstance(entry[2], str) else ""
+    node_id = entry[3] if len(entry) > 3 and isinstance(entry[3], str) else ""
+    return {
+        "label": label,
+        "path": path,
+        "backend_id": backend_id,
+        "node_id": node_id,
+    }
+
+
+def _remote_child_path(current_path: str, subdir_name: str) -> str:
+    """Join one path segment for a backend node using POSIX-like paths."""
+    current = current_path.rstrip("/") or "/"
+    return posixpath.normpath(posixpath.join(current, subdir_name))
+
+
+def _remote_parent_path(current_path: str, root_path: str | None) -> str:
+    """Move one level up for a backend node while respecting selected root."""
+    current = current_path.rstrip("/") or "/"
+    root = root_path.rstrip("/") if root_path else ""
+    if root and current == root:
+        return root_path or root
+
+    parent = posixpath.dirname(current) or "/"
+    if root and not (parent == root or parent.startswith(root + "/")):
+        return root_path or root
+    return parent
+
+
+def _directory_listing_with_root(
+    listing: DirectoryListing,
+    *,
+    root_label: str | None,
+    root_path: str | None,
+) -> DirectoryListing:
+    """Fill root metadata when a backend leaves it blank."""
+    if listing.root_label or not root_label:
+        return listing
+    return DirectoryListing(
+        path=listing.path,
+        subdirs=listing.subdirs,
+        root_label=root_label,
+        root_path=listing.root_path or root_path or "",
+        can_go_up=listing.can_go_up,
+        error=listing.error,
+    )
+
+
+async def _build_backend_directory_browser(
+    *,
+    backend_id: str,
+    node_id: str,
+    path: str,
+    page: int = 0,
+    root_label: str | None = None,
+    root_path: str | None = None,
+) -> tuple[str, InlineKeyboardMarkup, list[str], str] | None:
+    """Build directory browser UI through an optional remote backend."""
+    browser = _browser_for_backend_id(backend_id)
+    if browser is None:
+        return None
+    try:
+        listing = await browser.list_directory(
+            node_id,
+            path,
+            root_path=root_path or "",
+        )
+    except Exception:
+        logger.exception(
+            "Backend directory listing failed: backend=%s node=%s path=%s",
+            backend_id,
+            node_id,
+            path,
+        )
+        return None
+
+    listing = _directory_listing_with_root(
+        listing,
+        root_label=root_label,
+        root_path=root_path,
+    )
+    text, keyboard, subdirs = build_directory_browser_from_listing(listing, page=page)
+    return text, keyboard, subdirs, listing.path
+
+
 def _clamp_to_selected_root(path: str, user_data: dict | None) -> str:
     """Keep selected paths inside the configured project root when present."""
     _label, root_path = _browse_root_context(user_data)
@@ -290,6 +442,24 @@ async def _show_root_or_directory_picker(
     edit: bool = False,
 ) -> None:
     """Show the configured root picker or fall through to directory browsing."""
+
+    browser = _active_remote_root_browser()
+    if browser is not None:
+        try:
+            backend_roots = await browser.list_roots()
+        except Exception:
+            logger.exception("Unable to list backend roots")
+            backend_roots = []
+        if backend_roots:
+            msg_text, keyboard, roots = build_backend_root_picker(backend_roots)
+            if context.user_data is not None:
+                context.user_data[STATE_KEY] = STATE_SELECTING_ROOT
+                context.user_data[ROOTS_KEY] = roots
+            if edit:
+                await safe_edit(target, msg_text, reply_markup=keyboard)
+            else:
+                await safe_reply(target, msg_text, reply_markup=keyboard)
+            return
 
     if getattr(config, "project_roots_configured", False):
         msg_text, keyboard, roots = build_project_root_picker(config.project_roots)
@@ -878,16 +1048,20 @@ async def _create_agent_local_window(
 async def _create_agent_target(
     *,
     cwd: str,
+    node_id: str = "",
     window_name: str = "",
     resume_session_id: str = "",
     account_name: str = "",
 ) -> tuple[bool, str, str, str, AgentTarget | None]:
-    result = await create_agent_session(
-        cwd=cwd,
-        window_name=window_name,
-        resume_session_id=resume_session_id,
-        account_name=account_name,
-    )
+    create_kwargs = {
+        "cwd": cwd,
+        "window_name": window_name,
+        "resume_session_id": resume_session_id,
+        "account_name": account_name,
+    }
+    if node_id:
+        create_kwargs["node_id"] = node_id
+    result = await create_agent_session(**create_kwargs)
     target = result.target
     window_id = target.window_id if target else ""
     if result.ok and target is None:
@@ -2038,7 +2212,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 await safe_reply(update.message, f"❌ {message}")
             return
 
-        if getattr(config, "project_roots_configured", False):
+        if getattr(config, "project_roots_configured", False) or (
+            _active_remote_root_browser() is not None
+        ):
             logger.info(
                 "Unbound topic: showing configured project root picker (user=%d, thread=%d)",
                 user.id,
@@ -2206,6 +2382,7 @@ async def _create_and_bind_window(
     pending_thread_id: int | None,
     resume_session_id: str | None = None,
     account_name: str | None = None,
+    node_id: str = "",
     answer_callback: bool = True,
 ) -> None:
     """Create a tmux window, bind it to a topic, and forward pending text.
@@ -2226,6 +2403,7 @@ async def _create_and_bind_window(
         created_target,
     ) = await _create_agent_target(
         cwd=selected_path,
+        node_id=node_id,
         resume_session_id=resume_session_id or "",
         account_name=launch_account or "",
     )
@@ -2538,25 +2716,50 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("Invalid data")
             return
 
-        cached_roots: list[tuple[str, str]] = (
+        cached_roots: list[object] = (
             context.user_data.get(ROOTS_KEY, []) if context.user_data else []
         )
         if idx < 0 or idx >= len(cached_roots):
             await query.answer("Root list changed, please retry", show_alert=True)
             return
 
-        root_label, root_path = cached_roots[idx]
-        start_path = _default_directory_browser_path(root_path)
-        msg_text, keyboard, subdirs = build_directory_browser(
-            start_path,
-            root_label=root_label,
-            root_path=root_path,
-        )
+        root = _parse_root_selection(cached_roots[idx])
+        if root is None:
+            await query.answer("Invalid root data", show_alert=True)
+            return
+
+        root_label = root["label"]
+        root_path = root["path"]
+        backend_id = root["backend_id"]
+        node_id = root["node_id"]
+
+        if backend_id:
+            rendered = await _build_backend_directory_browser(
+                backend_id=backend_id,
+                node_id=node_id,
+                path=root_path,
+                root_label=root_label,
+                root_path=root_path,
+            )
+            if rendered is None:
+                await query.answer("Backend browser unavailable", show_alert=True)
+                return
+            msg_text, keyboard, subdirs, start_path = rendered
+        else:
+            start_path = _default_directory_browser_path(root_path)
+            msg_text, keyboard, subdirs = build_directory_browser(
+                start_path,
+                root_label=root_label,
+                root_path=root_path,
+            )
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
             context.user_data[BROWSE_PATH_KEY] = start_path
             context.user_data[BROWSE_ROOT_LABEL_KEY] = root_label
             context.user_data[BROWSE_ROOT_PATH_KEY] = root_path
+            if backend_id:
+                context.user_data[BROWSE_BACKEND_ID_KEY] = backend_id
+                context.user_data[BROWSE_NODE_ID_KEY] = node_id
             context.user_data[BROWSE_PAGE_KEY] = 0
             context.user_data[BROWSE_DIRS_KEY] = subdirs
             context.user_data.pop(ROOTS_KEY, None)
@@ -2610,6 +2813,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if context.user_data
             else default_path
         )
+        backend_id, node_id = _browse_backend_context(context.user_data)
+        if backend_id:
+            root_label, root_path = _browse_root_context(context.user_data)
+            new_path_str = _remote_child_path(current_path, subdir_name)
+            rendered = await _build_backend_directory_browser(
+                backend_id=backend_id,
+                node_id=node_id,
+                path=new_path_str,
+                root_label=root_label,
+                root_path=root_path,
+            )
+            if rendered is None:
+                await query.answer("Directory not found", show_alert=True)
+                return
+            msg_text, keyboard, subdirs, resolved_path = rendered
+            if context.user_data is not None:
+                context.user_data[BROWSE_PATH_KEY] = resolved_path
+                context.user_data[BROWSE_PAGE_KEY] = 0
+                context.user_data[BROWSE_DIRS_KEY] = subdirs
+            await safe_edit(query, msg_text, reply_markup=keyboard)
+            await query.answer()
+            return
+
         current_path = _clamp_to_selected_root(current_path, context.user_data)
         new_path = (Path(current_path) / subdir_name).resolve()
 
@@ -2644,6 +2870,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if context.user_data
             else default_path
         )
+        backend_id, node_id = _browse_backend_context(context.user_data)
+        if backend_id:
+            root_label, root_path = _browse_root_context(context.user_data)
+            parent_path = _remote_parent_path(current_path, root_path)
+            rendered = await _build_backend_directory_browser(
+                backend_id=backend_id,
+                node_id=node_id,
+                path=parent_path,
+                root_label=root_label,
+                root_path=root_path,
+            )
+            if rendered is None:
+                await query.answer("Directory not found", show_alert=True)
+                return
+            msg_text, keyboard, subdirs, resolved_path = rendered
+            if context.user_data is not None:
+                context.user_data[BROWSE_PATH_KEY] = resolved_path
+                context.user_data[BROWSE_PAGE_KEY] = 0
+                context.user_data[BROWSE_DIRS_KEY] = subdirs
+            await safe_edit(query, msg_text, reply_markup=keyboard)
+            await query.answer()
+            return
+
         current = Path(current_path).resolve()
         parent = current.parent
         parent_path = _clamp_to_selected_root(str(parent), context.user_data)
@@ -2679,6 +2928,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if context.user_data
             else default_path
         )
+        backend_id, node_id = _browse_backend_context(context.user_data)
+        if backend_id:
+            root_label, root_path = _browse_root_context(context.user_data)
+            rendered = await _build_backend_directory_browser(
+                backend_id=backend_id,
+                node_id=node_id,
+                path=current_path,
+                page=pg,
+                root_label=root_label,
+                root_path=root_path,
+            )
+            if rendered is None:
+                await query.answer("Directory list changed", show_alert=True)
+                return
+            msg_text, keyboard, subdirs, resolved_path = rendered
+            if context.user_data is not None:
+                context.user_data[BROWSE_PATH_KEY] = resolved_path
+                context.user_data[BROWSE_PAGE_KEY] = pg
+                context.user_data[BROWSE_DIRS_KEY] = subdirs
+            await safe_edit(query, msg_text, reply_markup=keyboard)
+            await query.answer()
+            return
+
         if context.user_data is not None:
             context.user_data[BROWSE_PAGE_KEY] = pg
 
@@ -2699,7 +2971,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if context.user_data
             else default_path
         )
-        selected_path = _clamp_to_selected_root(selected_path, context.user_data)
+        backend_id, node_id = _browse_backend_context(context.user_data)
+        if not backend_id:
+            selected_path = _clamp_to_selected_root(selected_path, context.user_data)
         # Check if this was initiated from a thread bind flow
         pending_thread_id: int | None = (
             context.user_data.get("_pending_thread_id") if context.user_data else None
@@ -2735,27 +3009,52 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         clear_browse_state(context.user_data)
 
         # Check for existing sessions in this directory
-        sessions = _filter_resumable_sessions(
-            await session_manager.list_sessions_for_directory(selected_path)
-        )
+        if backend_id:
+            browser = _browser_for_backend_id(backend_id)
+            if browser is None:
+                await safe_edit(query, "Backend browser unavailable. Please retry.")
+                return
+            try:
+                sessions = _filter_resumable_sessions(
+                    await browser.list_sessions(node_id, selected_path)
+                )
+            except Exception:
+                logger.exception(
+                    "Backend session lookup failed: backend=%s node=%s path=%s",
+                    backend_id,
+                    node_id,
+                    selected_path,
+                )
+                await safe_edit(query, "Unable to read sessions from backend.")
+                return
+        else:
+            sessions = _filter_resumable_sessions(
+                await session_manager.list_sessions_for_directory(selected_path)
+            )
         if sessions:
             # Show session picker — store state for later
             if context.user_data is not None:
                 context.user_data[STATE_KEY] = STATE_SELECTING_SESSION
                 context.user_data[SESSIONS_KEY] = sessions
                 context.user_data["_selected_path"] = selected_path
+                if backend_id:
+                    context.user_data["_selected_backend_id"] = backend_id
+                    context.user_data["_selected_node_id"] = node_id
             text, keyboard = build_session_picker(sessions)
             await safe_edit(query, text, reply_markup=keyboard)
             return
 
         # No existing sessions — create new window directly
+        create_kwargs: dict[str, Any] = {"answer_callback": not callback_answered}
+        if node_id:
+            create_kwargs["node_id"] = node_id
         await _create_and_bind_window(
             query,
             context,
             user,
             selected_path,
             pending_thread_id,
-            answer_callback=not callback_answered,
+            **create_kwargs,
         )
 
     elif data == CB_DIR_CANCEL:
@@ -2828,17 +3127,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if context.user_data
             else str(Path.cwd())
         )
+        selected_node_id = (
+            context.user_data.get("_selected_node_id", "") if context.user_data else ""
+        )
         clear_session_picker_state(context.user_data)
         if context.user_data is not None:
             context.user_data.pop("_selected_path", None)
+            context.user_data.pop("_selected_backend_id", None)
+            context.user_data.pop("_selected_node_id", None)
 
+        create_kwargs = {"resume_session_id": session.session_id}
+        if selected_node_id:
+            create_kwargs["node_id"] = selected_node_id
         await _create_and_bind_window(
             query,
             context,
             user,
             selected_path,
             pending_tid,
-            resume_session_id=session.session_id,
+            **create_kwargs,
         )
 
     elif data == CB_SESSION_NEW:
@@ -2855,11 +3162,26 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if context.user_data
             else str(Path.cwd())
         )
+        selected_node_id = (
+            context.user_data.get("_selected_node_id", "") if context.user_data else ""
+        )
         clear_session_picker_state(context.user_data)
         if context.user_data is not None:
             context.user_data.pop("_selected_path", None)
+            context.user_data.pop("_selected_backend_id", None)
+            context.user_data.pop("_selected_node_id", None)
 
-        await _create_and_bind_window(query, context, user, selected_path, pending_tid)
+        create_kwargs = {}
+        if selected_node_id:
+            create_kwargs["node_id"] = selected_node_id
+        await _create_and_bind_window(
+            query,
+            context,
+            user,
+            selected_path,
+            pending_tid,
+            **create_kwargs,
+        )
 
     elif data == CB_SESSION_CANCEL:
         pending_tid = (
@@ -2873,6 +3195,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data.pop("_pending_thread_id", None)
             context.user_data.pop("_pending_thread_text", None)
             context.user_data.pop("_selected_path", None)
+            context.user_data.pop("_selected_backend_id", None)
+            context.user_data.pop("_selected_node_id", None)
         await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
 

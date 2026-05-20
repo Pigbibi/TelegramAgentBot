@@ -264,8 +264,10 @@ Optional backends can be loaded as plugins. A plugin can expose a backend
 through the `telegram_codex_bot.backends` entry point group, or through a module
 listed in `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS`.
 
-Design notes for a real center-bot / agent-node plugin live in
-`docs/agent_backend_plugins.md`.
+The repository includes an optional socket backend package under
+`plugins/socket_backend/`. It provides a `socket-cluster` center backend and a
+`telegram-codex-agent-node` CLI for remote machines. Design notes and operating
+details live in `docs/agent_backend_plugins.md`.
 
 ```ini
 TELEGRAM_CODEX_BOT_BACKEND=local
@@ -274,18 +276,18 @@ TELEGRAM_CODEX_BOT_BACKEND=local
 Plugin module example:
 
 ```ini
-TELEGRAM_CODEX_BOT_BACKEND=cluster
-TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=my_cluster_backend
+TELEGRAM_CODEX_BOT_BACKEND=socket-cluster
+TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=telegram_codex_bot_socket_backend
+TELEGRAM_CODEX_BOT_SOCKET_NODES=macbook=127.0.0.1:8765
 ```
 
 The core bot loads the configured backend through a backend interface covering
 lifecycle and agent operations: `prepare()`, `start(message_callback)`,
 `stop()`, `create_session()`, `send_message()`, `send_control()`, and
-`capture()`. The local backend implements that interface by preparing tmux,
-starting the existing transcript monitor, and forwarding operations to the
-current local managers. Distributed center-bot and agent-node behavior should
-live in a plugin backend instead of being hardcoded into the default
-single-machine path.
+`capture()`. Backends can also implement the optional browser capability for
+remote root selection, directory browsing, and resume-session lookup. The local
+backend implements those interfaces by preparing tmux, starting the existing
+transcript monitor, and forwarding operations to the current local managers.
 
 Thread bindings are stored in both the legacy local window form and the newer
 backend target form when the target is local. This keeps existing state files

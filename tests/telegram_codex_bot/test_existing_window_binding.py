@@ -9,13 +9,17 @@ from telegram.error import TelegramError
 from telegram_codex_bot.config import ProjectRoot
 from telegram_codex_bot.agent_io import MessageResult
 from telegram_codex_bot.backends.base import AgentTarget, CreateSessionResult
+from telegram_codex_bot.backends.base import BackendInfo
+from telegram_codex_bot.backends.browser import BrowserRoot, DirectoryListing
 from telegram_codex_bot.handlers.callback_data import (
     CB_DIR_CONFIRM,
     CB_ROOT_SELECT,
     CB_WIN_BIND,
 )
 from telegram_codex_bot.handlers.directory_browser import (
+    BROWSE_BACKEND_ID_KEY,
     BROWSE_DIRS_KEY,
+    BROWSE_NODE_ID_KEY,
     BROWSE_PATH_KEY,
     BROWSE_ROOT_LABEL_KEY,
     BROWSE_ROOT_PATH_KEY,
@@ -62,6 +66,39 @@ def _make_context():
     context.bot = AsyncMock()
     context.user_data = {}
     return context
+
+
+class RemoteBrowserBackend:
+    backend_id = "cluster"
+
+    def __init__(self) -> None:
+        self.roots = [
+            BrowserRoot(
+                label="MacBook",
+                path="/Users/me/Projects",
+                backend_id="cluster",
+                node_id="macbook",
+            )
+        ]
+        self.sessions = []
+
+    def info(self):
+        return BackendInfo("cluster", "Cluster", "remote")
+
+    async def list_roots(self):
+        return self.roots
+
+    async def list_directory(self, node_id: str, path: str, *, root_path: str = ""):
+        return DirectoryListing(
+            path=path,
+            subdirs=["repo"],
+            root_label="MacBook",
+            root_path=root_path,
+            can_go_up=path.rstrip("/") != root_path.rstrip("/"),
+        )
+
+    async def list_sessions(self, node_id: str, cwd: str):
+        return self.sessions
 
 
 def _make_voice_update(user_id: int = 12345, thread_id: int = 42):
@@ -286,6 +323,39 @@ class TestExistingWindowBinding:
         assert context.user_data["_pending_thread_text"] == "hi"
 
     @pytest.mark.asyncio
+    async def test_remote_backend_roots_take_priority_in_remote_mode(self):
+        update = _make_text_update("hi")
+        context = _make_context()
+        backend = RemoteBrowserBackend()
+
+        with (
+            patch("telegram_codex_bot.bot.agent_backend", backend),
+            patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
+            patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+            patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
+            patch("telegram_codex_bot.bot.config.project_roots_configured", False),
+            patch(
+                "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
+            ) as safe_reply,
+        ):
+            mock_tmux.list_windows = AsyncMock(return_value=[])
+            mock_sm.get_window_for_thread.return_value = None
+            mock_sm.resolve_target_for_thread.return_value = None
+
+            from telegram_codex_bot.bot import text_handler
+
+            await text_handler(update, context)
+
+        mock_tmux.list_windows.assert_not_awaited()
+        safe_reply.assert_awaited_once()
+        assert "MacBook" in safe_reply.await_args.args[1]
+        assert context.user_data[STATE_KEY] == STATE_SELECTING_ROOT
+        assert context.user_data[ROOTS_KEY] == [
+            ("MacBook", "/Users/me/Projects", "cluster", "macbook"),
+        ]
+
+    @pytest.mark.asyncio
     async def test_root_picker_selection_enters_selected_directory(self, tmp_path):
         root_path = tmp_path / "primary"
         root_path.mkdir()
@@ -318,6 +388,79 @@ class TestExistingWindowBinding:
         assert context.user_data[BROWSE_ROOT_PATH_KEY] == str(root_path)
         assert context.user_data[BROWSE_DIRS_KEY] == ["repo"]
         assert ROOTS_KEY not in context.user_data
+
+    @pytest.mark.asyncio
+    async def test_remote_root_picker_selection_enters_backend_directory(self):
+        backend = RemoteBrowserBackend()
+        update, query = _make_callback_update(f"{CB_ROOT_SELECT}0")
+        context = _make_context()
+        context.user_data = {
+            STATE_KEY: STATE_SELECTING_ROOT,
+            ROOTS_KEY: [
+                ("MacBook", "/Users/me/Projects", "cluster", "macbook"),
+            ],
+            "_pending_thread_id": 42,
+            "_pending_thread_text": "hi",
+        }
+
+        with (
+            patch("telegram_codex_bot.bot.agent_backend", backend),
+            patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
+            patch(
+                "telegram_codex_bot.bot.safe_edit", new_callable=AsyncMock
+            ) as safe_edit,
+        ):
+            from telegram_codex_bot.bot import callback_handler
+
+            await callback_handler(update, context)
+
+        safe_edit.assert_awaited_once()
+        assert "MacBook" in safe_edit.await_args.args[1]
+        assert context.user_data[STATE_KEY] == STATE_BROWSING_DIRECTORY
+        assert context.user_data[BROWSE_PATH_KEY] == "/Users/me/Projects"
+        assert context.user_data[BROWSE_ROOT_LABEL_KEY] == "MacBook"
+        assert context.user_data[BROWSE_ROOT_PATH_KEY] == "/Users/me/Projects"
+        assert context.user_data[BROWSE_BACKEND_ID_KEY] == "cluster"
+        assert context.user_data[BROWSE_NODE_ID_KEY] == "macbook"
+        assert context.user_data[BROWSE_DIRS_KEY] == ["repo"]
+
+    @pytest.mark.asyncio
+    async def test_remote_directory_confirm_creates_session_on_selected_node(self):
+        backend = RemoteBrowserBackend()
+        update, query = _make_callback_update(CB_DIR_CONFIRM)
+        context = _make_context()
+        context.user_data = {
+            STATE_KEY: STATE_BROWSING_DIRECTORY,
+            BROWSE_PATH_KEY: "/Users/me/Projects/repo",
+            BROWSE_BACKEND_ID_KEY: "cluster",
+            BROWSE_NODE_ID_KEY: "macbook",
+            "_pending_thread_id": 42,
+        }
+
+        with (
+            patch("telegram_codex_bot.bot.agent_backend", backend),
+            patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
+            patch("telegram_codex_bot.bot.safe_edit", new_callable=AsyncMock),
+            patch(
+                "telegram_codex_bot.bot._create_and_bind_window",
+                new_callable=AsyncMock,
+            ) as create_and_bind,
+        ):
+            from telegram_codex_bot.bot import callback_handler
+
+            await callback_handler(update, context)
+
+        create_and_bind.assert_awaited_once_with(
+            query,
+            context,
+            update.effective_user,
+            "/Users/me/Projects/repo",
+            42,
+            node_id="macbook",
+            answer_callback=False,
+        )
 
     @pytest.mark.asyncio
     async def test_directory_confirm_falls_back_to_callback_topic_when_pending_missing(

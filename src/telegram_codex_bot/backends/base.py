@@ -34,6 +34,7 @@ class CreateSessionRequest:
     """Request for creating or resuming one agent session."""
 
     cwd: str
+    node_id: str = ""
     window_name: str = ""
     resume_session_id: str = ""
     account_name: str = ""
