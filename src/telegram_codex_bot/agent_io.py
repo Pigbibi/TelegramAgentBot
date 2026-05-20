@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .backends.base import AgentBackend, AgentTarget
+from .backends.base import (
+    AgentBackend,
+    AgentTarget,
+    CreateSessionRequest,
+    CreateSessionResult,
+)
 from .backends.local import LocalTmuxBackend
 from .backends.registry import get_configured_backend, load_backend
 from .config import config
@@ -72,6 +77,25 @@ def backend_for_target(target: AgentTarget) -> AgentBackend:
     return load_backend(
         target.backend_id,
         plugin_modules=config.backend_plugins,
+    )
+
+
+async def create_agent_session(
+    *,
+    cwd: str,
+    window_name: str = "",
+    resume_session_id: str = "",
+    account_name: str = "",
+) -> CreateSessionResult:
+    """Create or resume an agent session through the configured backend."""
+    backend = get_configured_backend()
+    return await backend.create_session(
+        CreateSessionRequest(
+            cwd=cwd,
+            window_name=window_name,
+            resume_session_id=resume_session_id,
+            account_name=account_name,
+        )
     )
 
 

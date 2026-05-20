@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from telegram_codex_bot.backends.base import AgentTarget, CreateSessionResult
 from telegram_codex_bot.handlers.callback_data import CB_DIR_CONFIRM, CB_SESSION_SELECT
 from telegram_codex_bot.handlers.directory_browser import BROWSE_PATH_KEY, SESSIONS_KEY
 from telegram_codex_bot.session import CodexSession
@@ -180,15 +181,21 @@ class TestSessionPickerIsolation:
         with (
             patch("telegram.CallbackQuery", DummyCallbackQuery),
             patch("telegram.User", DummyUser),
-            patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
             patch("telegram_codex_bot.bot.session_manager") as mock_sm,
             patch(
                 "telegram_codex_bot.bot.safe_edit", new_callable=AsyncMock
             ) as safe_edit,
             patch("telegram_codex_bot.bot.get_default_account_name", return_value=""),
+            patch(
+                "telegram_codex_bot.bot.create_agent_session",
+                new_callable=AsyncMock,
+            ) as create_agent_session,
         ):
-            mock_tmux.create_window = AsyncMock(
-                return_value=(True, "Created window 'project'", "project", "@1")
+            create_agent_session.return_value = CreateSessionResult(
+                ok=True,
+                message="Created window 'project'",
+                target=AgentTarget("local", "local", window_id="@1"),
+                display_name="project",
             )
             mock_sm.resolve_chat_id.return_value = -1001234567890
 
@@ -203,7 +210,10 @@ class TestSessionPickerIsolation:
             )
 
         context.bot.edit_forum_topic.assert_not_called()
-        mock_sm.bind_thread.assert_called_once_with(
-            12345, 42, "@1", window_name="project"
+        mock_sm.bind_thread_target.assert_called_once_with(
+            12345,
+            42,
+            AgentTarget("local", "local", window_id="@1"),
+            window_name="project",
         )
         safe_edit.assert_awaited_once()

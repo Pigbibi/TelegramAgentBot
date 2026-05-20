@@ -8,7 +8,7 @@ from telegram.error import TelegramError
 
 from telegram_codex_bot.config import ProjectRoot
 from telegram_codex_bot.agent_io import MessageResult
-from telegram_codex_bot.backends.base import AgentTarget
+from telegram_codex_bot.backends.base import AgentTarget, CreateSessionResult
 from telegram_codex_bot.handlers.callback_data import (
     CB_DIR_CONFIRM,
     CB_ROOT_SELECT,
@@ -458,6 +458,10 @@ class TestExistingWindowBinding:
                 "telegram_codex_bot.bot._refresh_session_map_after_first_prompt",
                 new_callable=AsyncMock,
             ) as refresh_session_map,
+            patch(
+                "telegram_codex_bot.bot.create_agent_session",
+                new_callable=AsyncMock,
+            ) as create_agent_session,
         ):
             mock_sm.get_window_for_thread.return_value = "@2"
             mock_sm.get_display_name.return_value = "Projects-2"
@@ -467,27 +471,28 @@ class TestExistingWindowBinding:
             mock_sm.get_window_state.return_value = new_state
             mock_sm.remove_session_map_entry = AsyncMock()
             mock_tmux.find_window_by_id = AsyncMock(return_value=None)
-            mock_tmux.create_window = AsyncMock(
-                return_value=(
-                    True,
-                    "Created window 'Projects-2'",
-                    "Projects-2",
-                    "@3",
-                )
+            create_agent_session.return_value = CreateSessionResult(
+                ok=True,
+                message="Created window 'Projects-2'",
+                target=AgentTarget("local", "local", window_id="@3"),
+                display_name="Projects-2",
             )
 
             from telegram_codex_bot.bot import text_handler
 
             await text_handler(update, context)
 
-        mock_tmux.create_window.assert_awaited_once_with(
-            "/tmp/project",
+        create_agent_session.assert_awaited_once_with(
+            cwd="/tmp/project",
             window_name="Projects-2",
             resume_session_id="session-1",
-            account_name=None,
+            account_name="",
         )
-        mock_sm.bind_thread.assert_called_once_with(
-            12345, 42, "@3", window_name="Projects-2"
+        mock_sm.bind_thread_target.assert_called_once_with(
+            12345,
+            42,
+            AgentTarget("local", "local", window_id="@3"),
+            window_name="Projects-2",
         )
         mock_sm.register_session_to_window.assert_called_once_with(
             "@3",

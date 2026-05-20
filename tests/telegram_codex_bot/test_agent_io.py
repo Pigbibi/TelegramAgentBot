@@ -6,10 +6,11 @@ import pytest
 from telegram_codex_bot import agent_io
 from telegram_codex_bot.agent_io import (
     capture_agent_output,
+    create_agent_session,
     send_agent_control,
     send_agent_message,
 )
-from telegram_codex_bot.backends.base import AgentTarget
+from telegram_codex_bot.backends.base import AgentTarget, CreateSessionResult
 
 
 class DummyBackend:
@@ -22,6 +23,36 @@ class DummyBackend:
         self.send_message = AsyncMock(
             return_value=SimpleNamespace(ok=True, message="sent")
         )
+        self.create_session = AsyncMock(
+            return_value=CreateSessionResult(
+                ok=True,
+                message="created",
+                target=AgentTarget(backend_id, "local", window_id="@2"),
+                display_name="Project",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_agent_session_uses_configured_backend(monkeypatch):
+    backend = DummyBackend("local")
+    monkeypatch.setattr(agent_io, "get_configured_backend", lambda: backend)
+
+    result = await create_agent_session(
+        cwd="/tmp/project",
+        window_name="Project",
+        resume_session_id="sid-1",
+        account_name="plus",
+    )
+
+    assert result.ok is True
+    assert result.target == AgentTarget("local", "local", window_id="@2")
+    backend.create_session.assert_awaited_once()
+    request = backend.create_session.await_args.args[0]
+    assert request.cwd == "/tmp/project"
+    assert request.window_name == "Project"
+    assert request.resume_session_id == "sid-1"
+    assert request.account_name == "plus"
 
 
 @pytest.mark.asyncio
