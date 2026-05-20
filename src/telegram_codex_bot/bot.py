@@ -67,6 +67,8 @@ from .account_manager import (
     get_next_account_name,
     remember_current_account,
 )
+from .backends.base import AgentBackend
+from .backends.registry import get_configured_backend
 from .config import config
 from .handlers.callback_data import (
     CB_ASK_DOWN,
@@ -153,7 +155,7 @@ from .handlers.status_polling import (
 )
 from .screenshot import text_to_image
 from .session import CodexSession, session_manager
-from .session_monitor import NewMessage, SessionMonitor
+from .session_monitor import NewMessage
 from .terminal_parser import (
     extract_bash_output,
     is_codex_input_ready,
@@ -178,8 +180,9 @@ GET_UPDATES_READ_TIMEOUT_SECONDS = POLL_TIMEOUT_SECONDS + 5.0
 GET_UPDATES_WRITE_TIMEOUT_SECONDS = 10.0
 GET_UPDATES_POOL_TIMEOUT_SECONDS = 5.0
 
-# Session monitor instance
-session_monitor: SessionMonitor | None = None
+# Active backend and local session monitor reference.
+agent_backend: AgentBackend | None = None
+session_monitor: Any | None = None
 
 # Status polling task
 _status_poll_task: asyncio.Task | None = None
@@ -2831,7 +2834,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 
 
 async def post_init(application: Application) -> None:
-    global session_monitor, _status_poll_task, _auto_update_task
+    global agent_backend, session_monitor, _status_poll_task, _auto_update_task
 
     await application.bot.delete_my_commands()
 
@@ -2868,15 +2871,18 @@ async def post_init(application: Application) -> None:
         rate_limiter._base_limiter._level = rate_limiter._base_limiter.max_rate
         logger.info("Pre-filled global rate limiter bucket")
 
-    monitor = SessionMonitor()
-
     async def message_callback(msg: NewMessage) -> None:
         await handle_new_message(msg, application.bot)
 
-    monitor.set_message_callback(message_callback)
-    monitor.start()
-    session_monitor = monitor
-    logger.info("Session monitor started")
+    agent_backend = get_configured_backend()
+    await agent_backend.start(message_callback)
+    session_monitor = getattr(agent_backend, "session_monitor", None)
+    backend_info = agent_backend.info()
+    logger.info(
+        "Agent backend started: %s (%s)",
+        backend_info.backend_id,
+        backend_info.display_name,
+    )
 
     # Start status polling task
     _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
@@ -2889,7 +2895,7 @@ async def post_init(application: Application) -> None:
 
 
 async def post_shutdown(application: Application) -> None:
-    global _status_poll_task, _auto_update_task
+    global agent_backend, session_monitor, _status_poll_task, _auto_update_task
 
     # Stop status polling
     if _status_poll_task:
@@ -2913,8 +2919,14 @@ async def post_shutdown(application: Application) -> None:
     # Stop all queue workers
     await shutdown_workers()
 
-    if session_monitor:
+    if agent_backend:
+        await agent_backend.stop()
+        agent_backend = None
+        session_monitor = None
+        logger.info("Agent backend stopped")
+    elif session_monitor:
         session_monitor.stop()
+        session_monitor = None
         logger.info("Session monitor stopped")
 
     await close_transcribe_client()

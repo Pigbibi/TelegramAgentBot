@@ -110,6 +110,23 @@ class Config:
         # Command to run in new windows.
         self.codex_command = os.getenv("TELEGRAM_CODEX_BOT_CODEX_COMMAND", "codex")
 
+        # Agent backend selection. The default backend keeps the current
+        # single-machine tmux behavior. Optional plugins can register additional
+        # backends, for example a center-bot plus remote agent-node backend.
+        self.agent_backend = (
+            os.getenv("TELEGRAM_CODEX_BOT_BACKEND", "local").strip().lower()
+            or "local"
+        )
+        backend_plugins = os.getenv(
+            "TELEGRAM_CODEX_BOT_BACKEND_PLUGINS",
+            os.getenv("TELEGRAM_CODEX_BOT_BACKEND_PLUGIN", ""),
+        )
+        self.backend_plugins = tuple(
+            item.strip()
+            for item in backend_plugins.replace("\n", ",").split(",")
+            if item.strip()
+        )
+
         # All state files live under config_dir
         self.state_file = self.config_dir / "state.json"
         self.session_map_file = self.config_dir / "session_map.json"
@@ -193,7 +210,7 @@ class Config:
         logger.debug(
             "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
             "tmux_socket=%s, tmux_session=%s, codex_projects_path=%s, "
-            "default_projects_path=%s, project_roots=%d",
+            "default_projects_path=%s, project_roots=%d, backend=%s",
             self.config_dir,
             self.telegram_bot_token[:8],
             len(self.allowed_users),
@@ -202,6 +219,7 @@ class Config:
             self.codex_projects_path,
             self.default_projects_path,
             len(self.project_roots),
+            self.agent_backend,
         )
 
     def is_user_allowed(self, user_id: int) -> bool:

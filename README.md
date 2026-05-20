@@ -210,6 +210,8 @@ be committed.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `TELEGRAM_CODEX_BOT_DIR` | `~/.telegram-codex-bot` | Config and state directory |
+| `TELEGRAM_CODEX_BOT_BACKEND` | `local` | Agent backend ID. `local` keeps the single-machine tmux behavior |
+| `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS` | _(none)_ | Comma-separated Python modules that register optional agent backends |
 | `TELEGRAM_CODEX_BOT_TMUX_SESSION_NAME` | `telegram-codex-bot` | tmux session name used by the bot |
 | `TELEGRAM_CODEX_BOT_CODEX_COMMAND` | `codex` | Command used when creating a new window |
 | `TELEGRAM_CODEX_BOT_CODEX_PROJECTS_PATH` | `~/.codex` | Transcript root to scan |
@@ -247,6 +249,33 @@ computer/VPS picker, even if only one root is configured. After selecting one,
 the normal directory browser starts at that root and does not navigate above it.
 Other computers or VPSes must be reachable as local paths from the machine
 running telegram-codex-bot, for example through SSHFS or NFS mounts.
+
+### Agent Backends
+
+TelegramCodexBot starts with the `local` backend by default. This is the
+existing single-machine mode: Telegram talks to a local tmux session, and the
+bot monitors local Codex transcript files.
+
+Optional backends can be loaded as plugins. A plugin can expose a backend
+through the `telegram_codex_bot.backends` entry point group, or through a module
+listed in `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS`.
+
+```ini
+TELEGRAM_CODEX_BOT_BACKEND=local
+```
+
+Plugin module example:
+
+```ini
+TELEGRAM_CODEX_BOT_BACKEND=cluster
+TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=my_cluster_backend
+```
+
+The core bot loads the configured backend through a small lifecycle interface:
+`prepare()`, `start(message_callback)`, and `stop()`. The local backend
+implements that interface by preparing tmux and starting the existing transcript
+monitor. Distributed center-bot and agent-node behavior should live in a plugin
+backend instead of being hardcoded into the default single-machine path.
 
 ### Updates
 
@@ -471,6 +500,7 @@ The window must live inside the configured `telegram-codex-bot` tmux session.
 src/telegram_codex_bot/
 ├── __init__.py
 ├── account_manager.py
+├── backends/
 ├── bot.py
 ├── config.py
 ├── hook.py
