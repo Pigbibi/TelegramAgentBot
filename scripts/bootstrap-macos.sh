@@ -11,7 +11,17 @@ CCBOT_DIR="${CCBOT_DIR:-$HOME/.ccbot}"
 ENV_PATH="${CCBOT_DIR}/.env"
 BIN_DIR="${CCBOT_DIR}/bin"
 LOG_DIR="${CCBOT_DIR}/logs"
-LAUNCH_AGENT_LABEL="${CCBOT_LAUNCH_AGENT_LABEL:-io.github.telegramcodexccbot}"
+DEFAULT_LAUNCH_AGENT_LABEL="io.github.telegramcodexbot"
+LEGACY_LAUNCH_AGENT_LABEL="io.github.telegramcodexccbot"
+
+if [[ -n "${CCBOT_LAUNCH_AGENT_LABEL:-}" ]]; then
+  LAUNCH_AGENT_LABEL="$CCBOT_LAUNCH_AGENT_LABEL"
+elif [[ -f "$HOME/Library/LaunchAgents/${LEGACY_LAUNCH_AGENT_LABEL}.plist" && ! -f "$HOME/Library/LaunchAgents/${DEFAULT_LAUNCH_AGENT_LABEL}.plist" ]]; then
+  LAUNCH_AGENT_LABEL="$LEGACY_LAUNCH_AGENT_LABEL"
+else
+  LAUNCH_AGENT_LABEL="$DEFAULT_LAUNCH_AGENT_LABEL"
+fi
+
 PLIST_PATH="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 LAUNCHER_PATH="${BIN_DIR}/ccbot-launch"
 PATH_VALUE="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${HOME}/.local/bin"

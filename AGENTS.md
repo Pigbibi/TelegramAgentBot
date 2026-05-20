@@ -1,7 +1,7 @@
 # AGENTS.md
 
-This repository is a Codex-adapted fork of CCBot.
-The CLI/package name stays `ccbot`.
+This repository contains TelegramCodexBot, a Telegram controller for live Codex
+sessions running in tmux. The CLI/package name stays `ccbot` for compatibility.
 
 ## Common Commands
 

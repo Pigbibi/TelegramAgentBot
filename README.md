@@ -104,14 +104,14 @@ launchd files but will not start the service. After editing `.env`, start it
 manually:
 
 ```bash
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.github.telegramcodexccbot.plist
-launchctl kickstart -k "gui/$(id -u)/io.github.telegramcodexccbot"
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.github.telegramcodexbot.plist
+launchctl kickstart -k "gui/$(id -u)/io.github.telegramcodexbot"
 ```
 
 Check status:
 
 ```bash
-launchctl print "gui/$(id -u)/io.github.telegramcodexccbot" | sed -n '1,40p'
+launchctl print "gui/$(id -u)/io.github.telegramcodexbot" | sed -n '1,40p'
 tail -n 50 ~/.ccbot/logs/ccbot.err.log
 ```
 
@@ -132,7 +132,7 @@ The Linux helper:
 - creates `~/.ccbot/.env` from `.env.example` if needed
 - installs `ccbot hook --install`
 - writes `~/.ccbot/bin/ccbot-launch`
-- writes a user service at `~/.config/systemd/user/io.github.telegramcodexccbot.service`
+- writes a user service at `~/.config/systemd/user/io.github.telegramcodexbot.service`
 
 After that:
 
@@ -142,7 +142,7 @@ After that:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now io.github.telegramcodexccbot.service
+systemctl --user enable --now io.github.telegramcodexbot.service
 ```
 
 On a VPS, if you want the service to keep running after reboot without an
@@ -155,9 +155,13 @@ sudo loginctl enable-linger "$USER"
 Check status:
 
 ```bash
-systemctl --user status io.github.telegramcodexccbot.service --no-pager
+systemctl --user status io.github.telegramcodexbot.service --no-pager
 tail -n 50 ~/.ccbot/logs/ccbot.err.log
 ```
+
+Existing deployments that already use the old `io.github.telegramcodexccbot`
+service label are kept working by the bootstrap scripts unless you override the
+service name explicitly.
 
 ## Configuration
 
@@ -492,3 +496,4 @@ src/ccbot/
 
 This project is distributed under the MIT License.
 Copyright and license notices are kept in `LICENSE`.
+Bundled fonts keep their own license files under `src/ccbot/fonts/`.

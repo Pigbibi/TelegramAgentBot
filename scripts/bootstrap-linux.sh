@@ -12,7 +12,17 @@ ENV_PATH="${CCBOT_DIR}/.env"
 BIN_DIR="${CCBOT_DIR}/bin"
 LOG_DIR="${CCBOT_DIR}/logs"
 SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-SERVICE_NAME="${CCBOT_SYSTEMD_SERVICE_NAME:-io.github.telegramcodexccbot.service}"
+DEFAULT_SERVICE_NAME="io.github.telegramcodexbot.service"
+LEGACY_SERVICE_NAME="io.github.telegramcodexccbot.service"
+
+if [[ -n "${CCBOT_SYSTEMD_SERVICE_NAME:-}" ]]; then
+  SERVICE_NAME="$CCBOT_SYSTEMD_SERVICE_NAME"
+elif [[ -f "${SYSTEMD_DIR}/${LEGACY_SERVICE_NAME}" && ! -f "${SYSTEMD_DIR}/${DEFAULT_SERVICE_NAME}" ]]; then
+  SERVICE_NAME="$LEGACY_SERVICE_NAME"
+else
+  SERVICE_NAME="$DEFAULT_SERVICE_NAME"
+fi
+
 SERVICE_PATH="${SYSTEMD_DIR}/${SERVICE_NAME}"
 LAUNCHER_PATH="${BIN_DIR}/ccbot-launch"
 PATH_VALUE="/usr/local/bin:/usr/bin:/bin:${HOME}/.local/bin"

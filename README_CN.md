@@ -102,14 +102,14 @@ codex login
 不会自动启动服务。改完 `.env` 后再手动执行：
 
 ```bash
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.github.telegramcodexccbot.plist
-launchctl kickstart -k "gui/$(id -u)/io.github.telegramcodexccbot"
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.github.telegramcodexbot.plist
+launchctl kickstart -k "gui/$(id -u)/io.github.telegramcodexbot"
 ```
 
 查看服务状态：
 
 ```bash
-launchctl print "gui/$(id -u)/io.github.telegramcodexccbot" | sed -n '1,40p'
+launchctl print "gui/$(id -u)/io.github.telegramcodexbot" | sed -n '1,40p'
 tail -n 50 ~/.ccbot/logs/ccbot.err.log
 ```
 
@@ -130,7 +130,7 @@ chmod +x scripts/bootstrap-linux.sh
 - 如果需要，从 `.env.example` 生成 `~/.ccbot/.env`
 - 执行 `ccbot hook --install`
 - 写入 `~/.ccbot/bin/ccbot-launch`
-- 生成用户级 systemd service：`~/.config/systemd/user/io.github.telegramcodexccbot.service`
+- 生成用户级 systemd service：`~/.config/systemd/user/io.github.telegramcodexbot.service`
 
 后续步骤：
 
@@ -140,7 +140,7 @@ chmod +x scripts/bootstrap-linux.sh
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now io.github.telegramcodexccbot.service
+systemctl --user enable --now io.github.telegramcodexbot.service
 ```
 
 如果是 VPS，希望重启后不用登录也能继续跑，再执行一次：
@@ -152,9 +152,12 @@ sudo loginctl enable-linger "$USER"
 查看服务状态：
 
 ```bash
-systemctl --user status io.github.telegramcodexccbot.service --no-pager
+systemctl --user status io.github.telegramcodexbot.service --no-pager
 tail -n 50 ~/.ccbot/logs/ccbot.err.log
 ```
+
+已经使用旧 `io.github.telegramcodexccbot` 服务名的部署不会被强制迁移；
+bootstrap 脚本会优先沿用已有旧服务名，除非你显式指定新的服务名。
 
 ## 配置
 
@@ -482,3 +485,4 @@ src/ccbot/
 
 本项目以 MIT 许可证发布。
 版权和许可证声明保留在 `LICENSE` 文件中。
+随包字体保留各自的许可证文件，位置在 `src/ccbot/fonts/`。
