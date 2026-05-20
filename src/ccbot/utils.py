@@ -1,4 +1,4 @@
-"""Shared utility functions used across multiple CCBot modules.
+"""Shared utility functions used across TelegramCodexBot modules.
 
 Provides:
   - ccbot_dir(): resolve config directory from CCBOT_DIR env var.

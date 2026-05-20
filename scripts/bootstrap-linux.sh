@@ -48,7 +48,7 @@ chmod +x "$LAUNCHER_PATH"
 
 cat >"$SERVICE_PATH" <<EOF
 [Unit]
-Description=TelegramCodexCCBot
+Description=TelegramCodexBot
 After=network-online.target
 Wants=network-online.target
 

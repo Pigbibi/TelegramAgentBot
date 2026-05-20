@@ -1,12 +1,9 @@
-# TelegramCodexCCBot
+# TelegramCodexBot
 
 [English README](README.md)
 
-> TelegramCodexCCBot 通过 Telegram 远程控制 Codex 会话。
-> CLI / 包名继续保持 `ccbot`。
-
-**原始项目：** https://github.com/six-ddc/ccbot
-**许可证：** MIT
+> TelegramCodexBot 通过 Telegram 远程控制 Codex 会话。
+> CLI / 包名继续保留为 `ccbot`，用于兼容现有安装。
 
 这个版本的目标很直接：通过 Telegram 远程控制真实运行在 tmux 里的 Codex 会话，让手机端和桌面端可以围绕同一个终端会话来回切换，而不是再起一个独立 SDK 会话。
 
@@ -14,7 +11,7 @@ https://github.com/user-attachments/assets/15ffb38e-5eb9-4720-93b9-412e4961dc93
 
 ## 功能概览
 
-TelegramCodexCCBot 是一个通过 Telegram 远程控制 Codex 会话的工具：
+TelegramCodexBot 是一个通过 Telegram 远程控制 Codex 会话的工具：
 
 - 新建窗口默认直接跑 `codex`
 - 会话监控默认面向 `~/.codex` 下的现代 Codex transcript
@@ -306,7 +303,7 @@ codex login
 ~/.ccbot/bin/codex-account use main
 ```
 
-当某个 live session 产生 `usage_limit_exceeded` 时，CCBot 会把这个窗口标记为已耗尽；下一条消息到来时，可以自动在下一个已保存账号上新开 tmux 窗口，并把消息转发过去。
+当某个 live session 产生 `usage_limit_exceeded` 时，TelegramCodexBot 会把这个窗口标记为已耗尽；下一条消息到来时，可以自动在下一个已保存账号上新开 tmux 窗口，并把消息转发过去。
 
 要注意：这属于 **切到新 session**，不是把原 session 无缝续活。
 
@@ -346,7 +343,7 @@ codex_hooks = true
           {
             "type": "command",
             "command": "ccbot hook",
-            "statusMessage": "Registering CCBot session",
+            "statusMessage": "Registering Codex session",
             "timeout": 5
           }
         ]
@@ -403,7 +400,7 @@ uv run ccbot
 2. 发任意一条消息
 3. 在目录浏览器里选目录
 4. 选择恢复已有 session 或创建新 session
-5. CCBot 创建 tmux 窗口，并把你刚发的消息转进去
+5. TelegramCodexBot 创建 tmux 窗口，并把你刚发的消息转进去
 
 如果 bot 在这个目录下发现已有的**可追踪** tmux 窗口，也可以直接给你选来绑定。
 没有可靠 session 映射的窗口会被故意跳过，避免 topic 误绑到一个之后回不来消息的终端。
@@ -481,11 +478,7 @@ src/ccbot/
 └── handlers/
 ```
 
-## 上游与许可证
+## 许可证
 
-本项目基于 **six-ddc** 的原始作品：
-
-- 上游仓库：https://github.com/six-ddc/ccbot
-- 许可证：MIT
-
-本项目以 MIT 许可证发布，保留原始项目的署名信息，并继续维护当前代码库中的改动。
+本项目以 MIT 许可证发布。
+版权和许可证声明保留在 `LICENSE` 文件中。

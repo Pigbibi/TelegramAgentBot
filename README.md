@@ -1,12 +1,9 @@
-# TelegramCodexCCBot
+# TelegramCodexBot
 
 [中文文档](README_CN.md)
 
-> TelegramCodexCCBot controls live Codex sessions over Telegram.
-> The CLI/package name stays `ccbot`.
-
-**Original project:** https://github.com/six-ddc/ccbot
-**License:** MIT
+> TelegramCodexBot controls live Codex sessions over Telegram.
+> The CLI/package name remains `ccbot` for compatibility with existing installs.
 
 Control Codex sessions remotely through Telegram while keeping tmux as the source of truth. This lets you monitor, answer, interrupt, resume, and clean up real terminal sessions from your phone without switching to a separate SDK session.
 
@@ -14,7 +11,7 @@ https://github.com/user-attachments/assets/15ffb38e-5eb9-4720-93b9-412e4961dc93
 
 ## What it does
 
-TelegramCodexCCBot is a Telegram controller for live Codex sessions:
+TelegramCodexBot is a Telegram controller for live Codex sessions:
 
 - `codex` is the default command for new tmux windows
 - transcript parsing and monitoring target modern Codex JSONL output under `~/.codex`
@@ -316,7 +313,7 @@ codex login
 ~/.ccbot/bin/codex-account use main
 ```
 
-When a live session emits `usage_limit_exceeded`, CCBot marks that window as exhausted. On the next message, it can create a fresh tmux window on the next saved account and forward the message there.
+When a live session emits `usage_limit_exceeded`, TelegramCodexBot marks that window as exhausted. On the next message, it can create a fresh tmux window on the next saved account and forward the message there.
 
 Important: this is **session rotation**, not seamless continuation of the exact same Codex session.
 
@@ -356,7 +353,7 @@ codex_hooks = true
           {
             "type": "command",
             "command": "ccbot hook",
-            "statusMessage": "Registering CCBot session",
+            "statusMessage": "Registering Codex session",
             "timeout": 5
           }
         ]
@@ -413,7 +410,7 @@ Other unknown slash commands are forwarded to Codex as-is.
 2. Send any message
 3. Pick a directory from the browser
 4. Resume an existing session or create a new one
-5. CCBot creates a tmux window and forwards your pending message
+5. TelegramCodexBot creates a tmux window and forwards your pending message
 
 If the bot finds an existing **tracked** tmux window for that directory, it can
 offer that window for binding. Untracked windows are ignored on purpose so a
@@ -494,7 +491,4 @@ src/ccbot/
 ## License
 
 This project is distributed under the MIT License.
-
-Original project: https://github.com/six-ddc/ccbot
-
-Attribution is preserved to the original author, and project changes remain part of this MIT-licensed codebase.
+Copyright and license notices are kept in `LICENSE`.

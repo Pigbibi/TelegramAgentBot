@@ -247,7 +247,7 @@ class TestInstallHook:
                             {
                                 "type": "command",
                                 "command": "/usr/local/bin/ccbot hook",
-                                "statusMessage": "Registering CCBot session",
+                                "statusMessage": "Registering Codex session",
                                 "timeout": 5,
                             }
                         ],
@@ -277,7 +277,7 @@ class TestInstallHook:
                                     {
                                         "type": "command",
                                         "command": "ccbot hook",
-                                        "statusMessage": "Registering CCBot session",
+                                        "statusMessage": "Registering Codex session",
                                         "timeout": 5,
                                     }
                                 ],
