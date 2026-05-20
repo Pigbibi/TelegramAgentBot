@@ -4,6 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from telegram_codex_bot.agent_io import MessageResult
+from telegram_codex_bot.backends.base import AgentTarget
+
 
 def _make_update(text: str, user_id: int = 1, thread_id: int = 42) -> MagicMock:
     """Build a minimal mock Update with message text in a forum topic."""
@@ -40,19 +43,25 @@ class TestForwardCommand:
             patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
             patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
             patch("telegram_codex_bot.bot.session_manager") as mock_sm,
-            patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
+            patch(
+                "telegram_codex_bot.bot.send_agent_message", new_callable=AsyncMock
+            ) as mock_send,
             patch("telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock),
         ):
             mock_sm.resolve_window_for_thread.return_value = "@5"
+            mock_sm.resolve_target_for_thread.return_value = AgentTarget(
+                "local", "local", window_id="@5"
+            )
             mock_sm.get_display_name.return_value = "project"
-            mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
-            mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
+            mock_send.return_value = MessageResult(
+                AgentTarget("local", "local", window_id="@5"), True, "ok"
+            )
 
             from telegram_codex_bot.bot import forward_command_handler
 
             await forward_command_handler(update, context)
 
-            mock_sm.send_to_window.assert_called_once_with("@5", "/model")
+            mock_send.assert_awaited_once_with(1, 42, "@5", "/model")
 
     @pytest.mark.asyncio
     async def test_cost_sends_command_to_tmux(self):
@@ -64,19 +73,25 @@ class TestForwardCommand:
             patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
             patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
             patch("telegram_codex_bot.bot.session_manager") as mock_sm,
-            patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
+            patch(
+                "telegram_codex_bot.bot.send_agent_message", new_callable=AsyncMock
+            ) as mock_send,
             patch("telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock),
         ):
             mock_sm.resolve_window_for_thread.return_value = "@5"
+            mock_sm.resolve_target_for_thread.return_value = AgentTarget(
+                "local", "local", window_id="@5"
+            )
             mock_sm.get_display_name.return_value = "project"
-            mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
-            mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
+            mock_send.return_value = MessageResult(
+                AgentTarget("local", "local", window_id="@5"), True, "ok"
+            )
 
             from telegram_codex_bot.bot import forward_command_handler
 
             await forward_command_handler(update, context)
 
-            mock_sm.send_to_window.assert_called_once_with("@5", "/cost")
+            mock_send.assert_awaited_once_with(1, 42, "@5", "/cost")
 
     @pytest.mark.asyncio
     async def test_clear_clears_session(self):
@@ -88,17 +103,23 @@ class TestForwardCommand:
             patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
             patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
             patch("telegram_codex_bot.bot.session_manager") as mock_sm,
-            patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
+            patch(
+                "telegram_codex_bot.bot.send_agent_message", new_callable=AsyncMock
+            ) as mock_send,
             patch("telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock),
         ):
             mock_sm.resolve_window_for_thread.return_value = "@5"
+            mock_sm.resolve_target_for_thread.return_value = AgentTarget(
+                "local", "local", window_id="@5"
+            )
             mock_sm.get_display_name.return_value = "project"
-            mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
-            mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
+            mock_send.return_value = MessageResult(
+                AgentTarget("local", "local", window_id="@5"), True, "ok"
+            )
 
             from telegram_codex_bot.bot import forward_command_handler
 
             await forward_command_handler(update, context)
 
-            mock_sm.send_to_window.assert_called_once_with("@5", "/clear")
+            mock_send.assert_awaited_once_with(1, 42, "@5", "/clear")
             mock_sm.clear_window_session.assert_called_once_with("@5")
