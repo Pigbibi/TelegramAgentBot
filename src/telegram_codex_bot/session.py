@@ -1770,6 +1770,11 @@ class SessionManager:
         if not session_id:
             return False
 
+        for targets in self.thread_targets.values():
+            for target in targets.values():
+                if _session_ids_match(target.session_id, session_id):
+                    return True
+
         for _user_id, _thread_id, window_id in self.iter_thread_bindings():
             state = self.window_states.get(window_id)
             if state and _session_ids_match(state.session_id, session_id):

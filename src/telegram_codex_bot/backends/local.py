@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .base import (
     AgentTarget,
@@ -12,6 +14,10 @@ from .base import (
     MessageCallback,
     SendResult,
 )
+from .browser import BrowserRoot, DirectoryListing
+
+if TYPE_CHECKING:
+    from ..session import CodexSession
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +102,87 @@ class LocalTmuxBackend:
             target=target,
             display_name=window_name,
         )
+
+    async def list_roots(self) -> list[BrowserRoot]:
+        """Return local configured project roots for browser-compatible plugins."""
+        from ..config import config
+
+        if getattr(config, "project_roots_configured", False):
+            return [
+                BrowserRoot(
+                    label=root.label,
+                    path=str(root.path),
+                    backend_id=self.backend_id,
+                    node_id="local",
+                )
+                for root in config.project_roots
+            ]
+
+        start = config.default_projects_path.expanduser()
+        if not start.is_dir():
+            start = Path.home()
+        return [
+            BrowserRoot(
+                label="Local",
+                path=str(start),
+                backend_id=self.backend_id,
+                node_id="local",
+            )
+        ]
+
+    async def list_directory(
+        self,
+        node_id: str,
+        path: str,
+        *,
+        root_path: str = "",
+    ) -> DirectoryListing:
+        """Return a local directory listing using the same rules as the UI."""
+        from ..config import config
+
+        root = Path(root_path).expanduser().resolve() if root_path else None
+        current = Path(path).expanduser().resolve()
+
+        if root is not None:
+            if not root.exists() or not root.is_dir():
+                root = None
+            elif not (current == root or root in current.parents):
+                current = root
+
+        if not current.exists() or not current.is_dir():
+            current = root if root is not None else Path.cwd()
+
+        try:
+            subdirs = sorted(
+                [
+                    child.name
+                    for child in current.iterdir()
+                    if child.is_dir()
+                    and (config.show_hidden_dirs or not child.name.startswith("."))
+                ]
+            )
+        except (PermissionError, OSError) as exc:
+            return DirectoryListing(
+                path=str(current),
+                subdirs=[],
+                root_path=str(root) if root else root_path,
+                can_go_up=current != current.parent
+                and (root is None or current != root),
+                error=str(exc),
+            )
+
+        return DirectoryListing(
+            path=str(current),
+            subdirs=subdirs,
+            root_path=str(root) if root else root_path,
+            can_go_up=current != current.parent and (root is None or current != root),
+        )
+
+    async def list_sessions(self, node_id: str, cwd: str) -> list[CodexSession]:
+        """Return local Codex sessions for browser-compatible plugins."""
+        from ..session import session_manager
+
+        return await session_manager.list_sessions_for_directory(cwd)
 
     async def send_message(self, target: AgentTarget, text: str) -> SendResult:
         """Send user text to a local tmux window."""

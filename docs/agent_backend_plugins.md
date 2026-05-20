@@ -25,19 +25,29 @@ A backend plugin implements `AgentBackend`:
 The core can now bind non-local `AgentTarget` values and route messages back by
 `backend_id`, `node_id`, and `session_id`.
 
-## Recommended First Real Plugin
+Backends can also implement `AgentBrowser` for first-class remote session
+creation:
 
-Use a separate package, for example:
+- `list_roots()`
+- `list_directory(node_id, path, root_path="")`
+- `list_sessions(node_id, cwd)`
+
+## Included Socket Backend Plugin
+
+The repository includes the first real plugin as a separate package:
 
 ```text
-telegram-codex-bot-socket-backend
+plugins/socket_backend
 ```
 
-It should provide:
+It provides:
 
 - a center-side backend registered as `socket-cluster`;
-- an agent-node CLI, for example `telegram-codex-agent-node`;
-- a tiny newline-delimited JSON protocol over TCP.
+- an agent-node CLI: `telegram-codex-agent-node`;
+- a tiny newline-delimited JSON protocol over TCP;
+- remote root browsing, directory browsing, resume-session lookup, session
+  creation, text send, control key send, pane capture, and transcript event
+  streaming.
 
 This avoids putting cluster code into the main bot package. It also avoids
 requiring a public domain: a Mac or another private machine can expose its
@@ -59,6 +69,12 @@ TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=telegram_codex_bot_socket_backend
 TELEGRAM_CODEX_BOT_SOCKET_NODES=macbook=127.0.0.1:8765
 ```
 
+Install the plugin on machines that use socket mode:
+
+```bash
+pip install -e plugins/socket_backend
+```
+
 ## Protocol Shape
 
 Use one request per TCP connection for commands:
@@ -68,6 +84,9 @@ Use one request per TCP connection for commands:
 {"id":"...","op":"send_message","target":{"backend_id":"socket-cluster","node_id":"macbook","session_id":"..."},"text":"hello"}
 {"id":"...","op":"send_control","target":{"backend_id":"socket-cluster","node_id":"macbook","session_id":"..."},"key":"Escape"}
 {"id":"...","op":"capture","target":{"backend_id":"socket-cluster","node_id":"macbook","session_id":"..."},"with_ansi":true}
+{"id":"...","op":"list_roots"}
+{"id":"...","op":"list_directory","path":"/Users/me/Projects","root_path":"/Users/me/Projects"}
+{"id":"...","op":"list_sessions","cwd":"/Users/me/Projects/app"}
 ```
 
 Use a long-lived subscription connection for agent events:
@@ -79,10 +98,10 @@ Use a long-lived subscription connection for agent events:
 Agent nodes stream parsed `NewMessage`-compatible payloads back to the center:
 
 ```json
-{"op":"message","session_id":"...","text":"done","is_complete":true,"content_type":"text","role":"assistant"}
+{"op":"message","node_id":"macbook","window_id":"@7","message":{"session_id":"macbook:@7","text":"done","is_complete":true,"content_type":"text","role":"assistant"}}
 ```
 
-The agent node can reuse the existing `LocalTmuxBackend` internally. That keeps
+The agent node reuses the existing `LocalTmuxBackend` internally. That keeps
 tmux, transcript parsing, screenshots, control keys, and session creation
 consistent with the default local mode.
 
@@ -101,40 +120,23 @@ GitHub remains useful for async task orchestration, which is what
 `telegram-codex-bridge` already covers. For live center-bot / agent-node chat,
 a socket plugin over reverse SSH is simpler and faster.
 
-## Missing Core Capabilities For A Polished Plugin
+## Remaining Gap
 
-The backend interface is enough for bound sessions, but two user-facing flows
-still assume the center bot can see the local VPS filesystem:
-
-- directory browsing before creating a session;
-- resume-session browsing for a selected directory.
-
-To make remote nodes first-class, add a small optional capability interface:
-
-```python
-class AgentBrowser(Protocol):
-    async def list_roots(self) -> list[RemoteRoot]: ...
-    async def list_directory(self, node_id: str, path: str) -> DirectoryListing: ...
-    async def list_sessions(self, node_id: str, cwd: str) -> list[CodexSession]: ...
-```
-
-The default `local` backend can implement this by delegating to the existing
-filesystem and session-manager code. A socket plugin can proxy these calls to
-the agent node.
-
-Photo forwarding also needs an optional file-transfer capability. Until that
+Photo forwarding still needs an optional file-transfer capability. Until that
 exists, the core intentionally keeps photo forwarding local-only for non-local
 targets.
 
 ## Implementation Order
 
-1. Create the separate socket backend package with entry point registration and
-   a no-op health check.
-2. Add the optional browser capability to core and keep the local backend as the
-   default implementation.
-3. Implement the agent-node CLI using `LocalTmuxBackend`.
-4. Implement the center-side `socket-cluster` backend request/response methods.
-5. Add event subscription so node transcript messages call the center
+1. Done: add optional browser capability to core and keep local mode as the
+   default path.
+2. Done: create the separate socket backend package with entry point
+   registration.
+3. Done: implement the agent-node CLI using `LocalTmuxBackend`.
+4. Done: implement the center-side `socket-cluster` backend request/response
+   methods.
+5. Done: add event subscription so node transcript messages call the center
    `message_callback`.
-6. Add file-transfer support for photos and attachments.
-7. Add systemd/LaunchAgent examples for the VPS center bot and Mac agent node.
+6. Next: add file-transfer support for photos and attachments.
+7. Next: add systemd/LaunchAgent examples for the VPS center bot and Mac agent
+   node.

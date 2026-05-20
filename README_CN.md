@@ -259,15 +259,18 @@ TELEGRAM_CODEX_BOT_BACKEND=local
 插件模块示例：
 
 ```ini
-TELEGRAM_CODEX_BOT_BACKEND=cluster
-TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=my_cluster_backend
+TELEGRAM_CODEX_BOT_BACKEND=socket-cluster
+TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=telegram_codex_bot_socket_backend
+TELEGRAM_CODEX_BOT_SOCKET_NODES=macbook=127.0.0.1:8765
 ```
 
-真正的中心 bot / agent 节点插件设计记录在
-`docs/agent_backend_plugins.md`。
+仓库内置了一个可选 socket backend package：`plugins/socket_backend/`。它提供
+`socket-cluster` 中心 backend 和 `telegram-codex-agent-node` 远端节点 CLI。
+设计和运行说明记录在 `docs/agent_backend_plugins.md`。
 
 核心 backend 接口覆盖这些操作：`prepare()`、`start(message_callback)`、
 `stop()`、`create_session()`、`send_message()`、`send_control()`、`capture()`。
+backend 也可以实现可选浏览能力，用于远端 root 选择、目录浏览和 resume-session 查询。
 默认 `local` backend 会把这些操作转给现有 tmux、session manager 和 transcript monitor。
 
 本地 target 会同时写入旧版 `thread_bindings` 和新版 `thread_targets`，方便回滚；

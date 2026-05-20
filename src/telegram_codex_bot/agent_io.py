@@ -83,6 +83,7 @@ def backend_for_target(target: AgentTarget) -> AgentBackend:
 async def create_agent_session(
     *,
     cwd: str,
+    node_id: str = "",
     window_name: str = "",
     resume_session_id: str = "",
     account_name: str = "",
@@ -92,6 +93,7 @@ async def create_agent_session(
     return await backend.create_session(
         CreateSessionRequest(
             cwd=cwd,
+            node_id=node_id,
             window_name=window_name,
             resume_session_id=resume_session_id,
             account_name=account_name,
