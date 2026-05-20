@@ -67,8 +67,13 @@ from .account_manager import (
     get_next_account_name,
     remember_current_account,
 )
-from .agent_io import capture_agent_output, send_agent_control, send_agent_message
-from .backends.base import AgentBackend
+from .agent_io import (
+    capture_agent_output,
+    create_agent_session,
+    send_agent_control,
+    send_agent_message,
+)
+from .backends.base import AgentBackend, AgentTarget
 from .backends.registry import get_configured_backend
 from .config import config
 from .handlers.callback_data import (
@@ -676,6 +681,32 @@ async def _send_message_to_agent(
     if result.missing:
         return False, "Window not found (may have been closed)"
     return result.ok, result.message
+
+
+async def _create_agent_local_window(
+    *,
+    cwd: str,
+    window_name: str = "",
+    resume_session_id: str = "",
+    account_name: str = "",
+) -> tuple[bool, str, str, str, AgentTarget | None]:
+    result = await create_agent_session(
+        cwd=cwd,
+        window_name=window_name,
+        resume_session_id=resume_session_id,
+        account_name=account_name,
+    )
+    target = result.target
+    window_id = target.window_id if target else ""
+    if result.ok and not window_id:
+        return (
+            False,
+            "Agent backend did not return a local window id",
+            result.display_name,
+            "",
+            target,
+        )
+    return result.ok, result.message, result.display_name, window_id, target
 
 
 async def topic_closed_handler(
@@ -1313,8 +1344,14 @@ async def _rotate_thread_after_usage_limit(
         )
         return True
 
-    success, message, created_wname, created_wid = await tmux_manager.create_window(
-        selected_path,
+    (
+        success,
+        message,
+        created_wname,
+        created_wid,
+        created_target,
+    ) = await _create_agent_local_window(
+        cwd=selected_path,
         account_name=next_account,
     )
     if not success:
@@ -1334,12 +1371,20 @@ async def _rotate_thread_after_usage_limit(
         window_name=created_wname,
         account_name=next_account,
     )
-    session_manager.bind_thread(
-        user_id,
-        thread_id,
-        created_wid,
-        window_name=created_wname,
-    )
+    if created_target:
+        session_manager.bind_thread_target(
+            user_id,
+            thread_id,
+            created_target,
+            window_name=created_wname,
+        )
+    else:
+        session_manager.bind_thread(
+            user_id,
+            thread_id,
+            created_wid,
+            window_name=created_wname,
+        )
 
     resolved_chat = session_manager.resolve_chat_id(user_id, thread_id)
 
@@ -1574,11 +1619,17 @@ async def _recover_missing_bound_window(
         if old_window_id in offsets
     }
 
-    success, message, created_wname, created_wid = await tmux_manager.create_window(
-        selected_path,
+    (
+        success,
+        message,
+        created_wname,
+        created_wid,
+        created_target,
+    ) = await _create_agent_local_window(
+        cwd=selected_path,
         window_name=requested_window_name,
         resume_session_id=resume_session_id,
-        account_name=account_name,
+        account_name=account_name or "",
     )
     if not success:
         return False, message
@@ -1615,12 +1666,20 @@ async def _recover_missing_bound_window(
         session_manager._save_state()
 
     session_manager.unhide_session(resume_session_id)
-    session_manager.bind_thread(
-        user_id,
-        thread_id,
-        created_wid,
-        window_name=created_wname,
-    )
+    if created_target:
+        session_manager.bind_thread_target(
+            user_id,
+            thread_id,
+            created_target,
+            window_name=created_wname,
+        )
+    else:
+        session_manager.bind_thread(
+            user_id,
+            thread_id,
+            created_wid,
+            window_name=created_wname,
+        )
 
     for offset_user_id, offset in old_offsets.items():
         offsets = session_manager.user_window_offsets.setdefault(offset_user_id, {})
@@ -1933,10 +1992,16 @@ async def _create_and_bind_window(
     assert isinstance(user, User)
 
     launch_account = account_name or get_default_account_name()
-    success, message, created_wname, created_wid = await tmux_manager.create_window(
-        selected_path,
-        resume_session_id=resume_session_id,
-        account_name=launch_account,
+    (
+        success,
+        message,
+        created_wname,
+        created_wid,
+        created_target,
+    ) = await _create_agent_local_window(
+        cwd=selected_path,
+        resume_session_id=resume_session_id or "",
+        account_name=launch_account or "",
     )
     if success:
         if launch_account:
@@ -2009,9 +2074,20 @@ async def _create_and_bind_window(
 
         if pending_thread_id is not None:
             # Thread bind flow: bind thread to newly created window
-            session_manager.bind_thread(
-                user.id, pending_thread_id, created_wid, window_name=created_wname
-            )
+            if created_target:
+                session_manager.bind_thread_target(
+                    user.id,
+                    pending_thread_id,
+                    created_target,
+                    window_name=created_wname,
+                )
+            else:
+                session_manager.bind_thread(
+                    user.id,
+                    pending_thread_id,
+                    created_wid,
+                    window_name=created_wname,
+                )
 
             resolved_chat = session_manager.resolve_chat_id(user.id, pending_thread_id)
 
