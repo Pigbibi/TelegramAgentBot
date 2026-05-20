@@ -3,7 +3,7 @@
 [中文文档](README_CN.md)
 
 > TelegramCodexBot controls live Codex sessions over Telegram.
-> The CLI/package name remains `ccbot` for compatibility with existing installs.
+> The CLI/package name is `telegram-codex-bot`.
 
 Control Codex sessions remotely through Telegram while keeping tmux as the source of truth. This lets you monitor, answer, interrupt, resume, and clean up real terminal sessions from your phone without switching to a separate SDK session.
 
@@ -30,7 +30,7 @@ TelegramCodexBot is a Telegram controller for live Codex sessions:
 - **Topic cleanup** — stale topics, stale tmux windows, and dead bindings are cleaned up more safely
 - **Usage-limit failover** — when a session hits `usage_limit_exceeded`, the next message can rotate to another saved account in a fresh session
 - **Persistent state** — thread bindings, display names, offsets, and monitor state survive restarts
-- **GitHub bridge** — optional `ccbot-bridge` CLI can poll GitHub issues and inject structured tasks into Codex tmux sessions
+- **GitHub bridge** — optional `telegram-codex-bridge` CLI can poll GitHub issues and inject structured tasks into Codex tmux sessions
 
 ## Prerequisites
 
@@ -72,9 +72,9 @@ chmod +x scripts/bootstrap-macos.sh
 The script does the following:
 
 - run `uv sync`
-- create `~/.ccbot/.env` from `.env.example` if missing
-- install `ccbot hook --install` into the active Codex home
-- generate a reusable `~/.ccbot/bin/ccbot-launch`
+- create `~/.telegram-codex-bot/.env` from `.env.example` if missing
+- install `telegram-codex-bot hook --install` into the active Codex home
+- generate a reusable `~/.telegram-codex-bot/bin/telegram-codex-bot-launch`
 - generate a LaunchAgent plist for macOS
 
 Required local setup after the script runs:
@@ -94,12 +94,12 @@ codex login
 If you use multiple Codex accounts:
 
 ```bash
-~/.ccbot/bin/codex-account save main
-~/.ccbot/bin/codex-account save backup
-~/.ccbot/bin/codex-account use main
+~/.telegram-codex-bot/bin/codex-account save main
+~/.telegram-codex-bot/bin/codex-account save backup
+~/.telegram-codex-bot/bin/codex-account use main
 ```
 
-If `~/.ccbot/.env` still contains placeholder values, the script will write the
+If `~/.telegram-codex-bot/.env` still contains placeholder values, the script will write the
 launchd files but will not start the service. After editing `.env`, start it
 manually:
 
@@ -112,7 +112,7 @@ Check status:
 
 ```bash
 launchctl print "gui/$(id -u)/io.github.telegramcodexbot" | sed -n '1,40p'
-tail -n 50 ~/.ccbot/logs/ccbot.err.log
+tail -n 50 ~/.telegram-codex-bot/logs/telegram-codex-bot.err.log
 ```
 
 ## Quick deploy on Linux / VPS
@@ -129,14 +129,14 @@ chmod +x scripts/bootstrap-linux.sh
 The Linux helper:
 
 - runs `uv sync`
-- creates `~/.ccbot/.env` from `.env.example` if needed
-- installs `ccbot hook --install`
-- writes `~/.ccbot/bin/ccbot-launch`
+- creates `~/.telegram-codex-bot/.env` from `.env.example` if needed
+- installs `telegram-codex-bot hook --install`
+- writes `~/.telegram-codex-bot/bin/telegram-codex-bot-launch`
 - writes a user service at `~/.config/systemd/user/io.github.telegramcodexbot.service`
 
 After that:
 
-1. edit `~/.ccbot/.env`
+1. edit `~/.telegram-codex-bot/.env`
 2. run `codex login`
 3. start the service if it was not auto-started:
 
@@ -156,12 +156,8 @@ Check status:
 
 ```bash
 systemctl --user status io.github.telegramcodexbot.service --no-pager
-tail -n 50 ~/.ccbot/logs/ccbot.err.log
+tail -n 50 ~/.telegram-codex-bot/logs/telegram-codex-bot.err.log
 ```
-
-Existing deployments that already use the old `io.github.telegramcodexccbot`
-service label are kept working by the bootstrap scripts unless you override the
-service name explicitly.
 
 ## Configuration
 
@@ -172,14 +168,14 @@ service name explicitly.
 3. Open the bot settings mini app
 4. Enable **Threaded Mode**
 
-### 2. Create `~/.ccbot/.env`
+### 2. Create `~/.telegram-codex-bot/.env`
 
 ```ini
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 ALLOWED_USERS=your_telegram_user_id
-CCBOT_CODEX_COMMAND=codex
-CCBOT_AUTO_UPDATE=true
-CCBOT_SHOW_COMMENTARY_MESSAGES=true
+TELEGRAM_CODEX_BOT_CODEX_COMMAND=codex
+TELEGRAM_CODEX_BOT_AUTO_UPDATE=true
+TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES=true
 ```
 
 For most setups, this is the only file you need to edit.
@@ -199,7 +195,7 @@ The bridge supports two local modes:
 - `orchestrator`: consume the monthly issue from a control-plane repository and
   relay it to a single runner window
 
-The real config belongs at `~/.ccbot/github_codex_bridge.json` and should not
+The real config belongs at `~/.telegram-codex-bot/github_codex_bridge.json` and should not
 be committed.
 
 ### Required variables
@@ -213,25 +209,25 @@ be committed.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `CCBOT_DIR` | `~/.ccbot` | Config and state directory |
-| `TMUX_SESSION_NAME` | `ccbot` | tmux session name used by the bot |
-| `CCBOT_CODEX_COMMAND` | `codex` | Command used when creating a new window |
-| `CCBOT_CODEX_PROJECTS_PATH` | `~/.codex` | Transcript root to scan |
-| `CCBOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
-| `CCBOT_PROJECT_ROOTS` | _(none)_ | Optional named roots shown before directory browsing |
-| `MONITOR_POLL_INTERVAL` | `2.0` | Poll interval in seconds |
-| `CCBOT_STATUS_POLL_INTERVAL` | `1.0` | Terminal status polling interval in seconds; active `Working (...)` status edits keep Telegram refreshed |
-| `CCBOT_AUTO_UPDATE` | `false` | On startup, check and fast-forward git source installs |
-| `CCBOT_UPDATE_INTERVAL_SECONDS` | `86400` | Minimum seconds between automatic update checks |
-| `CCBOT_UPDATE_REQUIRE_IDLE` | `true` | Apply automatic updates only when no Codex pane is active |
-| `CCBOT_UPDATE_BUSY_RETRY_SECONDS` | `300` | Retry delay when automatic update is deferred by active work |
-| `CCBOT_UPDATE_REMOTE` | git remote | Optional git remote override for updates |
-| `CCBOT_UPDATE_BRANCH` | git branch | Optional git branch override for updates |
-| `CCBOT_UPDATE_RUN_UV_SYNC` | `true` | Run `uv sync` after a successful git update |
-| `CCBOT_CODEX_UPDATE_CHECK` | `false` | Check npm for Codex CLI updates during the idle update loop |
-| `CCBOT_CODEX_AUTO_UPDATE` | `false` | Run `npm install -g @openai/codex@latest` when an idle Codex update exists |
-| `CCBOT_SHOW_COMMENTARY_MESSAGES` | `false` | Forward Codex commentary/thinking messages |
-| `CCBOT_SHOW_HIDDEN_DIRS` | `false` | Show dot-directories in the directory picker |
+| `TELEGRAM_CODEX_BOT_DIR` | `~/.telegram-codex-bot` | Config and state directory |
+| `TELEGRAM_CODEX_BOT_TMUX_SESSION_NAME` | `telegram-codex-bot` | tmux session name used by the bot |
+| `TELEGRAM_CODEX_BOT_CODEX_COMMAND` | `codex` | Command used when creating a new window |
+| `TELEGRAM_CODEX_BOT_CODEX_PROJECTS_PATH` | `~/.codex` | Transcript root to scan |
+| `TELEGRAM_CODEX_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
+| `TELEGRAM_CODEX_BOT_PROJECT_ROOTS` | _(none)_ | Optional named roots shown before directory browsing |
+| `TELEGRAM_CODEX_BOT_MONITOR_POLL_INTERVAL` | `2.0` | Poll interval in seconds |
+| `TELEGRAM_CODEX_BOT_STATUS_POLL_INTERVAL` | `1.0` | Terminal status polling interval in seconds; active `Working (...)` status edits keep Telegram refreshed |
+| `TELEGRAM_CODEX_BOT_AUTO_UPDATE` | `false` | On startup, check and fast-forward git source installs |
+| `TELEGRAM_CODEX_BOT_UPDATE_INTERVAL_SECONDS` | `86400` | Minimum seconds between automatic update checks |
+| `TELEGRAM_CODEX_BOT_UPDATE_REQUIRE_IDLE` | `true` | Apply automatic updates only when no Codex pane is active |
+| `TELEGRAM_CODEX_BOT_UPDATE_BUSY_RETRY_SECONDS` | `300` | Retry delay when automatic update is deferred by active work |
+| `TELEGRAM_CODEX_BOT_UPDATE_REMOTE` | git remote | Optional git remote override for updates |
+| `TELEGRAM_CODEX_BOT_UPDATE_BRANCH` | git branch | Optional git branch override for updates |
+| `TELEGRAM_CODEX_BOT_UPDATE_RUN_UV_SYNC` | `true` | Run `uv sync` after a successful git update |
+| `TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK` | `false` | Check npm for Codex CLI updates during the idle update loop |
+| `TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE` | `false` | Run `npm install -g @openai/codex@latest` when an idle Codex update exists |
+| `TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES` | `false` | Forward Codex commentary/thinking messages |
+| `TELEGRAM_CODEX_BOT_SHOW_HIDDEN_DIRS` | `false` | Show dot-directories in the directory picker |
 | `OPENAI_API_KEY` | _(none)_ | Used for voice transcription |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Custom OpenAI-compatible endpoint |
 
@@ -243,50 +239,50 @@ To choose a computer, VPS, or mounted workspace before browsing directories,
 configure named roots:
 
 ```ini
-CCBOT_PROJECT_ROOTS=Local=~/Projects,Remote=/mnt/remote-projects
+TELEGRAM_CODEX_BOT_PROJECT_ROOTS=Local=~/Projects,Remote=/mnt/remote-projects
 ```
 
-When `CCBOT_PROJECT_ROOTS` is set, a new Telegram topic first shows a
+When `TELEGRAM_CODEX_BOT_PROJECT_ROOTS` is set, a new Telegram topic first shows a
 computer/VPS picker, even if only one root is configured. After selecting one,
 the normal directory browser starts at that root and does not navigate above it.
 Other computers or VPSes must be reachable as local paths from the machine
-running ccbot, for example through SSHFS or NFS mounts.
+running telegram-codex-bot, for example through SSHFS or NFS mounts.
 
 ### Updates
 
 For source-checkout installs created by the bootstrap scripts, set:
 
 ```ini
-CCBOT_AUTO_UPDATE=true
+TELEGRAM_CODEX_BOT_AUTO_UPDATE=true
 ```
 
 While the bot keeps running, it checks the configured git remote at most once
-per `CCBOT_UPDATE_INTERVAL_SECONDS`. With the default
-`CCBOT_UPDATE_REQUIRE_IDLE=true`, it first verifies that Telegram delivery queues
+per `TELEGRAM_CODEX_BOT_UPDATE_INTERVAL_SECONDS`. With the default
+`TELEGRAM_CODEX_BOT_UPDATE_REQUIRE_IDLE=true`, it first verifies that Telegram delivery queues
 are empty and that no Codex tmux pane is working or waiting for interactive
-input. If work is active, it waits `CCBOT_UPDATE_BUSY_RETRY_SECONDS` and tries
+input. If work is active, it waits `TELEGRAM_CODEX_BOT_UPDATE_BUSY_RETRY_SECONDS` and tries
 again.
 
-If the checkout is clean and the update can be applied as a fast-forward, ccbot
+If the checkout is clean and the update can be applied as a fast-forward, telegram-codex-bot
 runs `git pull --ff-only`, runs `uv sync`, and restarts itself so the new code is
 loaded. Existing Codex tmux windows and conversations are not killed.
 
 Manual commands:
 
 ```bash
-ccbot update --check
-ccbot update
-ccbot codex-update --check
-ccbot codex-update
-ccbot --version
+telegram-codex-bot update --check
+telegram-codex-bot update
+telegram-codex-bot codex-update --check
+telegram-codex-bot codex-update
+telegram-codex-bot --version
 ```
 
 Self-update intentionally skips non-git installs such as `pipx install` or
 `uv tool install`, and it also skips a checkout with local modifications.
 
-Codex CLI checks are separate from ccbot self-update. The example `.env` enables
-`CCBOT_CODEX_UPDATE_CHECK=true`, which only reports when a newer npm package is
-available. Set `CCBOT_CODEX_AUTO_UPDATE=true` only when the service user can
+Codex CLI checks are separate from telegram-codex-bot self-update. The example `.env` enables
+`TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK=true`, which only reports when a newer npm package is
+available. Set `TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=true` only when the service user can
 update the global npm package; otherwise use the manual command with the right
 permissions.
 
@@ -295,26 +291,26 @@ permissions.
 If Codex runs on a server where you do not want approval prompts in the terminal UI:
 
 ```ini
-CCBOT_CODEX_COMMAND=IS_SANDBOX=1 codex --dangerously-bypass-approvals-and-sandbox
+TELEGRAM_CODEX_BOT_CODEX_COMMAND=IS_SANDBOX=1 codex --dangerously-bypass-approvals-and-sandbox
 ```
 
 ## Multi-account switching and failover
 
-This project supports isolated account homes for Codex under `~/.ccbot/accounts/homes/`.
+This project supports isolated account homes for Codex under `~/.telegram-codex-bot/accounts/homes/`.
 
 Typical flow:
 
 ```bash
 # login account A
 codex login
-~/.ccbot/bin/codex-account save main
+~/.telegram-codex-bot/bin/codex-account save main
 
 # login account B
 codex login
-~/.ccbot/bin/codex-account save backup
+~/.telegram-codex-bot/bin/codex-account save backup
 
 # choose the default account for newly created sessions
-~/.ccbot/bin/codex-account use main
+~/.telegram-codex-bot/bin/codex-account use main
 ```
 
 When a live session emits `usage_limit_exceeded`, TelegramCodexBot marks that window as exhausted. On the next message, it can create a fresh tmux window on the next saved account and forward the message there.
@@ -328,7 +324,7 @@ By default, this project scans Codex transcript files under `~/.codex`.
 If you want automatic session-to-window tracking via the CLI hook, install it with:
 
 ```bash
-ccbot hook --install
+telegram-codex-bot hook --install
 ```
 
 This command enables Codex hooks in the active Codex home:
@@ -356,7 +352,7 @@ codex_hooks = true
         "hooks": [
           {
             "type": "command",
-            "command": "ccbot hook",
+            "command": "telegram-codex-bot hook",
             "statusMessage": "Registering Codex session",
             "timeout": 5
           }
@@ -367,16 +363,16 @@ codex_hooks = true
 }
 ```
 
-The hook writes window/session mappings into `$CCBOT_DIR/session_map.json`, which helps the bot keep tmux windows associated with Codex sessions even after clears or restarts.
+The hook writes window/session mappings into `$TELEGRAM_CODEX_BOT_DIR/session_map.json`, which helps the bot keep tmux windows associated with Codex sessions even after clears or restarts.
 
 ## Usage
 
 ```bash
 # installed tool
-ccbot
+telegram-codex-bot
 
 # from source
-uv run ccbot
+uv run telegram-codex-bot
 ```
 
 ### Bot commands
@@ -451,28 +447,28 @@ are not hidden model reasoning dumps.
 ## Running Codex manually in tmux
 
 ```bash
-tmux attach -t ccbot
+tmux attach -t telegram-codex-bot
 tmux new-window -n myproject -c ~/Code/myproject
 codex
 ```
 
-The window must live inside the configured `ccbot` tmux session.
+The window must live inside the configured `telegram-codex-bot` tmux session.
 
 ## Data storage
 
 | Path | Description |
 | --- | --- |
-| `$CCBOT_DIR/state.json` | Thread bindings, window state, display names, offsets, and hidden closed-session IDs |
-| `$CCBOT_DIR/session_map.json` | Hook-generated tmux window ↔ session mappings |
-| `$CCBOT_DIR/monitor_state.json` | Monitor byte offsets per session |
-| `$CCBOT_DIR/pending_topic_deletions.json` | Deferred topic deletions after local cleanup |
+| `$TELEGRAM_CODEX_BOT_DIR/state.json` | Thread bindings, window state, display names, offsets, and hidden closed-session IDs |
+| `$TELEGRAM_CODEX_BOT_DIR/session_map.json` | Hook-generated tmux window ↔ session mappings |
+| `$TELEGRAM_CODEX_BOT_DIR/monitor_state.json` | Monitor byte offsets per session |
+| `$TELEGRAM_CODEX_BOT_DIR/pending_topic_deletions.json` | Deferred topic deletions after local cleanup |
 | `~/.codex/` | Codex transcript root (read-only) |
-| `~/.ccbot/accounts/` | Optional saved account homes and snapshots |
+| `~/.telegram-codex-bot/accounts/` | Optional saved account homes and snapshots |
 
 ## File structure
 
 ```text
-src/ccbot/
+src/telegram_codex_bot/
 ├── __init__.py
 ├── account_manager.py
 ├── bot.py
@@ -496,4 +492,4 @@ src/ccbot/
 
 This project is distributed under the MIT License.
 Copyright and license notices are kept in `LICENSE`.
-Bundled fonts keep their own license files under `src/ccbot/fonts/`.
+Bundled fonts keep their own license files under `src/telegram_codex_bot/fonts/`.

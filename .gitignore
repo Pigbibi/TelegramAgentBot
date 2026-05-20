@@ -76,7 +76,7 @@ uv.lock
 *.log
 
 # Local runtime state / secrets
-.ccbot/
+.telegram-codex-bot/
 .codex/
 state.json
 session_map.json

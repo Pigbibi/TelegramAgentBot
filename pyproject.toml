@@ -1,5 +1,5 @@
 [project]
-name = "ccbot"
+name = "telegram-codex-bot"
 version = "0.2.0"
 description = "Telegram bot for monitoring Codex sessions via tmux"
 readme = "README.md"
@@ -15,8 +15,8 @@ dependencies = [
 ]
 
 [project.scripts]
-ccbot = "ccbot.main:main"
-ccbot-bridge = "ccbot.bridge:main"
+telegram-codex-bot = "telegram_codex_bot.main:main"
+telegram-codex-bridge = "telegram_codex_bot.bridge:main"
 
 [project.optional-dependencies]
 dev = [
@@ -32,7 +32,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ccbot"]
+packages = ["src/telegram_codex_bot"]
 
 # Target Python 3.12
 [tool.black]
@@ -49,7 +49,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["ccbot"]
+source = ["telegram_codex_bot"]
 branch = true
 
 [tool.coverage.report]

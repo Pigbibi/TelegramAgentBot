@@ -7,23 +7,13 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CCBOT_DIR="${CCBOT_DIR:-$HOME/.ccbot}"
-ENV_PATH="${CCBOT_DIR}/.env"
-BIN_DIR="${CCBOT_DIR}/bin"
-LOG_DIR="${CCBOT_DIR}/logs"
-DEFAULT_LAUNCH_AGENT_LABEL="io.github.telegramcodexbot"
-LEGACY_LAUNCH_AGENT_LABEL="io.github.telegramcodexccbot"
-
-if [[ -n "${CCBOT_LAUNCH_AGENT_LABEL:-}" ]]; then
-  LAUNCH_AGENT_LABEL="$CCBOT_LAUNCH_AGENT_LABEL"
-elif [[ -f "$HOME/Library/LaunchAgents/${LEGACY_LAUNCH_AGENT_LABEL}.plist" && ! -f "$HOME/Library/LaunchAgents/${DEFAULT_LAUNCH_AGENT_LABEL}.plist" ]]; then
-  LAUNCH_AGENT_LABEL="$LEGACY_LAUNCH_AGENT_LABEL"
-else
-  LAUNCH_AGENT_LABEL="$DEFAULT_LAUNCH_AGENT_LABEL"
-fi
-
+TELEGRAM_CODEX_BOT_DIR="${TELEGRAM_CODEX_BOT_DIR:-$HOME/.telegram-codex-bot}"
+ENV_PATH="${TELEGRAM_CODEX_BOT_DIR}/.env"
+BIN_DIR="${TELEGRAM_CODEX_BOT_DIR}/bin"
+LOG_DIR="${TELEGRAM_CODEX_BOT_DIR}/logs"
+LAUNCH_AGENT_LABEL="${TELEGRAM_CODEX_BOT_LAUNCH_AGENT_LABEL:-io.github.telegramcodexbot}"
 PLIST_PATH="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
-LAUNCHER_PATH="${BIN_DIR}/ccbot-launch"
+LAUNCHER_PATH="${BIN_DIR}/telegram-codex-bot-launch"
 PATH_VALUE="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${HOME}/.local/bin"
 
 require_cmd() {
@@ -53,7 +43,7 @@ cat >"$LAUNCHER_PATH" <<EOF
 export PATH="$PATH_VALUE"
 export HOME="$HOME"
 cd "$REPO_DIR"
-exec /usr/bin/env uv run ccbot "\$@"
+exec /usr/bin/env uv run telegram-codex-bot "\$@"
 EOF
 chmod +x "$LAUNCHER_PATH"
 
@@ -80,15 +70,15 @@ cat >"$PLIST_PATH" <<EOF
   <true/>
 
   <key>WorkingDirectory</key>
-  <string>$CCBOT_DIR</string>
+  <string>$TELEGRAM_CODEX_BOT_DIR</string>
 
   <key>ProcessType</key>
   <string>Background</string>
 
   <key>StandardOutPath</key>
-  <string>$LOG_DIR/ccbot.out.log</string>
+  <string>$LOG_DIR/telegram-codex-bot.out.log</string>
   <key>StandardErrorPath</key>
-  <string>$LOG_DIR/ccbot.err.log</string>
+  <string>$LOG_DIR/telegram-codex-bot.err.log</string>
 
   <key>EnvironmentVariables</key>
   <dict>
@@ -105,7 +95,7 @@ plutil -lint "$PLIST_PATH" >/dev/null
 
 cd "$REPO_DIR"
 uv sync
-uv run ccbot hook --install
+uv run telegram-codex-bot hook --install
 
 token_line="$(grep -E '^TELEGRAM_BOT_TOKEN=' "$ENV_PATH" || true)"
 user_line="$(grep -E '^ALLOWED_USERS=' "$ENV_PATH" || true)"
@@ -145,9 +135,9 @@ Next steps:
      - optional OPENAI_API_KEY / OPENAI_BASE_URL
   2. Run: codex login
   3. Optional multi-account:
-     ~/.ccbot/bin/codex-account save main
-     ~/.ccbot/bin/codex-account save backup
-     ~/.ccbot/bin/codex-account use main
+     ~/.telegram-codex-bot/bin/codex-account save main
+     ~/.telegram-codex-bot/bin/codex-account save backup
+     ~/.telegram-codex-bot/bin/codex-account use main
 
 Service started automatically: $started
 EOF

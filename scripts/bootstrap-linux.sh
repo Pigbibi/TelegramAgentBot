@@ -7,24 +7,14 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CCBOT_DIR="${CCBOT_DIR:-$HOME/.ccbot}"
-ENV_PATH="${CCBOT_DIR}/.env"
-BIN_DIR="${CCBOT_DIR}/bin"
-LOG_DIR="${CCBOT_DIR}/logs"
+TELEGRAM_CODEX_BOT_DIR="${TELEGRAM_CODEX_BOT_DIR:-$HOME/.telegram-codex-bot}"
+ENV_PATH="${TELEGRAM_CODEX_BOT_DIR}/.env"
+BIN_DIR="${TELEGRAM_CODEX_BOT_DIR}/bin"
+LOG_DIR="${TELEGRAM_CODEX_BOT_DIR}/logs"
 SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-DEFAULT_SERVICE_NAME="io.github.telegramcodexbot.service"
-LEGACY_SERVICE_NAME="io.github.telegramcodexccbot.service"
-
-if [[ -n "${CCBOT_SYSTEMD_SERVICE_NAME:-}" ]]; then
-  SERVICE_NAME="$CCBOT_SYSTEMD_SERVICE_NAME"
-elif [[ -f "${SYSTEMD_DIR}/${LEGACY_SERVICE_NAME}" && ! -f "${SYSTEMD_DIR}/${DEFAULT_SERVICE_NAME}" ]]; then
-  SERVICE_NAME="$LEGACY_SERVICE_NAME"
-else
-  SERVICE_NAME="$DEFAULT_SERVICE_NAME"
-fi
-
+SERVICE_NAME="${TELEGRAM_CODEX_BOT_SYSTEMD_SERVICE_NAME:-io.github.telegramcodexbot.service}"
 SERVICE_PATH="${SYSTEMD_DIR}/${SERVICE_NAME}"
-LAUNCHER_PATH="${BIN_DIR}/ccbot-launch"
+LAUNCHER_PATH="${BIN_DIR}/telegram-codex-bot-launch"
 PATH_VALUE="/usr/local/bin:/usr/bin:/bin:${HOME}/.local/bin"
 
 require_cmd() {
@@ -52,7 +42,7 @@ cat >"$LAUNCHER_PATH" <<EOF
 export PATH="$PATH_VALUE"
 export HOME="$HOME"
 cd "$REPO_DIR"
-exec /usr/bin/env uv run ccbot "\$@"
+exec /usr/bin/env uv run telegram-codex-bot "\$@"
 EOF
 chmod +x "$LAUNCHER_PATH"
 
@@ -64,15 +54,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=$CCBOT_DIR
+WorkingDirectory=$TELEGRAM_CODEX_BOT_DIR
 ExecStart=$LAUNCHER_PATH
 Restart=always
 RestartSec=3
 KillMode=process
 Environment=PATH=$PATH_VALUE
 Environment=HOME=$HOME
-StandardOutput=append:$LOG_DIR/ccbot.out.log
-StandardError=append:$LOG_DIR/ccbot.err.log
+StandardOutput=append:$LOG_DIR/telegram-codex-bot.out.log
+StandardError=append:$LOG_DIR/telegram-codex-bot.err.log
 
 [Install]
 WantedBy=default.target
@@ -80,7 +70,7 @@ EOF
 
 cd "$REPO_DIR"
 uv sync
-uv run ccbot hook --install
+uv run telegram-codex-bot hook --install
 
 token_line="$(grep -E '^TELEGRAM_BOT_TOKEN=' "$ENV_PATH" || true)"
 user_line="$(grep -E '^ALLOWED_USERS=' "$ENV_PATH" || true)"
@@ -122,9 +112,9 @@ Next steps:
      - optional OPENAI_API_KEY / OPENAI_BASE_URL
   2. Run: codex login
   3. Optional multi-account:
-     ~/.ccbot/bin/codex-account save main
-     ~/.ccbot/bin/codex-account save backup
-     ~/.ccbot/bin/codex-account use main
+     ~/.telegram-codex-bot/bin/codex-account save main
+     ~/.telegram-codex-bot/bin/codex-account save backup
+     ~/.telegram-codex-bot/bin/codex-account use main
 
 Service started automatically: $started
 EOF
