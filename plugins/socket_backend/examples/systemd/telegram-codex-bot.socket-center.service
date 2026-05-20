@@ -1,0 +1,20 @@
+[Unit]
+Description=TelegramCodexBot center bot with socket backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/TelegramCodexBot
+EnvironmentFile=%h/.telegram-codex-bot/socket-center.env
+ExecStart=%h/Projects/TelegramCodexBot/.venv/bin/telegram-codex-bot
+Restart=on-failure
+RestartSec=5
+
+# Keep the center bot responsive on small VPS instances.
+MemoryHigh=256M
+MemoryMax=512M
+TasksMax=128
+
+[Install]
+WantedBy=default.target

@@ -47,7 +47,8 @@ It provides:
 - a tiny newline-delimited JSON protocol over TCP;
 - remote root browsing, directory browsing, resume-session lookup, session
   creation, text send, control key send, pane capture, and transcript event
-  streaming.
+  streaming;
+- file upload for Telegram photo/file forwarding to remote nodes.
 
 This avoids putting cluster code into the main bot package. It also avoids
 requiring a public domain: a Mac or another private machine can expose its
@@ -67,6 +68,7 @@ Center bot `.env`:
 TELEGRAM_CODEX_BOT_BACKEND=socket-cluster
 TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=telegram_codex_bot_socket_backend
 TELEGRAM_CODEX_BOT_SOCKET_NODES=macbook=127.0.0.1:8765
+TELEGRAM_CODEX_BOT_SOCKET_MAX_MESSAGE_BYTES=26214400
 ```
 
 Install the plugin on machines that use socket mode:
@@ -87,6 +89,7 @@ Use one request per TCP connection for commands:
 {"id":"...","op":"list_roots"}
 {"id":"...","op":"list_directory","path":"/Users/me/Projects","root_path":"/Users/me/Projects"}
 {"id":"...","op":"list_sessions","cwd":"/Users/me/Projects/app"}
+{"id":"...","op":"upload_file","target":{"backend_id":"socket-cluster","node_id":"macbook","session_id":"..."},"filename":"photo.jpg","content_b64":"..."}
 ```
 
 Use a long-lived subscription connection for agent events:
@@ -120,11 +123,20 @@ GitHub remains useful for async task orchestration, which is what
 `telegram-codex-bridge` already covers. For live center-bot / agent-node chat,
 a socket plugin over reverse SSH is simpler and faster.
 
-## Remaining Gap
+## Service Examples
 
-Photo forwarding still needs an optional file-transfer capability. Until that
-exists, the core intentionally keeps photo forwarding local-only for non-local
-targets.
+Example service files are included in the plugin package:
+
+- `plugins/socket_backend/examples/systemd/telegram-codex-bot.socket-center.service`
+- `plugins/socket_backend/examples/systemd/telegram-codex-agent-node.service`
+- `plugins/socket_backend/examples/systemd/socket-center.env.example`
+- `plugins/socket_backend/examples/launchd/io.github.telegramcodexbot.agent-node.plist`
+- `plugins/socket_backend/examples/launchd/io.github.telegramcodexbot.center-bot.plist`
+
+Use systemd user services for a Linux/VPS center bot or Linux agent node. Use
+LaunchAgent plists for a macOS agent node. The plist files contain placeholder
+paths like `/Users/YOUR_USER/Projects/TelegramCodexBot`; replace them before
+loading with `launchctl`.
 
 ## Implementation Order
 
@@ -137,6 +149,6 @@ targets.
    methods.
 5. Done: add event subscription so node transcript messages call the center
    `message_callback`.
-6. Next: add file-transfer support for photos and attachments.
-7. Next: add systemd/LaunchAgent examples for the VPS center bot and Mac agent
+6. Done: add file-transfer support for photos and attachments.
+7. Done: add systemd/LaunchAgent examples for the VPS center bot and Mac agent
    node.

@@ -1,0 +1,22 @@
+[Unit]
+Description=TelegramCodexBot socket agent node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/TelegramCodexBot
+Environment=TELEGRAM_CODEX_AGENT_NODE_ID=linux-node
+Environment=TELEGRAM_CODEX_AGENT_NODE_HOST=127.0.0.1
+Environment=TELEGRAM_CODEX_AGENT_NODE_PORT=8765
+Environment=TELEGRAM_CODEX_AGENT_NODE_MAX_MESSAGE_BYTES=26214400
+ExecStart=%h/Projects/TelegramCodexBot/.venv/bin/telegram-codex-agent-node
+Restart=on-failure
+RestartSec=5
+
+MemoryHigh=256M
+MemoryMax=512M
+TasksMax=128
+
+[Install]
+WantedBy=default.target

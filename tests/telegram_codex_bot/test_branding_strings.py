@@ -22,9 +22,10 @@ class BrandingStringTests(unittest.TestCase):
         self.assertIn("Codex Monitor", bot.WELCOME_MESSAGE)
         self.assertEqual(
             bot.UNSUPPORTED_CONTENT_MESSAGE,
-            "⚠ Only text, photo, and voice messages are supported. Stickers, video, and other media cannot be forwarded to Codex.",
+            "⚠ Only text, photo, file, and voice messages are supported. Stickers, video, and other media cannot be forwarded to Codex.",
         )
         self.assertEqual(bot.PHOTO_CONFIRMATION_MESSAGE, "📷 Image sent to Codex.")
+        self.assertEqual(bot.FILE_CONFIRMATION_MESSAGE, "📎 File sent to Codex.")
         self.assertEqual(
             bot.SESSION_STILL_RUNNING_MESSAGE,
             "The Codex session is still running in tmux.",
