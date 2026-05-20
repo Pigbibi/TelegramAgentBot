@@ -114,8 +114,7 @@ class Config:
         # single-machine tmux behavior. Optional plugins can register additional
         # backends, for example a center-bot plus remote agent-node backend.
         self.agent_backend = (
-            os.getenv("TELEGRAM_CODEX_BOT_BACKEND", "local").strip().lower()
-            or "local"
+            os.getenv("TELEGRAM_CODEX_BOT_BACKEND", "local").strip().lower() or "local"
         )
         backend_plugins = os.getenv(
             "TELEGRAM_CODEX_BOT_BACKEND_PLUGINS",

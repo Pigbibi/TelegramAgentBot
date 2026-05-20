@@ -48,8 +48,7 @@ def _factory_from_loaded(value: Any) -> BackendFactory:
         required_attrs = ("info", "prepare", "start", "stop")
         if not all(hasattr(backend, attr) for attr in required_attrs):
             raise TypeError(
-                "backend object does not implement AgentBackend: "
-                f"{backend!r}"
+                f"backend object does not implement AgentBackend: {backend!r}"
             )
         return cast(AgentBackend, backend)
 
