@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from telegram_codex_bot.backends.base import (
@@ -19,6 +21,7 @@ from telegram_codex_bot.backends.base import (
     SendResult,
 )
 from telegram_codex_bot.backends.browser import BrowserRoot, DirectoryListing
+from telegram_codex_bot.backends.files import FileUploadResult
 from telegram_codex_bot.session import CodexSession
 
 from .protocol import (
@@ -49,16 +52,12 @@ def _parse_nodes(raw: str) -> dict[str, NodeAddress]:
         if not item:
             continue
         if "=" not in item:
-            raise ValueError(
-                "Socket node must use node_id=host:port, got " f"{item!r}"
-            )
+            raise ValueError(f"Socket node must use node_id=host:port, got {item!r}")
         node_id, address = item.split("=", 1)
         node_id = node_id.strip()
         host, sep, port_str = address.strip().rpartition(":")
         if not node_id or not sep or not host or not port_str.isdigit():
-            raise ValueError(
-                "Socket node must use node_id=host:port, got " f"{item!r}"
-            )
+            raise ValueError(f"Socket node must use node_id=host:port, got {item!r}")
         nodes[node_id] = NodeAddress(host=host, port=int(port_str))
     return nodes
 
@@ -82,6 +81,11 @@ class SocketClusterBackend:
         )
         self.reconnect_delay = reconnect_delay or float(
             os.getenv("TELEGRAM_CODEX_BOT_SOCKET_RECONNECT_DELAY", "5")
+        )
+        self.max_message_bytes = int(
+            os.getenv(
+                "TELEGRAM_CODEX_BOT_SOCKET_MAX_MESSAGE_BYTES", str(25 * 1024 * 1024)
+            )
         )
         self._message_callback: MessageCallback | None = None
         self._subscribe_tasks: list[asyncio.Task[None]] = []
@@ -249,6 +253,47 @@ class SocketClusterBackend:
                 sessions.append(session_from_dict(item))
         return sessions
 
+    async def upload_file(
+        self,
+        target: AgentTarget,
+        local_path: str,
+        *,
+        filename: str = "",
+    ) -> FileUploadResult:
+        """Upload a local center-bot file to the target agent node."""
+        path = Path(local_path)
+        try:
+            data = await asyncio.to_thread(path.read_bytes)
+            content_b64 = base64.b64encode(data).decode("ascii")
+            payload = {
+                "op": "upload_file",
+                "target": target_to_dict(target),
+                "filename": filename or path.name,
+                "content_b64": content_b64,
+            }
+            payload_size = len(json.dumps(payload, ensure_ascii=False).encode()) + 128
+            if payload_size > self.max_message_bytes:
+                return FileUploadResult(
+                    ok=False,
+                    message=(
+                        "File is too large for socket upload limit "
+                        f"({self.max_message_bytes} bytes)"
+                    ),
+                )
+            result = await self._request(
+                target.node_id,
+                payload,
+            )
+        except Exception as exc:
+            logger.exception("Socket upload_file failed for %s", target)
+            return FileUploadResult(ok=False, message=str(exc))
+
+        return FileUploadResult(
+            ok=bool(result.get("ok", True)),
+            path=str(result.get("path", "")),
+            message=str(result.get("message", "")),
+        )
+
     async def _send_to_target(
         self,
         target: AgentTarget,
@@ -274,7 +319,11 @@ class SocketClusterBackend:
 
         request = {"id": uuid.uuid4().hex, "node_id": node_id, **payload}
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(node.host, node.port),
+            asyncio.open_connection(
+                node.host,
+                node.port,
+                limit=self.max_message_bytes,
+            ),
             timeout=self.timeout,
         )
         try:
@@ -296,7 +345,11 @@ class SocketClusterBackend:
         node = self.nodes[node_id]
         while self._running:
             try:
-                reader, writer = await asyncio.open_connection(node.host, node.port)
+                reader, writer = await asyncio.open_connection(
+                    node.host,
+                    node.port,
+                    limit=self.max_message_bytes,
+                )
                 try:
                     request = {
                         "id": uuid.uuid4().hex,
@@ -319,9 +372,7 @@ class SocketClusterBackend:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning(
-                    "Socket subscription lost for %s: %s", node_id, exc
-                )
+                logger.warning("Socket subscription lost for %s: %s", node_id, exc)
                 await asyncio.sleep(self.reconnect_delay)
 
     async def _handle_event(self, event: dict[str, Any]) -> None:

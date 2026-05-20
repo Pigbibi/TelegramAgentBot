@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from .backends.base import (
     AgentBackend,
@@ -10,6 +11,7 @@ from .backends.base import (
     CreateSessionRequest,
     CreateSessionResult,
 )
+from .backends.files import AgentFileTransfer, FileUploadResult
 from .backends.local import LocalTmuxBackend
 from .backends.registry import get_configured_backend, load_backend
 from .config import config
@@ -98,6 +100,37 @@ async def create_agent_session(
             resume_session_id=resume_session_id,
             account_name=account_name,
         )
+    )
+
+
+async def upload_agent_file(
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+    local_path: str,
+    *,
+    filename: str = "",
+) -> FileUploadResult | None:
+    """Copy a file to the agent target for a topic/window."""
+    target = target_for_context(user_id, thread_id, window_id)
+    if target is None:
+        return None
+
+    if target.backend_id == "local":
+        return FileUploadResult(ok=True, path=local_path)
+
+    backend = backend_for_target(target)
+    upload_file = getattr(backend, "upload_file", None)
+    if not callable(upload_file):
+        return FileUploadResult(
+            ok=False,
+            message="Agent backend does not support file transfer",
+        )
+    file_backend = cast(AgentFileTransfer, backend)
+    return await file_backend.upload_file(
+        target,
+        local_path,
+        filename=filename,
     )
 
 

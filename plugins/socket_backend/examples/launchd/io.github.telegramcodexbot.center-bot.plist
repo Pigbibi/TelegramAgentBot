@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>io.github.telegramcodexbot.center-bot</string>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/YOUR_USER/Projects/TelegramCodexBot</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOUR_USER/Projects/TelegramCodexBot/.venv/bin/telegram-codex-bot</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>TELEGRAM_BOT_TOKEN</key>
+    <string>123456:replace-me</string>
+    <key>ALLOWED_USERS</key>
+    <string>123456789</string>
+    <key>TELEGRAM_CODEX_BOT_BACKEND</key>
+    <string>socket-cluster</string>
+    <key>TELEGRAM_CODEX_BOT_BACKEND_PLUGINS</key>
+    <string>telegram_codex_bot_socket_backend</string>
+    <key>TELEGRAM_CODEX_BOT_SOCKET_NODES</key>
+    <string>macbook=127.0.0.1:8765</string>
+    <key>TELEGRAM_CODEX_BOT_SOCKET_MAX_MESSAGE_BYTES</key>
+    <string>26214400</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USER/Library/Logs/telegram-codex-bot.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USER/Library/Logs/telegram-codex-bot.err.log</string>
+</dict>
+</plist>

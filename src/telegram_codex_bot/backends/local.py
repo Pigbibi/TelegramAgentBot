@@ -15,6 +15,7 @@ from .base import (
     SendResult,
 )
 from .browser import BrowserRoot, DirectoryListing
+from .files import FileUploadResult
 
 if TYPE_CHECKING:
     from ..session import CodexSession
@@ -183,6 +184,16 @@ class LocalTmuxBackend:
         from ..session import session_manager
 
         return await session_manager.list_sessions_for_directory(cwd)
+
+    async def upload_file(
+        self,
+        target: AgentTarget,
+        local_path: str,
+        *,
+        filename: str = "",
+    ) -> FileUploadResult:
+        """Local backend already sees files by local path."""
+        return FileUploadResult(ok=True, path=local_path)
 
     async def send_message(self, target: AgentTarget, text: str) -> SendResult:
         """Send user text to a local tmux window."""

@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import logging
 import os
+import re
+import time
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from telegram_codex_bot.backends.base import AgentTarget, CreateSessionRequest
 from telegram_codex_bot.backends.local import LocalTmuxBackend
+from telegram_codex_bot.config import config
 from telegram_codex_bot.session import _session_ids_match, session_manager
 from telegram_codex_bot.session_monitor import NewMessage
 
@@ -26,6 +31,8 @@ from .protocol import (
 
 logger = logging.getLogger(__name__)
 
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
 
 class AgentNodeServer:
     """TCP server that exposes one machine's local Codex backend."""
@@ -36,10 +43,17 @@ class AgentNodeServer:
         node_id: str,
         host: str = "127.0.0.1",
         port: int = 8765,
+        max_message_bytes: int | None = None,
     ) -> None:
         self.node_id = node_id
         self.host = host
         self.port = port
+        self.max_message_bytes = max_message_bytes or int(
+            os.getenv(
+                "TELEGRAM_CODEX_AGENT_NODE_MAX_MESSAGE_BYTES",
+                str(25 * 1024 * 1024),
+            )
+        )
         self.local_backend = LocalTmuxBackend()
         self._server: asyncio.AbstractServer | None = None
         self._subscribers: set[asyncio.StreamWriter] = set()
@@ -52,8 +66,11 @@ class AgentNodeServer:
             self._handle_client,
             self.host,
             self.port,
+            limit=self.max_message_bytes,
         )
-        logger.info("Agent node %s listening on %s:%d", self.node_id, self.host, self.port)
+        logger.info(
+            "Agent node %s listening on %s:%d", self.node_id, self.host, self.port
+        )
 
     async def stop(self) -> None:
         """Stop the TCP server and transcript monitor."""
@@ -152,6 +169,8 @@ class AgentNodeServer:
                 str(request.get("cwd", "")),
             )
             return {"sessions": [session_to_dict(session) for session in sessions]}
+        if op == "upload_file":
+            return await self._upload_file(request)
         raise ValueError(f"Unsupported op {op!r}")
 
     async def _create_session(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -187,6 +206,29 @@ class AgentNodeServer:
             "window_id": window_id,
             "session_id": target_session_id(self.node_id, window_id),
         }
+
+    async def _upload_file(self, request: dict[str, Any]) -> dict[str, Any]:
+        filename = self._safe_filename(str(request.get("filename", "upload.bin")))
+        content_b64 = request.get("content_b64", "")
+        if not isinstance(content_b64, str) or not content_b64:
+            raise ValueError("Missing upload content")
+
+        data = base64.b64decode(content_b64)
+        upload_dir = config.config_dir / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        destination = upload_dir / f"{time.time_ns()}_{filename}"
+        await asyncio.to_thread(destination.write_bytes, data)
+        return {
+            "ok": True,
+            "path": str(destination),
+            "message": "uploaded",
+        }
+
+    @staticmethod
+    def _safe_filename(filename: str) -> str:
+        name = Path(filename).name or "upload.bin"
+        safe = _SAFE_FILENAME_RE.sub("_", name).strip("._")
+        return safe or "upload.bin"
 
     def _local_target(self, request: dict[str, Any]) -> AgentTarget:
         raw_target = request.get("target", {})
@@ -264,6 +306,17 @@ def _build_parser() -> argparse.ArgumentParser:
         default=os.getenv("TELEGRAM_CODEX_AGENT_NODE_LOG_LEVEL", "INFO"),
         help="Python logging level",
     )
+    parser.add_argument(
+        "--max-message-bytes",
+        type=int,
+        default=int(
+            os.getenv(
+                "TELEGRAM_CODEX_AGENT_NODE_MAX_MESSAGE_BYTES",
+                str(25 * 1024 * 1024),
+            )
+        ),
+        help="Maximum JSON line size accepted from the center bot",
+    )
     return parser
 
 
@@ -272,7 +325,12 @@ async def _amain(args: argparse.Namespace) -> None:
         level=getattr(logging, str(args.log_level).upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    server = AgentNodeServer(node_id=args.node_id, host=args.host, port=args.port)
+    server = AgentNodeServer(
+        node_id=args.node_id,
+        host=args.host,
+        port=args.port,
+        max_message_bytes=args.max_message_bytes,
+    )
     await server.serve_forever()
 
 

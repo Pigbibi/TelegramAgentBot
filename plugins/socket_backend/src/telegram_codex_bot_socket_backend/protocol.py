@@ -71,7 +71,9 @@ def listing_to_dict(listing: DirectoryListing) -> dict[str, Any]:
 def listing_from_dict(data: dict[str, Any]) -> DirectoryListing:
     """Deserialize a DirectoryListing."""
     raw_subdirs = data.get("subdirs", [])
-    subdirs = [str(item) for item in raw_subdirs] if isinstance(raw_subdirs, list) else []
+    subdirs = (
+        [str(item) for item in raw_subdirs] if isinstance(raw_subdirs, list) else []
+    )
     return DirectoryListing(
         path=str(data.get("path", "")),
         subdirs=subdirs,

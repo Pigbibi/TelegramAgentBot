@@ -9,8 +9,10 @@ from telegram_codex_bot.agent_io import (
     create_agent_session,
     send_agent_control,
     send_agent_message,
+    upload_agent_file,
 )
 from telegram_codex_bot.backends.base import AgentTarget, CreateSessionResult
+from telegram_codex_bot.backends.files import FileUploadResult
 
 
 class DummyBackend:
@@ -283,3 +285,75 @@ async def test_send_message_remote_target_uses_target_backend(monkeypatch):
     assert result.missing is False
     remote_backend.send_message.assert_awaited_once_with(remote_target, "hello")
     configured_backend.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_upload_file_local_target_returns_local_path(monkeypatch):
+    monkeypatch.setattr(
+        agent_io.session_manager,
+        "resolve_target_for_thread",
+        lambda user_id, thread_id: AgentTarget("local", "local", window_id="@2"),
+    )
+
+    result = await upload_agent_file(100, 42, "@2", "/tmp/image.jpg")
+
+    assert result == FileUploadResult(ok=True, path="/tmp/image.jpg")
+
+
+@pytest.mark.asyncio
+async def test_upload_file_remote_target_uses_target_backend(monkeypatch):
+    configured_backend = DummyBackend("local")
+    remote_backend = DummyBackend("cluster")
+    remote_backend.upload_file = AsyncMock(
+        return_value=FileUploadResult(ok=True, path="/remote/image.jpg")
+    )
+    remote_target = AgentTarget("cluster", "macbook", session_id="remote-1")
+
+    monkeypatch.setattr(agent_io, "get_configured_backend", lambda: configured_backend)
+    monkeypatch.setattr(
+        agent_io, "load_backend", lambda *args, **kwargs: remote_backend
+    )
+    monkeypatch.setattr(
+        agent_io.session_manager,
+        "resolve_target_for_thread",
+        lambda user_id, thread_id: remote_target,
+    )
+
+    result = await upload_agent_file(
+        100,
+        42,
+        "",
+        "/tmp/image.jpg",
+        filename="image.jpg",
+    )
+
+    assert result == FileUploadResult(ok=True, path="/remote/image.jpg")
+    remote_backend.upload_file.assert_awaited_once_with(
+        remote_target,
+        "/tmp/image.jpg",
+        filename="image.jpg",
+    )
+
+
+@pytest.mark.asyncio
+async def test_upload_file_remote_target_without_backend_support(monkeypatch):
+    configured_backend = DummyBackend("local")
+    remote_backend = DummyBackend("cluster")
+    remote_target = AgentTarget("cluster", "macbook", session_id="remote-1")
+
+    monkeypatch.setattr(agent_io, "get_configured_backend", lambda: configured_backend)
+    monkeypatch.setattr(
+        agent_io, "load_backend", lambda *args, **kwargs: remote_backend
+    )
+    monkeypatch.setattr(
+        agent_io.session_manager,
+        "resolve_target_for_thread",
+        lambda user_id, thread_id: remote_target,
+    )
+
+    result = await upload_agent_file(100, 42, "", "/tmp/image.jpg")
+
+    assert result == FileUploadResult(
+        ok=False,
+        message="Agent backend does not support file transfer",
+    )

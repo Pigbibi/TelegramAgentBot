@@ -10,8 +10,8 @@ Core responsibilities:
     interactive UI navigation, screenshot refresh.
   - Topic-based routing: each named topic binds to one tmux window.
     Unbound topics trigger the directory browser to create a new session.
-  - Photo handling: photos sent by user are downloaded and forwarded
-    to Codex as file paths (photo_handler).
+  - Photo/file handling: attachments sent by user are downloaded and forwarded
+    to Codex as file paths (photo_handler/document_handler).
   - Voice handling: voice messages are transcribed via OpenAI API and
     forwarded as text (voice_handler).
   - Automatic cleanup: closing a topic kills the associated window
@@ -37,6 +37,7 @@ import io
 import json
 import logging
 import posixpath
+import re
 import time
 from pathlib import Path
 from typing import Any, TypedDict, cast
@@ -73,6 +74,7 @@ from .agent_io import (
     create_agent_session,
     send_agent_control,
     send_agent_message,
+    upload_agent_file,
 )
 from .backends.base import AgentBackend, AgentTarget
 from .backends.browser import AgentBrowser, DirectoryListing
@@ -206,10 +208,11 @@ WELCOME_MESSAGE = (
     "Each topic is a session. Create a new topic to start."
 )
 UNSUPPORTED_CONTENT_MESSAGE = (
-    "⚠ Only text, photo, and voice messages are supported. Stickers, video, "
+    "⚠ Only text, photo, file, and voice messages are supported. Stickers, video, "
     f"and other media cannot be forwarded to {PRODUCT_NAME}."
 )
 PHOTO_CONFIRMATION_MESSAGE = f"📷 Image sent to {PRODUCT_NAME}."
+FILE_CONFIRMATION_MESSAGE = f"📎 File sent to {PRODUCT_NAME}."
 SESSION_STILL_RUNNING_MESSAGE = f"The {PRODUCT_NAME} session is still running in tmux."
 HELP_COMMAND_DESCRIPTION = f"↗ Show {PRODUCT_NAME} help"
 ESC_COMMAND_DESCRIPTION = f"Send Escape to interrupt {PRODUCT_NAME}"
@@ -1307,7 +1310,17 @@ async def unsupported_content_handler(
 # --- Image directory for incoming photos ---
 _IMAGES_DIR = app_dir() / "images"
 _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+_FILES_DIR = app_dir() / "files"
+_FILES_DIR.mkdir(parents=True, exist_ok=True)
 _PENDING_TOPIC_DELETIONS_FILE = app_dir() / "pending_topic_deletions.json"
+_SAFE_UPLOAD_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_upload_filename(filename: str, *, fallback: str = "upload.bin") -> str:
+    """Return a path-safe ASCII filename for local and remote uploads."""
+    name = Path(filename).name or fallback
+    safe = _SAFE_UPLOAD_FILENAME_RE.sub("_", name).strip("._")
+    return safe or fallback
 
 
 async def process_pending_topic_deletions(bot: Bot) -> None:
@@ -1428,51 +1441,74 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     wid = session_manager.get_window_for_thread(user.id, thread_id)
+    remote_target = None
     if wid is None:
-        if _remote_target_for_thread(user.id, thread_id):
+        remote_target = _remote_target_for_thread(user.id, thread_id)
+        if remote_target is None:
             await safe_reply(
                 update.message,
-                "❌ Photo forwarding is only available for local tmux sessions. "
-                "Remote agent backends need file transfer support first.",
+                "❌ No session bound to this topic. Send a text message first to create one.",
             )
             return
-        await safe_reply(
-            update.message,
-            "❌ No session bound to this topic. Send a text message first to create one.",
-        )
-        return
 
-    w = await tmux_manager.find_window_by_id(wid)
-    if not w:
-        display = session_manager.get_display_name(wid)
-        session_manager.unbind_thread(user.id, thread_id)
-        await safe_reply(
-            update.message,
-            f"❌ Window '{display}' no longer exists. Binding removed.\n"
-            "Send a message to start a new session.",
-        )
-        return
+    w = None
+    if wid is not None:
+        w = await tmux_manager.find_window_by_id(wid)
+        if not w:
+            display = session_manager.get_display_name(wid)
+            session_manager.unbind_thread(user.id, thread_id)
+            await safe_reply(
+                update.message,
+                f"❌ Window '{display}' no longer exists. Binding removed.\n"
+                "Send a message to start a new session.",
+            )
+            return
 
     # Download the highest-resolution photo
     photo = update.message.photo[-1]
     tg_file = await photo.get_file()
 
     # Save to ~/.telegram-codex-bot/images/<timestamp>_<file_unique_id>.jpg
-    filename = f"{int(time.time())}_{photo.file_unique_id}.jpg"
+    filename = f"{time.time_ns()}_{photo.file_unique_id}.jpg"
     file_path = _IMAGES_DIR / filename
     await tg_file.download_to_drive(file_path)
+
+    agent_file_path = str(file_path)
+    if remote_target is not None:
+        upload = await upload_agent_file(
+            user.id,
+            thread_id,
+            "",
+            str(file_path),
+            filename=filename,
+        )
+        if upload is None:
+            await safe_reply(update.message, "❌ No session bound")
+            return
+        if not upload.ok or not upload.path:
+            await safe_reply(
+                update.message,
+                f"❌ File transfer failed: {upload.message or 'backend unavailable'}",
+            )
+            return
+        agent_file_path = upload.path
 
     # Build the message to send to Codex
     caption = update.message.caption or ""
     if caption:
-        text_to_send = f"{caption}\n\n(image attached: {file_path})"
+        text_to_send = f"{caption}\n\n(image attached: {agent_file_path})"
     else:
-        text_to_send = f"(image attached: {file_path})"
+        text_to_send = f"(image attached: {agent_file_path})"
 
     await _safe_send_typing_action(update.message.chat, source="photo_handler")
-    await enqueue_status_update(context.bot, user.id, wid, None, thread_id=thread_id)
+    if wid:
+        await enqueue_status_update(
+            context.bot, user.id, wid, None, thread_id=thread_id
+        )
+    else:
+        clear_status_msg_info(user.id, thread_id)
 
-    if await session_manager.window_has_usage_limit_exceeded(wid):
+    if wid and w and await session_manager.window_has_usage_limit_exceeded(wid):
         await _rotate_thread_after_usage_limit(
             context=context,
             user_id=user.id,
@@ -1486,7 +1522,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     success, message = await _send_message_to_agent(
         user.id,
         thread_id,
-        wid,
+        wid or "",
         text_to_send,
     )
     if not success:
@@ -1495,7 +1531,125 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Confirm to user
     await safe_reply(update.message, PHOTO_CONFIRMATION_MESSAGE)
-    await mark_window_working(context.bot, user.id, wid, thread_id)
+    if wid:
+        await mark_window_working(context.bot, user.id, wid, thread_id)
+
+
+async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle files sent by the user: download and forward path to Codex."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        if update.message:
+            await safe_reply(update.message, "You are not authorized to use this bot.")
+        return
+
+    if not update.message or not update.message.document:
+        return
+
+    chat = update.message.chat
+    thread_id = _get_thread_id(update)
+    if chat.type in ("group", "supergroup") and thread_id is not None:
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+
+    if thread_id is None:
+        await safe_reply(
+            update.message,
+            "❌ Please use a named topic. Create a new topic to start a session.",
+        )
+        return
+
+    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    remote_target = None
+    if wid is None:
+        remote_target = _remote_target_for_thread(user.id, thread_id)
+        if remote_target is None:
+            await safe_reply(
+                update.message,
+                "❌ No session bound to this topic. Send a text message first to create one.",
+            )
+            return
+
+    w = None
+    if wid is not None:
+        w = await tmux_manager.find_window_by_id(wid)
+        if not w:
+            display = session_manager.get_display_name(wid)
+            session_manager.unbind_thread(user.id, thread_id)
+            await safe_reply(
+                update.message,
+                f"❌ Window '{display}' no longer exists. Binding removed.\n"
+                "Send a message to start a new session.",
+            )
+            return
+
+    document = update.message.document
+    document_name = _safe_upload_filename(
+        document.file_name or f"{document.file_unique_id}.bin"
+    )
+    unique_id = _safe_upload_filename(document.file_unique_id, fallback="file")
+    local_filename = f"{time.time_ns()}_{unique_id}_{document_name}"
+    file_path = _FILES_DIR / local_filename
+    tg_file = await document.get_file()
+    await tg_file.download_to_drive(file_path)
+
+    agent_file_path = str(file_path)
+    if remote_target is not None:
+        upload = await upload_agent_file(
+            user.id,
+            thread_id,
+            "",
+            str(file_path),
+            filename=document_name,
+        )
+        if upload is None:
+            await safe_reply(update.message, "❌ No session bound")
+            return
+        if not upload.ok or not upload.path:
+            await safe_reply(
+                update.message,
+                f"❌ File transfer failed: {upload.message or 'backend unavailable'}",
+            )
+            return
+        agent_file_path = upload.path
+
+    caption = update.message.caption or ""
+    if caption:
+        text_to_send = f"{caption}\n\n(file attached: {agent_file_path})"
+    else:
+        text_to_send = f"(file attached: {agent_file_path})"
+
+    await _safe_send_typing_action(update.message.chat, source="document_handler")
+    if wid:
+        await enqueue_status_update(
+            context.bot, user.id, wid, None, thread_id=thread_id
+        )
+    else:
+        clear_status_msg_info(user.id, thread_id)
+
+    if wid and w and await session_manager.window_has_usage_limit_exceeded(wid):
+        await _rotate_thread_after_usage_limit(
+            context=context,
+            user_id=user.id,
+            thread_id=thread_id,
+            current_window_id=wid,
+            current_window_cwd=w.cwd,
+            text=text_to_send,
+        )
+        return
+
+    success, message = await _send_message_to_agent(
+        user.id,
+        thread_id,
+        wid or "",
+        text_to_send,
+    )
+    if not success:
+        await safe_reply(update.message, f"❌ {message}")
+        return
+
+    await safe_reply(update.message, FILE_CONFIRMATION_MESSAGE)
+    if wid:
+        await mark_window_working(context.bot, user.id, wid, thread_id)
 
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3829,6 +3983,8 @@ def create_bot() -> Application:
     )
     # Photos: download and forward file path to Codex
     application.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    # Files: download and forward file path to Codex
+    application.add_handler(MessageHandler(filters.Document.ALL, document_handler))
     # Voice: transcribe via OpenAI and forward text to Codex
     application.add_handler(MessageHandler(filters.VOICE, voice_handler))
     # Catch-all: non-text content (stickers, video, etc.)

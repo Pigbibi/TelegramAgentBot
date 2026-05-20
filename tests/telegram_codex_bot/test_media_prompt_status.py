@@ -3,6 +3,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from telegram_codex_bot.backends.base import AgentTarget
+from telegram_codex_bot.backends.files import FileUploadResult
+
 
 def _make_context():
     context = MagicMock()
@@ -96,6 +99,137 @@ async def test_photo_prompt_recreates_working_status_after_confirmation(tmp_path
     )
     mark_window_working.assert_awaited_once_with(context.bot, 12345, "@1", 42)
     assert events == ["clear", "reply", "working"]
+
+
+@pytest.mark.asyncio
+async def test_photo_prompt_uploads_file_for_remote_target(tmp_path):
+    update = _make_base_update()
+    context = _make_context()
+    update.message.caption = "check remote"
+
+    photo = MagicMock()
+    photo.file_unique_id = "photo1"
+    tg_file = MagicMock()
+    tg_file.download_to_drive = AsyncMock()
+    photo.get_file = AsyncMock(return_value=tg_file)
+    update.message.photo = [photo]
+
+    remote_target = AgentTarget("socket-cluster", "macbook", session_id="remote-1")
+
+    with (
+        patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
+        patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
+        patch("telegram_codex_bot.bot._IMAGES_DIR", tmp_path),
+        patch("telegram_codex_bot.bot.session_manager") as session_manager,
+        patch(
+            "telegram_codex_bot.bot._safe_send_typing_action", new_callable=AsyncMock
+        ),
+        patch(
+            "telegram_codex_bot.bot.upload_agent_file",
+            new_callable=AsyncMock,
+            return_value=FileUploadResult(ok=True, path="/remote/uploads/photo1.jpg"),
+        ) as upload_agent_file,
+        patch(
+            "telegram_codex_bot.bot._send_message_to_agent",
+            new_callable=AsyncMock,
+            return_value=(True, "Sent"),
+        ) as send_message,
+        patch(
+            "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
+        ) as safe_reply,
+        patch(
+            "telegram_codex_bot.bot.mark_window_working", new_callable=AsyncMock
+        ) as mark_window_working,
+        patch(
+            "telegram_codex_bot.bot.enqueue_status_update", new_callable=AsyncMock
+        ) as enqueue_status_update,
+    ):
+        session_manager.get_window_for_thread.return_value = None
+        session_manager.resolve_target_for_thread.return_value = remote_target
+
+        from telegram_codex_bot.bot import photo_handler
+
+        await photo_handler(update, context)
+
+    upload_agent_file.assert_awaited_once()
+    upload_args = upload_agent_file.await_args.args
+    upload_kwargs = upload_agent_file.await_args.kwargs
+    assert upload_args[:3] == (12345, 42, "")
+    assert upload_kwargs["filename"].endswith("_photo1.jpg")
+    send_message.assert_awaited_once_with(
+        12345,
+        42,
+        "",
+        "check remote\n\n(image attached: /remote/uploads/photo1.jpg)",
+    )
+    safe_reply.assert_awaited_once()
+    mark_window_working.assert_not_awaited()
+    enqueue_status_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_document_prompt_uploads_file_for_remote_target(tmp_path):
+    update = _make_base_update()
+    context = _make_context()
+    update.message.caption = "check this file"
+
+    document = MagicMock()
+    document.file_unique_id = "doc1"
+    document.file_name = "report.pdf"
+    tg_file = MagicMock()
+    tg_file.download_to_drive = AsyncMock()
+    document.get_file = AsyncMock(return_value=tg_file)
+    update.message.document = document
+
+    remote_target = AgentTarget("socket-cluster", "macbook", session_id="remote-1")
+
+    with (
+        patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
+        patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
+        patch("telegram_codex_bot.bot._FILES_DIR", tmp_path),
+        patch("telegram_codex_bot.bot.session_manager") as session_manager,
+        patch(
+            "telegram_codex_bot.bot._safe_send_typing_action", new_callable=AsyncMock
+        ),
+        patch(
+            "telegram_codex_bot.bot.upload_agent_file",
+            new_callable=AsyncMock,
+            return_value=FileUploadResult(ok=True, path="/remote/uploads/report.pdf"),
+        ) as upload_agent_file,
+        patch(
+            "telegram_codex_bot.bot._send_message_to_agent",
+            new_callable=AsyncMock,
+            return_value=(True, "Sent"),
+        ) as send_message,
+        patch(
+            "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
+        ) as safe_reply,
+        patch(
+            "telegram_codex_bot.bot.mark_window_working", new_callable=AsyncMock
+        ) as mark_window_working,
+        patch(
+            "telegram_codex_bot.bot.enqueue_status_update", new_callable=AsyncMock
+        ) as enqueue_status_update,
+    ):
+        session_manager.get_window_for_thread.return_value = None
+        session_manager.resolve_target_for_thread.return_value = remote_target
+
+        from telegram_codex_bot.bot import document_handler
+
+        await document_handler(update, context)
+
+    upload_agent_file.assert_awaited_once()
+    upload_kwargs = upload_agent_file.await_args.kwargs
+    assert upload_kwargs["filename"] == "report.pdf"
+    send_message.assert_awaited_once_with(
+        12345,
+        42,
+        "",
+        "check this file\n\n(file attached: /remote/uploads/report.pdf)",
+    )
+    safe_reply.assert_awaited_once()
+    mark_window_working.assert_not_awaited()
+    enqueue_status_update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
