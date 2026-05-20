@@ -271,11 +271,14 @@ TELEGRAM_CODEX_BOT_BACKEND=cluster
 TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=my_cluster_backend
 ```
 
-The core bot loads the configured backend through a small lifecycle interface:
-`prepare()`, `start(message_callback)`, and `stop()`. The local backend
-implements that interface by preparing tmux and starting the existing transcript
-monitor. Distributed center-bot and agent-node behavior should live in a plugin
-backend instead of being hardcoded into the default single-machine path.
+The core bot loads the configured backend through a backend interface covering
+lifecycle and agent operations: `prepare()`, `start(message_callback)`,
+`stop()`, `create_session()`, `send_message()`, `send_control()`, and
+`capture()`. The local backend implements that interface by preparing tmux,
+starting the existing transcript monitor, and forwarding operations to the
+current local managers. Distributed center-bot and agent-node behavior should
+live in a plugin backend instead of being hardcoded into the default
+single-machine path.
 
 ### Updates
 

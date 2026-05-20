@@ -45,7 +45,16 @@ register_backend("local", _local_backend_factory)
 def _factory_from_loaded(value: Any) -> BackendFactory:
     def factory() -> AgentBackend:
         backend = value() if callable(value) else value
-        required_attrs = ("info", "prepare", "start", "stop")
+        required_attrs = (
+            "info",
+            "prepare",
+            "start",
+            "stop",
+            "create_session",
+            "send_message",
+            "send_control",
+            "capture",
+        )
         if not all(hasattr(backend, attr) for attr in required_attrs):
             raise TypeError(
                 f"backend object does not implement AgentBackend: {backend!r}"
