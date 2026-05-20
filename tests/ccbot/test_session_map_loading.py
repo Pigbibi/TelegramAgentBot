@@ -11,7 +11,7 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
 os.environ.setdefault("ALLOWED_USERS", "1")
 os.environ.setdefault("CCBOT_DIR", tempfile.mkdtemp(prefix="ccbot-test-config-"))
 os.environ.setdefault(
-    "CLAUDE_PROJECTS_PATH", tempfile.mkdtemp(prefix="ccbot-test-projects-")
+    "CCBOT_CODEX_PROJECTS_PATH", tempfile.mkdtemp(prefix="ccbot-test-projects-")
 )
 
 import ccbot.session as session_module
