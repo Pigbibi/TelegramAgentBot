@@ -108,7 +108,7 @@
 
 ---
 
-## 2. Feature Implementation Status in ccbot
+## 2. Feature Implementation Status in telegram-codex-bot
 
 ### Already Implemented
 
@@ -148,13 +148,13 @@
 
 ## 3. Codex Slash Commands
 
-### Currently Forwarded by ccbot
+### Currently Forwarded by telegram-codex-bot
 
 These 5 commands are registered in the Telegram bot menu and forwarded to Codex via tmux:
 
 | Command | Bot Menu Description | Function |
 |---------|---------------------|----------|
-| `/clear` | ↗ Clear conversation history | Wipes conversation, starts fresh. ccbot also clears session association |
+| `/clear` | ↗ Clear conversation history | Wipes conversation, starts fresh. telegram-codex-bot also clears session association |
 | `/compact` | ↗ Compact conversation context | Summarize/compress context to free token budget. Supports optional instructions |
 | `/cost` | ↗ Show token/cost usage | Display token counts and API cost for current session |
 | `/help` | ↗ Show Codex help | List available commands and usage help |
