@@ -83,6 +83,146 @@ class TestSendToWindow:
         send_keys.assert_not_awaited()
 
 
+class TestSessionMapWait:
+    @pytest.mark.asyncio
+    async def test_wait_for_session_map_entry_requires_loaded_window_state(
+        self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        session_map_file = tmp_path / "session_map.json"
+        session_map_file.write_text(
+            json.dumps(
+                {
+                    "telegram-codex-bot:@1": {
+                        "session_id": "sid-1",
+                        "cwd": "/tmp/stale",
+                        "window_name": "stale",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(config, "session_map_file", session_map_file)
+        monkeypatch.setattr(config, "tmux_session_name", "telegram-codex-bot")
+        monkeypatch.setattr(
+            session_module.tmux_manager,
+            "list_windows",
+            AsyncMock(
+                return_value=[
+                    SimpleNamespace(window_id="@1", cwd="/tmp/live"),
+                ]
+            ),
+        )
+
+        ok = await mgr.wait_for_session_map_entry(
+            "@1",
+            timeout=0.03,
+            interval=0.01,
+        )
+
+        assert ok is False
+        assert mgr.get_window_state("@1").session_id == ""
+
+    @pytest.mark.asyncio
+    async def test_wait_for_session_map_entry_returns_after_state_update(
+        self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        session_map_file = tmp_path / "session_map.json"
+        session_map_file.write_text(
+            json.dumps(
+                {
+                    "telegram-codex-bot:@1": {
+                        "session_id": "sid-1",
+                        "cwd": "/tmp/project",
+                        "window_name": "project",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(config, "session_map_file", session_map_file)
+        monkeypatch.setattr(config, "tmux_session_name", "telegram-codex-bot")
+        monkeypatch.setattr(mgr, "_is_subagent_session", lambda *_, **__: False)
+        monkeypatch.setattr(
+            session_module.tmux_manager,
+            "list_windows",
+            AsyncMock(
+                return_value=[
+                    SimpleNamespace(window_id="@1", cwd="/tmp/project"),
+                ]
+            ),
+        )
+
+        ok = await mgr.wait_for_session_map_entry(
+            "@1",
+            timeout=0.05,
+            interval=0.01,
+        )
+
+        assert ok is True
+        assert mgr.get_window_state("@1").session_id == "sid-1"
+
+
+class TestTranscriptConfirmation:
+    def test_transcript_tail_contains_user_text(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "sid-1.jsonl"
+        payload = [
+            {"type": "session_meta", "payload": {"id": "sid-1"}},
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "hello from telegram",
+                },
+            },
+        ]
+        transcript.write_text(
+            "\n".join(json.dumps(item) for item in payload) + "\n",
+            encoding="utf-8",
+        )
+
+        assert SessionManager._transcript_tail_contains_user_text(
+            transcript,
+            "hello from telegram",
+        )
+
+    @pytest.mark.asyncio
+    async def test_wait_for_transcript_user_message_uses_bound_window_state(
+        self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        transcript = tmp_path / "sid-1.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": "请检查 first trade 为什么没有回复",
+                    },
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        state = mgr.get_window_state("@1")
+        state.session_id = "sid-1"
+        state.cwd = "/tmp/project"
+        monkeypatch.setattr(
+            mgr,
+            "_find_session_file",
+            lambda *_args, **_kwargs: transcript,
+        )
+
+        ok = await mgr.wait_for_transcript_user_message(
+            "@1",
+            "请检查 first trade 为什么没有回复",
+            timeout=0.05,
+            interval=0.01,
+        )
+
+        assert ok is True
+
+
 class TestGroupChatId:
     """Tests for group chat_id routing (supergroup forum topic support).
 

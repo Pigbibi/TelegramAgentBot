@@ -1287,7 +1287,11 @@ async def _rotate_thread_after_usage_limit(
     send_ok, send_msg = await _send_to_window_when_codex_ready(created_wid, text)
     if send_ok:
         await mark_window_working(context.bot, user_id, created_wid, thread_id)
-        await _refresh_session_map_after_first_prompt(created_wid, text=text)
+        await _refresh_session_map_after_first_prompt(
+            created_wid,
+            text=text,
+            confirm_existing_session=True,
+        )
     if send_ok:
         await safe_send(
             context.bot,
@@ -1342,16 +1346,24 @@ async def _refresh_session_map_after_first_prompt(
     window_id: str,
     *,
     text: str | None = None,
+    confirm_existing_session: bool = False,
     timeout: float = 20.0,
 ) -> bool:
     """Load the session_map entry that Codex writes after the first prompt starts."""
     if session_manager.get_window_state(window_id).session_id:
+        if text and confirm_existing_session:
+            return await _confirm_first_prompt_delivery(window_id, text)
         return True
     hook_ok = await session_manager.wait_for_session_map_entry(
         window_id, timeout=timeout
     )
-    if not hook_ok:
-        if text and await tmux_manager.prompt_still_pending(window_id, text):
+    if hook_ok:
+        if text:
+            return await _confirm_first_prompt_delivery(window_id, text)
+        return True
+
+    if text:
+        if await tmux_manager.prompt_still_pending(window_id, text):
             logger.warning(
                 "Codex window %s still has the first prompt in the input row; "
                 "retrying Enter before waiting for session_map again",
@@ -1363,12 +1375,103 @@ async def _refresh_session_map_after_first_prompt(
                     timeout=min(timeout, 10.0),
                 )
                 if hook_ok:
-                    return True
+                    return await _confirm_first_prompt_delivery(window_id, text)
         logger.warning(
             "Codex window %s accepted input but did not register session_map",
             window_id,
         )
+    else:
+        logger.warning(
+            "Codex window %s did not register session_map",
+            window_id,
+        )
     return hook_ok
+
+
+async def _confirm_first_prompt_delivery(
+    window_id: str,
+    text: str,
+    *,
+    transcript_timeout: float = 5.0,
+) -> bool:
+    """Confirm that the first forwarded prompt reached the Codex transcript."""
+    if await tmux_manager.prompt_still_pending(window_id, text):
+        logger.warning(
+            "Codex window %s still has the first prompt in the input row after session "
+            "registration; retrying Enter",
+            window_id,
+        )
+        if not await tmux_manager.send_control_key(window_id, "Enter"):
+            return False
+
+        transcript_ok = await session_manager.wait_for_transcript_user_message(
+            window_id,
+            text,
+            timeout=transcript_timeout,
+        )
+        if transcript_ok:
+            return True
+
+        still_pending = await tmux_manager.prompt_still_pending(window_id, text)
+        if still_pending:
+            logger.warning(
+                "Codex window %s still has the first prompt pending after retry",
+                window_id,
+            )
+            return False
+
+        logger.info(
+            "Codex window %s accepted the first prompt after retry but transcript "
+            "confirmation is still pending",
+            window_id,
+        )
+        return True
+
+    transcript_ok = await session_manager.wait_for_transcript_user_message(
+        window_id,
+        text,
+        timeout=transcript_timeout,
+    )
+    if transcript_ok:
+        return True
+
+    if not await tmux_manager.prompt_still_pending(window_id, text):
+        logger.info(
+            "Codex window %s has a session but the first prompt was not observed "
+            "in the transcript yet; input row is clear, so continuing",
+            window_id,
+        )
+        return True
+
+    logger.warning(
+        "Codex window %s still has the first prompt in the input row after "
+        "transcript confirmation timed out; retrying Enter",
+        window_id,
+    )
+    if not await tmux_manager.send_control_key(window_id, "Enter"):
+        return False
+
+    transcript_ok = await session_manager.wait_for_transcript_user_message(
+        window_id,
+        text,
+        timeout=transcript_timeout,
+    )
+    if transcript_ok:
+        return True
+
+    if await tmux_manager.prompt_still_pending(window_id, text):
+        logger.warning(
+            "Codex window %s still has the first prompt pending after retry",
+            window_id,
+        )
+        return False
+
+    logger.info(
+        "Codex window %s accepted the first prompt after retry but transcript "
+        "confirmation is still pending",
+        window_id,
+    )
+    return True
 
 
 async def _recover_missing_bound_window(
@@ -1456,7 +1559,11 @@ async def _recover_missing_bound_window(
 
     send_ok, send_msg = await _send_to_window_when_codex_ready(created_wid, text)
     if send_ok:
-        await _refresh_session_map_after_first_prompt(created_wid, text=text)
+        await _refresh_session_map_after_first_prompt(
+            created_wid,
+            text=text,
+            confirm_existing_session=True,
+        )
         return True, f"Recovered window `{created_wname}` and forwarded your message."
     return (
         False,
@@ -1863,6 +1970,7 @@ async def _create_and_bind_window(
                     await _refresh_session_map_after_first_prompt(
                         created_wid,
                         text=pending_text,
+                        confirm_existing_session=True,
                     )
                 if not send_ok:
                     logger.warning("Failed to forward pending text: %s", send_msg)

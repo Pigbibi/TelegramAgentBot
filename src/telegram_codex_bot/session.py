@@ -687,13 +687,103 @@ class SessionManager:
                             "session_map entry found for window_id %s", window_id
                         )
                         await self.load_session_map()
-                        return True
+                        state = self.get_window_state(window_id)
+                        if state.session_id:
+                            return True
+                        logger.debug(
+                            "session_map entry for window_id %s was ignored during load",
+                            window_id,
+                        )
             except (json.JSONDecodeError, OSError):
                 pass
             await asyncio.sleep(interval)
         logger.warning(
             "Timed out waiting for session_map entry: window_id=%s", window_id
         )
+        return False
+
+    @staticmethod
+    def _normalize_transcript_text(text: str) -> str:
+        return "\n".join(line.rstrip() for line in text.strip().splitlines())
+
+    @classmethod
+    def _user_text_matches(cls, actual: str, expected: str) -> bool:
+        actual_norm = cls._normalize_transcript_text(actual)
+        expected_norm = cls._normalize_transcript_text(expected)
+        if not actual_norm or not expected_norm:
+            return False
+        if actual_norm == expected_norm:
+            return True
+        if len(expected_norm) <= 120:
+            return expected_norm in actual_norm
+        return expected_norm[:80] in actual_norm and expected_norm[-80:] in actual_norm
+
+    @classmethod
+    def _transcript_tail_contains_user_text(
+        cls,
+        file_path: Path,
+        expected_text: str,
+        *,
+        max_bytes: int = 262_144,
+    ) -> bool:
+        """Return whether the transcript tail contains the expected user input."""
+        try:
+            with file_path.open("rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - max_bytes))
+                raw = f.read()
+        except OSError:
+            return False
+
+        try:
+            tail = raw.decode("utf-8", errors="replace")
+        except UnicodeDecodeError:
+            return False
+
+        for line in tail.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            user_text = _extract_user_text(data)
+            if user_text and cls._user_text_matches(user_text, expected_text):
+                return True
+        return False
+
+    async def wait_for_transcript_user_message(
+        self,
+        window_id: str,
+        text: str,
+        *,
+        timeout: float = 5.0,
+        interval: float = 0.5,
+    ) -> bool:
+        """Poll the bound Codex transcript until the submitted user text appears."""
+        if not text.strip():
+            return False
+
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            state = self.get_window_state(window_id)
+            file_path = self._find_session_file(
+                state.session_id,
+                state.cwd,
+                account_name=state.account_name,
+            )
+            if file_path and await asyncio.to_thread(
+                self._transcript_tail_contains_user_text,
+                file_path,
+                text,
+            ):
+                logger.debug(
+                    "Transcript user message confirmed for window_id %s", window_id
+                )
+                return True
+            await asyncio.sleep(interval)
         return False
 
     async def load_session_map(self) -> None:
