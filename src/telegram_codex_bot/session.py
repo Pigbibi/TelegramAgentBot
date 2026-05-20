@@ -1842,6 +1842,27 @@ class SessionManager:
                 result.append((user_id, window_id, thread_id))
         return result
 
+    def find_users_for_target_session(
+        self,
+        session_id: str,
+    ) -> list[tuple[int, str, int]]:
+        """Find users bound to a non-local backend target session.
+
+        Returns list of (user_id, window_id, thread_id) tuples. Remote targets
+        have no tmux window, so window_id is an empty string.
+        """
+        result: list[tuple[int, str, int]] = []
+        if not session_id:
+            return result
+
+        for user_id, targets in list(self.thread_targets.items()):
+            for thread_id, target in list(targets.items()):
+                if target.backend_id == "local":
+                    continue
+                if _session_ids_match(target.session_id, session_id):
+                    result.append((user_id, "", thread_id))
+        return result
+
     # --- Tmux helpers ---
 
     async def send_to_window(self, window_id: str, text: str) -> tuple[bool, str]:

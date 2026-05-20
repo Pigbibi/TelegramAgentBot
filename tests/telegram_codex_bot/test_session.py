@@ -76,6 +76,30 @@ class TestThreadBindings:
         assert mgr.get_target_for_thread(100, 1) == target
         assert mgr.resolve_target_for_thread(100, 1) == target
 
+    def test_find_users_for_target_session_returns_remote_bindings(
+        self, mgr: SessionManager
+    ) -> None:
+        mgr.bind_thread_target(
+            100,
+            1,
+            AgentTarget(
+                backend_id="cluster",
+                node_id="macbook",
+                session_id="remote-session",
+            ),
+        )
+        mgr.bind_thread_target(
+            200,
+            2,
+            AgentTarget(
+                backend_id="cluster",
+                node_id="linux",
+                session_id="other-session",
+            ),
+        )
+
+        assert mgr.find_users_for_target_session("remote-session") == [(100, "", 1)]
+
     def test_bind_unbind_get_returns_none(self, mgr: SessionManager) -> None:
         mgr.bind_thread(100, 1, "@1")
         mgr.unbind_thread(100, 1)
