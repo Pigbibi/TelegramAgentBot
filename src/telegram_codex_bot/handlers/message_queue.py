@@ -18,18 +18,22 @@ Key components:
 """
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from telegram import Bot
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, RetryAfter
 
+from ..config import config
 from ..markdown_v2 import convert_markdown
 from ..session import session_manager
 from ..agent_io import capture_agent_output
+from ..utils import atomic_write_json
 from .message_sender import (
     NO_LINK_PREVIEW,
     PARSE_MODE,
@@ -87,7 +91,87 @@ _active_queue_keys: set[QueueKey] = set()
 _tool_msg_ids: dict[tuple[str, int, int], int] = {}
 
 # Status message tracking: (user_id, thread_id_or_0) -> (message_id, window_id, last_text)
-_status_msg_info: dict[tuple[int, int], tuple[int, str, str]] = {}
+StatusInfo = tuple[int, str, str]
+StatusKey = tuple[int, int]
+_STATUS_MESSAGES_FILE = config.config_dir / "status_messages.json"
+
+
+def _status_key_to_str(key: StatusKey) -> str:
+    return f"{key[0]}:{key[1]}"
+
+
+def _status_key_from_str(value: str) -> StatusKey | None:
+    user_id_str, sep, thread_id_str = value.partition(":")
+    if not sep:
+        return None
+    try:
+        return int(user_id_str), int(thread_id_str)
+    except ValueError:
+        return None
+
+
+def _load_status_msg_info(
+    path: Path = _STATUS_MESSAGES_FILE,
+) -> dict[StatusKey, StatusInfo]:
+    """Load persisted ephemeral status message ids after a bot restart."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        logger.warning("Failed to load status message state: %s", exc)
+        return {}
+
+    if not isinstance(raw, dict):
+        return {}
+
+    loaded: dict[StatusKey, StatusInfo] = {}
+    for raw_key, raw_info in raw.items():
+        if not isinstance(raw_key, str) or not isinstance(raw_info, dict):
+            continue
+        key = _status_key_from_str(raw_key)
+        if key is None:
+            continue
+        try:
+            message_id = int(raw_info.get("message_id", 0))
+        except (TypeError, ValueError):
+            continue
+        window_id = raw_info.get("window_id", "")
+        text = raw_info.get("text", "")
+        if message_id and isinstance(window_id, str) and isinstance(text, str):
+            loaded[key] = (message_id, window_id, text)
+    return loaded
+
+
+def _persist_status_msg_info() -> None:
+    """Persist tracked status message ids for restart-safe edits/deletes."""
+    data = {
+        _status_key_to_str(key): {
+            "message_id": info[0],
+            "window_id": info[1],
+            "text": info[2],
+        }
+        for key, info in _status_msg_info.items()
+    }
+    try:
+        atomic_write_json(_STATUS_MESSAGES_FILE, data)
+    except Exception as exc:
+        logger.debug("Failed to persist status message state: %s", exc)
+
+
+def _set_status_info(key: StatusKey, value: StatusInfo) -> None:
+    _status_msg_info[key] = value
+    _persist_status_msg_info()
+
+
+def _pop_status_info(key: StatusKey) -> StatusInfo | None:
+    value = _status_msg_info.pop(key, None)
+    if value is not None:
+        _persist_status_msg_info()
+    return value
+
+
+_status_msg_info: dict[StatusKey, StatusInfo] = _load_status_msg_info()
 
 # Flood control: user_id -> monotonic time when ban expires
 _flood_until: dict[int, float] = {}
@@ -531,7 +615,7 @@ async def _convert_status_to_content(
     Returns the message_id if converted successfully, None otherwise.
     """
     skey = (user_id, thread_id_or_0)
-    info = _status_msg_info.pop(skey, None)
+    info = _pop_status_info(skey)
     if not info:
         return None
 
@@ -633,12 +717,12 @@ async def _process_status_update_task(
                     parse_mode=PARSE_MODE,
                     link_preview_options=NO_LINK_PREVIEW,
                 )
-                _status_msg_info[skey] = (msg_id, wid, status_text)
+                _set_status_info(skey, (msg_id, wid, status_text))
             except RetryAfter:
                 raise
             except Exception as e:
                 if _is_message_not_modified_error(e):
-                    _status_msg_info[skey] = (msg_id, wid, status_text)
+                    _set_status_info(skey, (msg_id, wid, status_text))
                     return
                 try:
                     await bot.edit_message_text(
@@ -647,15 +731,15 @@ async def _process_status_update_task(
                         text=status_text,
                         link_preview_options=NO_LINK_PREVIEW,
                     )
-                    _status_msg_info[skey] = (msg_id, wid, status_text)
+                    _set_status_info(skey, (msg_id, wid, status_text))
                 except RetryAfter:
                     raise
                 except Exception as e:
                     if _is_message_not_modified_error(e):
-                        _status_msg_info[skey] = (msg_id, wid, status_text)
+                        _set_status_info(skey, (msg_id, wid, status_text))
                         return
                     logger.debug(f"Failed to edit status message: {e}")
-                    _status_msg_info.pop(skey, None)
+                    _pop_status_info(skey)
                     await _do_send_status_message(bot, user_id, tid, wid, status_text)
     else:
         # No existing status message, send new
@@ -675,7 +759,7 @@ async def _do_send_status_message(
     chat_id = session_manager.resolve_chat_id(user_id, thread_id)
     # Safety net: delete any orphaned status message before sending a new one.
     # This catches edge cases where tracking was cleared without deleting the message.
-    old = _status_msg_info.pop(skey, None)
+    old = _pop_status_info(skey)
     if old:
         try:
             await bot.delete_message(chat_id=chat_id, message_id=old[0])
@@ -696,7 +780,7 @@ async def _do_send_status_message(
         **_send_kwargs(thread_id),  # type: ignore[arg-type]
     )
     if sent:
-        _status_msg_info[skey] = (sent.message_id, window_id, text)
+        _set_status_info(skey, (sent.message_id, window_id, text))
 
 
 async def _do_clear_status_message(
@@ -706,7 +790,7 @@ async def _do_clear_status_message(
 ) -> None:
     """Delete the status message for a user (internal, called from worker)."""
     skey = (user_id, thread_id_or_0)
-    info = _status_msg_info.pop(skey, None)
+    info = _pop_status_info(skey)
     if info:
         msg_id = info[0]
         chat_id = session_manager.resolve_chat_id(user_id, thread_id_or_0 or None)
@@ -827,7 +911,7 @@ async def enqueue_status_update(
 def clear_status_msg_info(user_id: int, thread_id: int | None = None) -> None:
     """Clear status message tracking for a user (and optionally a specific thread)."""
     skey = (user_id, thread_id or 0)
-    _status_msg_info.pop(skey, None)
+    _pop_status_info(skey)
 
 
 def clear_tool_msg_ids_for_topic(user_id: int, thread_id: int | None = None) -> None:
