@@ -7,7 +7,13 @@ from typing import Any
 
 import pytest
 
-from telegram_codex_bot.backends.base import BackendInfo
+from telegram_codex_bot.backends.base import (
+    AgentTarget,
+    BackendInfo,
+    CreateSessionRequest,
+    CreateSessionResult,
+    SendResult,
+)
 from telegram_codex_bot.backends.registry import (
     available_backends,
     load_backend,
@@ -34,6 +40,25 @@ class DummyBackend:
 
     async def stop(self) -> None:
         pass
+
+    async def create_session(
+        self,
+        request: CreateSessionRequest,
+    ) -> CreateSessionResult:
+        return CreateSessionResult(
+            ok=True,
+            message="created",
+            target=AgentTarget("dummy", "local"),
+        )
+
+    async def send_message(self, target: AgentTarget, text: str) -> SendResult:
+        return SendResult(True, "sent")
+
+    async def send_control(self, target: AgentTarget, key: str) -> SendResult:
+        return SendResult(True, "sent")
+
+    async def capture(self, target: AgentTarget, *, with_ansi: bool = False) -> str:
+        return "capture"
 
 
 def test_builtin_local_backend_is_available() -> None:

@@ -19,6 +19,44 @@ class BackendInfo:
     mode: str = "local"
 
 
+@dataclass(frozen=True)
+class AgentTarget:
+    """Address of one agent session in a backend."""
+
+    backend_id: str
+    node_id: str
+    session_id: str = ""
+    window_id: str = ""
+
+
+@dataclass(frozen=True)
+class CreateSessionRequest:
+    """Request for creating or resuming one agent session."""
+
+    cwd: str
+    window_name: str = ""
+    resume_session_id: str = ""
+    account_name: str = ""
+
+
+@dataclass(frozen=True)
+class CreateSessionResult:
+    """Result of creating or resuming one agent session."""
+
+    ok: bool
+    message: str
+    target: AgentTarget | None = None
+    display_name: str = ""
+
+
+@dataclass(frozen=True)
+class SendResult:
+    """Result of sending input or a control key to an agent."""
+
+    ok: bool
+    message: str = ""
+
+
 class AgentBackend(Protocol):
     """Common lifecycle contract for Codex agent backends.
 
@@ -43,4 +81,24 @@ class AgentBackend(Protocol):
 
     async def stop(self) -> None:
         """Stop backend event delivery and flush state."""
+        ...
+
+    async def create_session(
+        self, request: CreateSessionRequest
+    ) -> CreateSessionResult:
+        """Create or resume an agent session."""
+        ...
+
+    async def send_message(self, target: AgentTarget, text: str) -> SendResult:
+        """Send user text to an agent session."""
+        ...
+
+    async def send_control(self, target: AgentTarget, key: str) -> SendResult:
+        """Send one control key to an agent session."""
+        ...
+
+    async def capture(
+        self, target: AgentTarget, *, with_ansi: bool = False
+    ) -> str | None:
+        """Capture visible agent terminal output, when available."""
         ...
