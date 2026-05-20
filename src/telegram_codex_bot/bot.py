@@ -438,6 +438,13 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     thread_id = _get_thread_id(update)
     wid = session_manager.resolve_window_for_thread(user.id, thread_id)
     if not wid:
+        target = _remote_target_for_thread(user.id, thread_id)
+        if target:
+            await safe_reply(
+                update.message,
+                "❌ History is only available for local tmux sessions.",
+            )
+            return
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
@@ -508,6 +515,16 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     wid = session_manager.get_window_for_thread(user.id, thread_id)
     if not wid:
+        target = _remote_target_for_thread(user.id, thread_id)
+        if target:
+            session_manager.unbind_thread(user.id, thread_id)
+            await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
+            await safe_reply(
+                update.message,
+                f"✅ Topic unbound from `{_format_remote_target(target)}`.\n"
+                "Send a message to bind to a new session.",
+            )
+            return
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
@@ -681,6 +698,25 @@ async def _send_message_to_agent(
     if result.missing:
         return False, "Window not found (may have been closed)"
     return result.ok, result.message
+
+
+def _remote_target_for_thread(
+    user_id: int,
+    thread_id: int | None,
+) -> AgentTarget | None:
+    """Return a non-local target bound to this thread, if any."""
+    target = session_manager.resolve_target_for_thread(user_id, thread_id)
+    if isinstance(target, AgentTarget) and target.backend_id != "local":
+        return target
+    return None
+
+
+def _format_remote_target(target: AgentTarget) -> str:
+    """Build a compact user-facing label for a remote target."""
+    label = f"{target.backend_id}/{target.node_id}"
+    if target.session_id:
+        label = f"{label}:{target.session_id}"
+    return label
 
 
 async def _create_agent_local_window(
@@ -1063,6 +1099,13 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     wid = session_manager.get_window_for_thread(user.id, thread_id)
     if wid is None:
+        if _remote_target_for_thread(user.id, thread_id):
+            await safe_reply(
+                update.message,
+                "❌ Photo forwarding is only available for local tmux sessions. "
+                "Remote agent backends need file transfer support first.",
+            )
+            return
         await safe_reply(
             update.message,
             "❌ No session bound to this topic. Send a text message first to create one.",
@@ -1157,23 +1200,28 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     wid = session_manager.get_window_for_thread(user.id, thread_id)
+    remote_target = None
     if wid is None:
+        remote_target = _remote_target_for_thread(user.id, thread_id)
+    if wid is None and remote_target is None:
         await safe_reply(
             update.message,
             "❌ No session bound to this topic. Send a text message first to create one.",
         )
         return
 
-    w = await tmux_manager.find_window_by_id(wid)
-    if not w:
-        display = session_manager.get_display_name(wid)
-        session_manager.unbind_thread(user.id, thread_id)
-        await safe_reply(
-            update.message,
-            f"❌ Window '{display}' no longer exists. Binding removed.\n"
-            "Send a message to start a new session.",
-        )
-        return
+    w = None
+    if wid:
+        w = await tmux_manager.find_window_by_id(wid)
+        if not w:
+            display = session_manager.get_display_name(wid)
+            session_manager.unbind_thread(user.id, thread_id)
+            await safe_reply(
+                update.message,
+                f"❌ Window '{display}' no longer exists. Binding removed.\n"
+                "Send a message to start a new session.",
+            )
+            return
 
     # Download voice as in-memory bytes
     voice_file = await update.message.voice.get_file()
@@ -1193,7 +1241,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _safe_send_typing_action(update.message.chat, source="voice_handler")
     clear_status_msg_info(user.id, thread_id)
 
-    if await session_manager.window_has_usage_limit_exceeded(wid):
+    if wid and w and await session_manager.window_has_usage_limit_exceeded(wid):
         await _rotate_thread_after_usage_limit(
             context=context,
             user_id=user.id,
@@ -1204,11 +1252,12 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    success, message = await _send_message_to_agent(user.id, thread_id, wid, text)
+    success, message = await _send_message_to_agent(user.id, thread_id, wid or "", text)
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    await mark_window_working(context.bot, user.id, wid, thread_id)
+    if wid:
+        await mark_window_working(context.bot, user.id, wid, thread_id)
 
     await safe_reply(update.message, f'🎤 "{text}"')
 
@@ -1812,6 +1861,22 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     wid = session_manager.get_window_for_thread(user.id, thread_id)
     if wid is None:
+        remote_target = _remote_target_for_thread(user.id, thread_id)
+        if remote_target:
+            await _safe_send_typing_action(update.message.chat, source="text_handler")
+            clear_status_msg_info(user.id, thread_id)
+            _cancel_bash_capture(user.id, thread_id)
+
+            success, message = await _send_message_to_agent(
+                user.id,
+                thread_id,
+                "",
+                text,
+            )
+            if not success:
+                await safe_reply(update.message, f"❌ {message}")
+            return
+
         if getattr(config, "project_roots_configured", False):
             logger.info(
                 "Unbound topic: showing configured project root picker (user=%d, thread=%d)",

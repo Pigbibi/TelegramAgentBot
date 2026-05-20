@@ -64,7 +64,104 @@ def _make_context():
     return context
 
 
+def _make_voice_update(user_id: int = 12345, thread_id: int = 42):
+    update = MagicMock()
+    update.effective_user = MagicMock(id=user_id)
+    update.message = MagicMock()
+    update.message.message_thread_id = thread_id
+    update.message.chat = MagicMock()
+    update.message.chat.type = "supergroup"
+    update.message.chat.send_action = AsyncMock()
+    update.effective_chat = MagicMock()
+    update.effective_chat.type = "supergroup"
+    update.effective_chat.id = -1001234567890
+
+    tg_file = MagicMock()
+    tg_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"voice"))
+    update.message.voice = MagicMock()
+    update.message.voice.get_file = AsyncMock(return_value=tg_file)
+    return update
+
+
 class TestExistingWindowBinding:
+    @pytest.mark.asyncio
+    async def test_remote_bound_topic_forwards_text_without_tmux_window(self):
+        update = _make_text_update("hi remote")
+        context = _make_context()
+        remote_target = AgentTarget("cluster", "macbook", session_id="remote-1")
+
+        with (
+            patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
+            patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+            patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
+            patch(
+                "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
+            ) as safe_reply,
+            patch(
+                "telegram_codex_bot.bot.send_agent_message",
+                new_callable=AsyncMock,
+            ) as send_message,
+            patch("telegram_codex_bot.bot._cancel_bash_capture") as cancel_capture,
+        ):
+            mock_sm.get_window_for_thread.return_value = None
+            mock_sm.resolve_target_for_thread.return_value = remote_target
+            mock_tmux.list_windows = AsyncMock()
+            send_message.return_value = MessageResult(remote_target, True, "sent")
+
+            from telegram_codex_bot.bot import text_handler
+
+            await text_handler(update, context)
+
+        send_message.assert_awaited_once_with(12345, 42, "", "hi remote")
+        mock_tmux.list_windows.assert_not_called()
+        cancel_capture.assert_called_once_with(12345, 42)
+        safe_reply.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_remote_bound_topic_forwards_transcribed_voice(self):
+        update = _make_voice_update()
+        context = _make_context()
+        remote_target = AgentTarget("cluster", "macbook", session_id="remote-1")
+
+        with (
+            patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
+            patch("telegram_codex_bot.bot.config.openai_api_key", "test-key"),
+            patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+            patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
+            patch(
+                "telegram_codex_bot.bot.transcribe_voice",
+                new_callable=AsyncMock,
+                return_value="voice text",
+            ) as transcribe_voice,
+            patch(
+                "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
+            ) as safe_reply,
+            patch(
+                "telegram_codex_bot.bot.send_agent_message",
+                new_callable=AsyncMock,
+            ) as send_message,
+            patch(
+                "telegram_codex_bot.bot.mark_window_working",
+                new_callable=AsyncMock,
+            ) as mark_working,
+        ):
+            mock_sm.get_window_for_thread.return_value = None
+            mock_sm.resolve_target_for_thread.return_value = remote_target
+            mock_tmux.find_window_by_id = AsyncMock()
+            send_message.return_value = MessageResult(remote_target, True, "sent")
+
+            from telegram_codex_bot.bot import voice_handler
+
+            await voice_handler(update, context)
+
+        transcribe_voice.assert_awaited_once_with(b"voice")
+        send_message.assert_awaited_once_with(12345, 42, "", "voice text")
+        mock_tmux.find_window_by_id.assert_not_called()
+        mark_working.assert_not_awaited()
+        safe_reply.assert_awaited_once_with(update.message, '🎤 "voice text"')
+
     @pytest.mark.asyncio
     async def test_untracked_unbound_windows_fall_back_to_directory_browser(self):
         update = _make_text_update("hi")
