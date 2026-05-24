@@ -37,6 +37,7 @@ import aiofiles
 from .account_manager import ACCOUNT_HOME_DIR, list_account_homes
 from .backends.base import AgentTarget
 from .config import config
+from .terminal_parser import is_codex_input_ready, parse_status_update
 from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json, is_subagent_transcript, read_cwd_from_jsonl
@@ -1889,6 +1890,11 @@ class SessionManager:
                 "Window is not running Codex "
                 f"(current command: {pane_cmd}); please create or resume a session again",
             )
+        pane_text = await tmux_manager.capture_pane(window.window_id)
+        if pane_text and not is_codex_input_ready(pane_text):
+            status = parse_status_update(pane_text)
+            if status:
+                return False, f"Codex is still busy: {status}"
         success = await tmux_manager.send_keys(window.window_id, text)
         if success:
             return True, f"Sent to {display}"

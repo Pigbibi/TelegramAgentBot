@@ -14,6 +14,7 @@ from telegram_codex_bot.hook import (
     _UUID_RE,
     _install_hook,
     _is_hook_installed,
+    _is_non_interactive_session,
     hook_main,
 )
 
@@ -121,6 +122,31 @@ class TestIsHookInstalled:
         assert _is_hook_installed(settings) is True
 
 
+class TestSessionPayloadFiltering:
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"source": "exec"},
+            {"originator": "codex_exec"},
+            {"source": "EXEC", "originator": "codex-tui"},
+        ],
+    )
+    def test_non_interactive_session_payload(self, payload: dict) -> None:
+        assert _is_non_interactive_session(payload) is True
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {},
+            {"source": "cli"},
+            {"originator": "codex-tui"},
+            {"source": "cli", "originator": "codex-tui"},
+        ],
+    )
+    def test_interactive_session_payload(self, payload: dict) -> None:
+        assert _is_non_interactive_session(payload) is False
+
+
 class TestHookMainValidation:
     def _run_hook_main(
         self, monkeypatch: pytest.MonkeyPatch, payload: dict, *, tmux_pane: str = ""
@@ -210,6 +236,23 @@ class TestHookMainValidation:
                 "cwd": "/tmp",
                 "hook_event_name": "Stop",
             },
+        )
+        assert not (tmp_path / "session_map.json").exists()
+
+    def test_codex_exec_session_does_not_write_session_map(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        monkeypatch.setenv("TELEGRAM_CODEX_BOT_DIR", str(tmp_path))
+        self._run_hook_main(
+            monkeypatch,
+            {
+                "session_id": "550e8400-e29b-41d4-a716-446655440000",
+                "cwd": "/tmp",
+                "hook_event_name": "SessionStart",
+                "source": "exec",
+                "originator": "codex_exec",
+            },
+            tmux_pane="%1",
         )
         assert not (tmp_path / "session_map.json").exists()
 
