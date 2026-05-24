@@ -252,6 +252,10 @@ Telegram 控制本机 tmux session，bot 读取本机 Codex transcript。
 单机模式是默认支持路径。backend 接口是为了把“中心 bot + 远端 agent 节点”这类
 多端能力做成可选插件，不影响普通本机使用。
 
+如果暂时不跑远端 agent 节点，`TELEGRAM_CODEX_BOT_BACKEND` 保持不填或设为
+`local` 即可。不需要安装 `plugins/socket_backend`，也不需要启动
+`telegram-codex-agent-node` 或配置 socket 节点地址。
+
 ```ini
 TELEGRAM_CODEX_BOT_BACKEND=local
 ```

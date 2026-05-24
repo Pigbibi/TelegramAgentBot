@@ -260,6 +260,10 @@ Single-machine mode is the supported default. The backend interface exists so
 center-bot / remote agent-node deployments can be added without changing the
 normal local workflow.
 
+If you are not running remote agent nodes, leave `TELEGRAM_CODEX_BOT_BACKEND`
+unset or set it to `local`. You do not need to install `plugins/socket_backend`,
+run `telegram-codex-agent-node`, or configure socket node addresses.
+
 Optional backends can be loaded as plugins. A plugin can expose a backend
 through the `telegram_codex_bot.backends` entry point group, or through a module
 listed in `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS`.
