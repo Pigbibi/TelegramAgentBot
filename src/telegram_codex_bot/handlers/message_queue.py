@@ -41,7 +41,11 @@ from .message_sender import (
     send_with_fallback,
     strip_sentinels,
 )
-from .working_status import mark_output_seen, status_text_for_pane
+from .working_status import (
+    is_active_working_status,
+    mark_output_seen,
+    status_text_for_pane,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +94,12 @@ _active_queue_keys: set[QueueKey] = set()
 # for editing tool_use messages with results
 _tool_msg_ids: dict[tuple[str, int, int], int] = {}
 
-# Status message tracking: (user_id, thread_id_or_0) -> (message_id, window_id, last_text)
-StatusInfo = tuple[int, str, str]
+# Status message tracking:
+# (user_id, thread_id_or_0) -> (message_id, window_id, last_text, created_at)
+StatusInfo = tuple[int, str, str, float]
 StatusKey = tuple[int, int]
 _STATUS_MESSAGES_FILE = config.config_dir / "status_messages.json"
+_MIN_WORKING_STATUS_VISIBLE_SECONDS = 1.5
 
 
 def _status_key_to_str(key: StatusKey) -> str:
@@ -138,8 +144,12 @@ def _load_status_msg_info(
             continue
         window_id = raw_info.get("window_id", "")
         text = raw_info.get("text", "")
+        try:
+            created_at = float(raw_info.get("created_at", 0.0))
+        except (TypeError, ValueError):
+            created_at = 0.0
         if message_id and isinstance(window_id, str) and isinstance(text, str):
-            loaded[key] = (message_id, window_id, text)
+            loaded[key] = (message_id, window_id, text, created_at)
     return loaded
 
 
@@ -150,6 +160,7 @@ def _persist_status_msg_info() -> None:
             "message_id": info[0],
             "window_id": info[1],
             "text": info[2],
+            "created_at": info[3],
         }
         for key, info in _status_msg_info.items()
     }
@@ -541,7 +552,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                     logger.debug(f"Failed to edit tool msg {edit_msg_id}, sending new")
                     # Fall through to send as new message
 
-    # 2. Send content messages, converting status message to first content part
+    # 2. Send content messages, converting non-working status to first content part
     first_part = True
     last_msg_id: int | None = None
     for part in task.parts:
@@ -597,10 +608,40 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     # 4. Send images if present (from tool_result with base64 image blocks)
     await _send_task_images(bot, chat_id, task)
 
-    # 5. After content, check and send status
+    # 5. Keep a very fresh Thinking bubble visible above quick replies, then
+    # delete it before restoring any still-active status below the new content.
+    await _clear_working_status_after_min_visible(bot, user_id, tid, wid)
+
+    # 6. After content, check and send status
     if task.role == "assistant":
         mark_output_seen(user_id, task.thread_id, wid)
     await _check_and_send_status(bot, user_id, wid, task.thread_id)
+
+
+async def _clear_working_status_after_min_visible(
+    bot: Bot,
+    user_id: int,
+    thread_id_or_0: int,
+    window_id: str,
+) -> None:
+    """Delete the current Working/Thinking bubble after a minimum display time."""
+    skey = (user_id, thread_id_or_0)
+    info = _status_msg_info.get(skey)
+    if not info:
+        return
+
+    msg_id, stored_wid, status_text, created_at = info
+    if stored_wid != window_id or not is_active_working_status(status_text):
+        return
+
+    remaining = _MIN_WORKING_STATUS_VISIBLE_SECONDS - (time.monotonic() - created_at)
+    if remaining > 0:
+        await asyncio.sleep(remaining)
+
+    current = _status_msg_info.get(skey)
+    if not current or current[0] != msg_id:
+        return
+    await _do_clear_status_message(bot, user_id, thread_id_or_0)
 
 
 async def _convert_status_to_content(
@@ -619,7 +660,7 @@ async def _convert_status_to_content(
     if not info:
         return None
 
-    msg_id, stored_wid, _ = info
+    msg_id, stored_wid, last_text, _created_at = info
     chat_id = session_manager.resolve_chat_id(user_id, thread_id_or_0 or None)
     if stored_wid != window_id:
         # Different window, just delete the old status
@@ -630,6 +671,9 @@ async def _convert_status_to_content(
         except Exception:
             pass
         _pop_status_info(skey)
+        return None
+
+    if is_active_working_status(last_text):
         return None
 
     # Edit status message to show content
@@ -694,7 +738,7 @@ async def _process_status_update_task(
     current_info = _status_msg_info.get(skey)
 
     if current_info:
-        msg_id, stored_wid, last_text = current_info
+        msg_id, stored_wid, last_text, created_at = current_info
 
         if stored_wid != wid:
             # Window changed - delete old and send new
@@ -723,12 +767,12 @@ async def _process_status_update_task(
                     parse_mode=PARSE_MODE,
                     link_preview_options=NO_LINK_PREVIEW,
                 )
-                _set_status_info(skey, (msg_id, wid, status_text))
+                _set_status_info(skey, (msg_id, wid, status_text, created_at))
             except RetryAfter:
                 raise
             except Exception as e:
                 if _is_message_not_modified_error(e):
-                    _set_status_info(skey, (msg_id, wid, status_text))
+                    _set_status_info(skey, (msg_id, wid, status_text, created_at))
                     return
                 try:
                     await bot.edit_message_text(
@@ -737,12 +781,12 @@ async def _process_status_update_task(
                         text=status_text,
                         link_preview_options=NO_LINK_PREVIEW,
                     )
-                    _set_status_info(skey, (msg_id, wid, status_text))
+                    _set_status_info(skey, (msg_id, wid, status_text, created_at))
                 except RetryAfter:
                     raise
                 except Exception as e:
                     if _is_message_not_modified_error(e):
-                        _set_status_info(skey, (msg_id, wid, status_text))
+                        _set_status_info(skey, (msg_id, wid, status_text, created_at))
                         return
                     logger.debug(f"Failed to edit status message: {e}")
                     await _do_send_status_message(bot, user_id, tid, wid, status_text)
@@ -788,7 +832,7 @@ async def _do_send_status_message(
         **_send_kwargs(thread_id),  # type: ignore[arg-type]
     )
     if sent:
-        _set_status_info(skey, (sent.message_id, window_id, text))
+        _set_status_info(skey, (sent.message_id, window_id, text, time.monotonic()))
 
 
 async def _do_clear_status_message(

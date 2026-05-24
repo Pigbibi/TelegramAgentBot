@@ -20,7 +20,7 @@ def test_status_message_info_persists_for_restart(monkeypatch, tmp_path):
     try:
         message_queue._set_status_info(
             (1, 42),
-            (321, "@4", "💭 Thinking (0s) · esc to interrupt"),
+            (321, "@4", "💭 Thinking (0s) · esc to interrupt", 123.0),
         )
 
         assert json.loads(status_file.read_text()) == {
@@ -28,10 +28,11 @@ def test_status_message_info_persists_for_restart(monkeypatch, tmp_path):
                 "message_id": 321,
                 "window_id": "@4",
                 "text": "💭 Thinking (0s) · esc to interrupt",
+                "created_at": 123.0,
             }
         }
         assert message_queue._load_status_msg_info(status_file) == {
-            (1, 42): (321, "@4", "💭 Thinking (0s) · esc to interrupt")
+            (1, 42): (321, "@4", "💭 Thinking (0s) · esc to interrupt", 123.0)
         }
 
         message_queue._pop_status_info((1, 42))
@@ -213,6 +214,7 @@ async def test_status_message_not_modified_keeps_existing_status(monkeypatch):
         321,
         "@4",
         "💭 Thinking (6m 06s) · esc to interrupt",
+        123.0,
     )
 
     try:
@@ -231,6 +233,7 @@ async def test_status_message_not_modified_keeps_existing_status(monkeypatch):
             321,
             "@4",
             "💭 Thinking (6m 07s) · esc to interrupt",
+            123.0,
         )
         send_status.assert_not_awaited()
     finally:
@@ -239,7 +242,7 @@ async def test_status_message_not_modified_keeps_existing_status(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_failed_status_to_content_conversion_deletes_old_status(monkeypatch):
-    """A failed status conversion must not leave a stale Thinking bubble."""
+    """A failed status conversion must not leave a stale status bubble."""
     message_queue._status_msg_info.clear()
 
     bot = AsyncMock()
@@ -256,7 +259,8 @@ async def test_failed_status_to_content_conversion_deletes_old_status(monkeypatc
     message_queue._status_msg_info[(1, 42)] = (
         321,
         "@4",
-        "💭 Thinking (4m 28s) · esc to interrupt",
+        "Status text",
+        123.0,
     )
 
     try:
@@ -276,8 +280,91 @@ async def test_failed_status_to_content_conversion_deletes_old_status(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_working_status_is_not_converted_to_content(monkeypatch):
+    """Quick replies should be sent below Thinking instead of replacing it."""
+    message_queue._status_msg_info.clear()
+    bot = AsyncMock()
+    sent_texts: list[str] = []
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+    monkeypatch.setattr(
+        message_queue,
+        "_check_and_send_status",
+        AsyncMock(),
+    )
+
+    async def fake_send_with_fallback(bot, chat_id, text, **kwargs):
+        sent_texts.append(text)
+        return SimpleNamespace(message_id=654)
+
+    monkeypatch.setattr(message_queue, "send_with_fallback", fake_send_with_fallback)
+    message_queue._status_msg_info[(1, 42)] = (
+        321,
+        "@4",
+        "💭 Thinking (0s) · esc to interrupt",
+        0.0,
+    )
+
+    try:
+        await message_queue._process_content_task(
+            bot,
+            1,
+            message_queue.MessageTask(
+                task_type="content",
+                window_id="@4",
+                parts=["final content"],
+                thread_id=42,
+            ),
+        )
+
+        assert sent_texts == ["final content"]
+        bot.edit_message_text.assert_not_awaited()
+        bot.delete_message.assert_awaited_once_with(chat_id=-100123, message_id=321)
+        assert (1, 42) not in message_queue._status_msg_info
+    finally:
+        message_queue._status_msg_info.clear()
+
+
+@pytest.mark.asyncio
+async def test_working_status_clear_waits_for_minimum_visible_time(monkeypatch):
+    """Very fast replies should leave Thinking visible briefly before deletion."""
+    message_queue._status_msg_info.clear()
+    bot = AsyncMock()
+    sleep = AsyncMock()
+    monkeypatch.setattr(message_queue.time, "monotonic", lambda: 100.5)
+    monkeypatch.setattr(message_queue.asyncio, "sleep", sleep)
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+    message_queue._status_msg_info[(1, 42)] = (
+        321,
+        "@4",
+        "💭 Thinking (0s) · esc to interrupt",
+        100.0,
+    )
+
+    try:
+        await message_queue._clear_working_status_after_min_visible(
+            bot,
+            1,
+            42,
+            "@4",
+        )
+
+        sleep.assert_awaited_once_with(pytest.approx(1.0))
+        bot.delete_message.assert_awaited_once_with(chat_id=-100123, message_id=321)
+    finally:
+        message_queue._status_msg_info.clear()
+
+
+@pytest.mark.asyncio
 async def test_cancelled_status_to_content_conversion_keeps_tracking(monkeypatch):
-    """Shutdown cancellation must not orphan a still-visible Thinking bubble."""
+    """Shutdown cancellation must not orphan a still-visible status bubble."""
     message_queue._status_msg_info.clear()
 
     bot = AsyncMock()
@@ -291,7 +378,8 @@ async def test_cancelled_status_to_content_conversion_keeps_tracking(monkeypatch
     message_queue._status_msg_info[(1, 42)] = (
         321,
         "@4",
-        "💭 Thinking (4m 28s) · esc to interrupt",
+        "Status text",
+        123.0,
     )
 
     try:
@@ -307,7 +395,8 @@ async def test_cancelled_status_to_content_conversion_keeps_tracking(monkeypatch
         assert message_queue._status_msg_info[(1, 42)] == (
             321,
             "@4",
-            "💭 Thinking (4m 28s) · esc to interrupt",
+            "Status text",
+            123.0,
         )
     finally:
         message_queue._status_msg_info.clear()
@@ -330,6 +419,7 @@ async def test_cancelled_status_clear_keeps_tracking(monkeypatch):
         321,
         "@4",
         "💭 Thinking (4m 28s) · esc to interrupt",
+        123.0,
     )
 
     try:
@@ -344,6 +434,7 @@ async def test_cancelled_status_clear_keeps_tracking(monkeypatch):
             321,
             "@4",
             "💭 Thinking (4m 28s) · esc to interrupt",
+            123.0,
         )
     finally:
         message_queue._status_msg_info.clear()
