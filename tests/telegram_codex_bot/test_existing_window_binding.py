@@ -593,9 +593,10 @@ class TestExistingWindowBinding:
                 "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
             ) as safe_reply,
             patch(
-                "telegram_codex_bot.bot.send_agent_message",
+                "telegram_codex_bot.bot._send_or_queue_agent_input",
                 new_callable=AsyncMock,
-            ) as send_message,
+                return_value=(True, "Sent", False),
+            ) as send_or_queue,
             patch(
                 "telegram_codex_bot.bot._send_to_window_when_codex_ready",
                 new_callable=AsyncMock,
@@ -605,9 +606,6 @@ class TestExistingWindowBinding:
         ):
             mock_sm.get_window_for_thread.return_value = "@1"
             mock_sm.window_has_usage_limit_exceeded = AsyncMock(return_value=False)
-            send_message.return_value = MessageResult(
-                AgentTarget("local", "local", window_id="@1"), True, "Sent"
-            )
             mock_tmux.find_window_by_id = AsyncMock(return_value=fake_window)
             mock_tmux.capture_pane = AsyncMock(return_value="")
 
@@ -617,7 +615,7 @@ class TestExistingWindowBinding:
 
         enqueue_status_update.assert_awaited_once()
         send_when_ready.assert_not_awaited()
-        send_message.assert_awaited_once_with(12345, 42, "@1", "hi")
+        send_or_queue.assert_awaited_once_with(context.bot, 12345, 42, "@1", "hi")
         safe_reply.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -642,9 +640,10 @@ class TestExistingWindowBinding:
                 "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
             ) as safe_reply,
             patch(
-                "telegram_codex_bot.bot.send_agent_message",
+                "telegram_codex_bot.bot._send_or_queue_agent_input",
                 new_callable=AsyncMock,
-            ) as send_message,
+                return_value=(False, "send failed", False),
+            ) as send_or_queue,
             patch(
                 "telegram_codex_bot.bot._send_to_window_when_codex_ready",
                 new_callable=AsyncMock,
@@ -653,9 +652,6 @@ class TestExistingWindowBinding:
         ):
             mock_sm.get_window_for_thread.return_value = "@1"
             mock_sm.window_has_usage_limit_exceeded = AsyncMock(return_value=False)
-            send_message.return_value = MessageResult(
-                AgentTarget("local", "local", window_id="@1"), False, "send failed"
-            )
             mock_tmux.find_window_by_id = AsyncMock(return_value=fake_window)
             mock_tmux.capture_pane = AsyncMock(return_value="")
 
@@ -664,7 +660,7 @@ class TestExistingWindowBinding:
             await text_handler(update, context)
 
         send_when_ready.assert_not_awaited()
-        send_message.assert_awaited_once_with(12345, 42, "@1", "hi")
+        send_or_queue.assert_awaited_once_with(context.bot, 12345, 42, "@1", "hi")
         safe_reply.assert_awaited_once_with(
             update.message,
             "❌ send failed",

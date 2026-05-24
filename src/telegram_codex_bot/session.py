@@ -47,11 +47,14 @@ logger = logging.getLogger(__name__)
 _SHELL_PANE_COMMANDS = {"bash", "csh", "dash", "fish", "ksh", "sh", "tcsh", "zsh"}
 
 
-def _is_shell_pane_command(command: str) -> bool:
+def is_shell_pane_command(command: str) -> bool:
     """Return True when a tmux pane is sitting at an interactive shell."""
     if not command:
         return False
     return Path(command).name in _SHELL_PANE_COMMANDS
+
+
+_is_shell_pane_command = is_shell_pane_command
 
 
 _UUID_SUFFIX_RE = re.compile(

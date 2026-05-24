@@ -1,0 +1,156 @@
+from collections import deque
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from telegram_codex_bot import bot as bot_module
+
+
+@pytest.fixture(autouse=True)
+def clear_agent_input_queue_state():
+    bot_module._agent_input_queues.clear()
+    bot_module._agent_input_tasks.clear()
+    yield
+    bot_module._agent_input_queues.clear()
+    bot_module._agent_input_tasks.clear()
+
+
+@pytest.mark.asyncio
+async def test_send_or_queue_agent_input_queues_when_codex_is_busy(monkeypatch):
+    capture = SimpleNamespace(
+        text="• Working (12s • esc to interrupt)\n\n  gpt-5.5 · ~/repo",
+        missing=False,
+    )
+    send_message = AsyncMock()
+    ensured: list[tuple[int, int, str]] = []
+
+    monkeypatch.setattr(
+        bot_module, "capture_agent_output", AsyncMock(return_value=capture)
+    )
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+    monkeypatch.setattr(
+        bot_module,
+        "_ensure_agent_input_drain_task",
+        lambda _bot, key: ensured.append(key),
+    )
+
+    ok, message, queued = await bot_module._send_or_queue_agent_input(
+        MagicMock(),
+        12345,
+        42,
+        "@1",
+        "next prompt",
+    )
+
+    assert ok is True
+    assert queued is True
+    assert message.startswith("Queued until Codex is ready")
+    assert (
+        list(bot_module._agent_input_queues[(12345, 42, "@1")])[0].text == "next prompt"
+    )
+    assert ensured == [(12345, 42, "@1")]
+    send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_or_queue_agent_input_sends_immediately_when_ready(monkeypatch):
+    capture = SimpleNamespace(
+        text="previous output\n\n›\n\n  gpt-5.5 · ~/repo", missing=False
+    )
+    send_message = AsyncMock(return_value=(True, "Sent"))
+
+    monkeypatch.setattr(
+        bot_module, "capture_agent_output", AsyncMock(return_value=capture)
+    )
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+
+    ok, message, queued = await bot_module._send_or_queue_agent_input(
+        MagicMock(),
+        12345,
+        42,
+        "@1",
+        "prompt",
+    )
+
+    assert (ok, message, queued) == (True, "Sent", False)
+    send_message.assert_awaited_once_with(12345, 42, "@1", "prompt")
+    assert bot_module._agent_input_queues == {}
+
+
+@pytest.mark.asyncio
+async def test_drain_agent_input_queue_waits_until_ready(monkeypatch):
+    key = (12345, 42, "@1")
+    bot_module._agent_input_queues[key] = deque(
+        [bot_module._QueuedAgentInput(text="queued prompt")]
+    )
+    capture_busy = SimpleNamespace(
+        text="• Working (12s • esc to interrupt)\n\n  gpt-5.5 · ~/repo",
+        missing=False,
+    )
+    capture_ready = SimpleNamespace(
+        text="previous output\n\n›\n\n  gpt-5.5 · ~/repo", missing=False
+    )
+    send_message = AsyncMock(return_value=(True, "Sent"))
+    mark_working = AsyncMock()
+    refresh_session = AsyncMock()
+
+    monkeypatch.setattr(
+        bot_module,
+        "capture_agent_output",
+        AsyncMock(side_effect=[capture_busy, capture_ready]),
+    )
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+    monkeypatch.setattr(bot_module, "mark_window_working", mark_working)
+    monkeypatch.setattr(
+        bot_module,
+        "_refresh_session_map_after_first_prompt",
+        refresh_session,
+    )
+    monkeypatch.setattr(bot_module.asyncio, "sleep", AsyncMock())
+
+    telegram_bot = MagicMock()
+    await bot_module._drain_agent_input_queue(telegram_bot, key)
+
+    send_message.assert_awaited_once_with(12345, 42, "@1", "queued prompt")
+    mark_working.assert_awaited_once_with(telegram_bot, 12345, "@1", 42)
+    refresh_session.assert_awaited_once_with("@1", text="queued prompt")
+    assert key not in bot_module._agent_input_queues
+
+
+@pytest.mark.asyncio
+async def test_handle_non_codex_bound_window_recovers_resumable_shell(monkeypatch):
+    update_message = MagicMock()
+    session_manager = MagicMock()
+    session_manager.get_display_name.return_value = "Repo"
+    session_manager.window_states = {
+        "@1": SimpleNamespace(session_id="sid-1", cwd="/tmp/repo")
+    }
+    kill_window = AsyncMock(return_value=True)
+    recover = AsyncMock(return_value=(True, "Recovered"))
+    safe_reply = AsyncMock()
+
+    monkeypatch.setattr(bot_module, "session_manager", session_manager)
+    monkeypatch.setattr(bot_module.tmux_manager, "kill_window", kill_window)
+    monkeypatch.setattr(bot_module, "_recover_missing_bound_window", recover)
+    monkeypatch.setattr(bot_module, "safe_reply", safe_reply)
+
+    handled = await bot_module._handle_non_codex_bound_window(
+        update_message=update_message,
+        user_id=12345,
+        thread_id=42,
+        window_id="@1",
+        pane_command="bash",
+        text="pending prompt",
+        success_reply="sent",
+    )
+
+    assert handled is True
+    kill_window.assert_awaited_once_with("@1")
+    recover.assert_awaited_once_with(
+        user_id=12345,
+        thread_id=42,
+        old_window_id="@1",
+        text="pending prompt",
+    )
+    safe_reply.assert_any_await(update_message, "sent")

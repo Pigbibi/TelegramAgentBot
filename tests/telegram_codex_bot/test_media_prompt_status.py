@@ -67,9 +67,9 @@ async def test_photo_prompt_recreates_working_status_after_confirmation(tmp_path
             side_effect=record_clear,
         ) as enqueue_status_update,
         patch(
-            "telegram_codex_bot.bot._send_message_to_agent",
+            "telegram_codex_bot.bot._send_or_queue_agent_input",
             new_callable=AsyncMock,
-            return_value=(True, "Sent"),
+            return_value=(True, "Sent", False),
         ),
         patch(
             "telegram_codex_bot.bot.safe_reply",
