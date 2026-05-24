@@ -137,6 +137,6 @@ async def test_local_backend_send_and_capture(
     assert send_result.message == "Sent"
     assert control_result.ok is True
     assert pane == "pane"
-    send_to_window.assert_awaited_once_with("@9", "hello")
+    send_to_window.assert_awaited_once_with("@9", "hello", reject_busy=False)
     send_control_key.assert_awaited_once_with("@9", "Enter")
     capture_pane.assert_awaited_once_with("@9", with_ansi=True)

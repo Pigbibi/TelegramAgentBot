@@ -1871,7 +1871,13 @@ class SessionManager:
 
     # --- Tmux helpers ---
 
-    async def send_to_window(self, window_id: str, text: str) -> tuple[bool, str]:
+    async def send_to_window(
+        self,
+        window_id: str,
+        text: str,
+        *,
+        reject_busy: bool = True,
+    ) -> tuple[bool, str]:
         """Send text to a tmux window by ID."""
         display = self.get_display_name(window_id)
         logger.debug(
@@ -1891,7 +1897,7 @@ class SessionManager:
                 f"(current command: {pane_cmd}); please create or resume a session again",
             )
         pane_text = await tmux_manager.capture_pane(window.window_id)
-        if pane_text and not is_codex_input_ready(pane_text):
+        if reject_busy and pane_text and not is_codex_input_ready(pane_text):
             status = parse_status_update(pane_text)
             if status:
                 return False, f"Codex is still busy: {status}"
