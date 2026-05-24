@@ -30,7 +30,7 @@ class DummyMonitor:
     def start(self) -> None:
         self.started = True
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         self.stopped = True
 
 

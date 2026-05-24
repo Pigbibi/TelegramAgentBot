@@ -80,7 +80,7 @@ class LocalTmuxBackend:
         """Stop local transcript monitoring."""
         if self.session_monitor is None:
             return
-        self.session_monitor.stop()
+        await self.session_monitor.stop()
         self.session_monitor = None
         logger.info("Local tmux backend monitor stopped")
 

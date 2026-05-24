@@ -39,6 +39,9 @@ import logging
 import posixpath
 import re
 import time
+import contextlib
+from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypedDict, cast
 
@@ -168,7 +171,7 @@ from .handlers.status_polling import (
     status_poll_loop,
 )
 from .screenshot import text_to_image
-from .session import CodexSession, session_manager
+from .session import CodexSession, is_shell_pane_command, session_manager
 from .session_monitor import NewMessage
 from .terminal_parser import (
     extract_bash_output,
@@ -203,6 +206,16 @@ _status_poll_task: asyncio.Task | None = None
 _auto_update_task: asyncio.Task | None = None
 _runtime_stopped = False
 
+
+@dataclass
+class _QueuedAgentInput:
+    text: str
+
+
+_AGENT_INPUT_POLL_INTERVAL_SECONDS = 1.0
+_agent_input_queues: dict[tuple[int, int, str], deque[_QueuedAgentInput]] = {}
+_agent_input_tasks: dict[tuple[int, int, str], asyncio.Task] = {}
+
 PRODUCT_NAME = "Codex"
 WELCOME_MESSAGE = (
     f"🤖 *{PRODUCT_NAME} Monitor*\n\n"
@@ -214,6 +227,12 @@ UNSUPPORTED_CONTENT_MESSAGE = (
 )
 PHOTO_CONFIRMATION_MESSAGE = f"📷 Image sent to {PRODUCT_NAME}."
 FILE_CONFIRMATION_MESSAGE = f"📎 File sent to {PRODUCT_NAME}."
+PHOTO_QUEUED_MESSAGE = (
+    f"📷 Image queued for {PRODUCT_NAME}; it will send after the current response."
+)
+FILE_QUEUED_MESSAGE = (
+    f"📎 File queued for {PRODUCT_NAME}; it will send after the current response."
+)
 SESSION_STILL_RUNNING_MESSAGE = f"The {PRODUCT_NAME} session is still running in tmux."
 HELP_COMMAND_DESCRIPTION = f"↗ Show {PRODUCT_NAME} help"
 ESC_COMMAND_DESCRIPTION = f"Send Escape to interrupt {PRODUCT_NAME}"
@@ -1006,6 +1025,162 @@ async def _send_message_to_agent(
     return result.ok, result.message
 
 
+def _agent_input_key(
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+) -> tuple[int, int, str]:
+    return (user_id, thread_id or 0, window_id)
+
+
+def _ensure_agent_input_drain_task(
+    bot: Bot,
+    key: tuple[int, int, str],
+) -> None:
+    task = _agent_input_tasks.get(key)
+    if task and not task.done():
+        return
+    _agent_input_tasks[key] = asyncio.create_task(_drain_agent_input_queue(bot, key))
+
+
+async def _send_or_queue_agent_input(
+    bot: Bot,
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+    text: str,
+) -> tuple[bool, str, bool]:
+    """Send now when Codex is ready, otherwise queue for the next ready prompt."""
+    key = _agent_input_key(user_id, thread_id, window_id)
+    queue = _agent_input_queues.get(key)
+    if queue:
+        queue.append(_QueuedAgentInput(text=text))
+        _ensure_agent_input_drain_task(bot, key)
+        return True, "Queued until Codex is ready", True
+
+    capture = await capture_agent_output(user_id, thread_id, window_id)
+    if capture is None:
+        return False, "No session bound", False
+    if capture.missing:
+        return False, "Window not found (may have been closed)", False
+
+    pane_text = capture.text or ""
+    if not is_codex_input_ready(pane_text) or is_interactive_ui(pane_text):
+        queue = _agent_input_queues.setdefault(key, deque())
+        queue.append(_QueuedAgentInput(text=text))
+        _ensure_agent_input_drain_task(bot, key)
+        status = parse_status_update(pane_text)
+        message = (
+            f"Queued until Codex is ready: {status}"
+            if status
+            else "Queued until Codex is ready"
+        )
+        return True, message, True
+
+    success, message = await _send_message_to_agent(user_id, thread_id, window_id, text)
+    return success, message, False
+
+
+async def _notify_queued_input_failure(
+    bot: Bot,
+    user_id: int,
+    thread_id: int | None,
+    message: str,
+) -> None:
+    try:
+        await safe_send(
+            bot,
+            session_manager.resolve_chat_id(user_id, thread_id),
+            f"❌ Queued message failed: {message}",
+            message_thread_id=thread_id,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to notify queued input failure (user=%d thread=%s)",
+            user_id,
+            thread_id,
+        )
+
+
+async def _drain_agent_input_queue(
+    bot: Bot,
+    key: tuple[int, int, str],
+) -> None:
+    """Forward queued user prompts one at a time when Codex returns to input."""
+    user_id, thread_key, window_id = key
+    thread_id = thread_key or None
+    try:
+        while True:
+            queue = _agent_input_queues.get(key)
+            if not queue:
+                return
+
+            capture = await capture_agent_output(user_id, thread_id, window_id)
+            if capture is None:
+                await _notify_queued_input_failure(
+                    bot, user_id, thread_id, "No session bound"
+                )
+                queue.clear()
+                return
+            if capture.missing:
+                await _notify_queued_input_failure(
+                    bot,
+                    user_id,
+                    thread_id,
+                    "Window not found (may have been closed)",
+                )
+                queue.clear()
+                return
+
+            pane_text = capture.text or ""
+            if not is_codex_input_ready(pane_text) or is_interactive_ui(pane_text):
+                await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
+                continue
+
+            item = queue[0]
+            success, message = await _send_message_to_agent(
+                user_id,
+                thread_id,
+                window_id,
+                item.text,
+            )
+            if not success:
+                queue.popleft()
+                await _notify_queued_input_failure(bot, user_id, thread_id, message)
+                continue
+
+            queue.popleft()
+            await mark_window_working(bot, user_id, window_id, thread_id)
+            await _refresh_session_map_after_first_prompt(window_id, text=item.text)
+            await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(
+            "Agent input queue failed (user=%d thread=%s window=%s)",
+            user_id,
+            thread_id,
+            window_id,
+        )
+    finally:
+        queue = _agent_input_queues.get(key)
+        if not queue:
+            _agent_input_queues.pop(key, None)
+        if _agent_input_tasks.get(key) is asyncio.current_task():
+            _agent_input_tasks.pop(key, None)
+
+
+async def _cancel_agent_input_drain_tasks() -> None:
+    tasks = [task for task in _agent_input_tasks.values() if not task.done()]
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    _agent_input_tasks.clear()
+    _agent_input_queues.clear()
+
+
 def _remote_target_for_thread(
     user_id: int,
     thread_id: int | None,
@@ -1467,12 +1642,17 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Download the highest-resolution photo
     photo = update.message.photo[-1]
-    tg_file = await photo.get_file()
 
     # Save to ~/.telegram-codex-bot/images/<timestamp>_<file_unique_id>.jpg
     filename = f"{time.time_ns()}_{photo.file_unique_id}.jpg"
     file_path = _IMAGES_DIR / filename
-    await tg_file.download_to_drive(file_path)
+    try:
+        tg_file = await photo.get_file()
+        await tg_file.download_to_drive(file_path)
+    except (TelegramError, OSError) as exc:
+        logger.exception("Failed to download Telegram photo")
+        await safe_reply(update.message, f"❌ Failed to download image: {exc}")
+        return
 
     agent_file_path = str(file_path)
     if remote_target is not None:
@@ -1501,6 +1681,20 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         text_to_send = f"(image attached: {agent_file_path})"
 
+    if wid and w:
+        pane_cmd = (getattr(w, "pane_current_command", "") or "").strip()
+        handled = await _handle_non_codex_bound_window(
+            update_message=update.message,
+            user_id=user.id,
+            thread_id=thread_id,
+            window_id=wid,
+            pane_command=pane_cmd,
+            text=text_to_send,
+            success_reply=PHOTO_CONFIRMATION_MESSAGE,
+        )
+        if handled:
+            return
+
     await _safe_send_typing_action(update.message.chat, source="photo_handler")
     if wid:
         await enqueue_status_update(
@@ -1520,19 +1714,32 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    success, message = await _send_message_to_agent(
-        user.id,
-        thread_id,
-        wid or "",
-        text_to_send,
-    )
+    if wid:
+        success, message, queued = await _send_or_queue_agent_input(
+            context.bot,
+            user.id,
+            thread_id,
+            wid,
+            text_to_send,
+        )
+    else:
+        success, message = await _send_message_to_agent(
+            user.id,
+            thread_id,
+            "",
+            text_to_send,
+        )
+        queued = False
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
 
     # Confirm to user
-    await safe_reply(update.message, PHOTO_CONFIRMATION_MESSAGE)
-    if wid:
+    await safe_reply(
+        update.message,
+        PHOTO_QUEUED_MESSAGE if queued else PHOTO_CONFIRMATION_MESSAGE,
+    )
+    if wid and not queued:
         await mark_window_working(context.bot, user.id, wid, thread_id)
 
 
@@ -1590,8 +1797,13 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     unique_id = _safe_upload_filename(document.file_unique_id, fallback="file")
     local_filename = f"{time.time_ns()}_{unique_id}_{document_name}"
     file_path = _FILES_DIR / local_filename
-    tg_file = await document.get_file()
-    await tg_file.download_to_drive(file_path)
+    try:
+        tg_file = await document.get_file()
+        await tg_file.download_to_drive(file_path)
+    except (TelegramError, OSError) as exc:
+        logger.exception("Failed to download Telegram document")
+        await safe_reply(update.message, f"❌ Failed to download file: {exc}")
+        return
 
     agent_file_path = str(file_path)
     if remote_target is not None:
@@ -1619,6 +1831,20 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     else:
         text_to_send = f"(file attached: {agent_file_path})"
 
+    if wid and w:
+        pane_cmd = (getattr(w, "pane_current_command", "") or "").strip()
+        handled = await _handle_non_codex_bound_window(
+            update_message=update.message,
+            user_id=user.id,
+            thread_id=thread_id,
+            window_id=wid,
+            pane_command=pane_cmd,
+            text=text_to_send,
+            success_reply=FILE_CONFIRMATION_MESSAGE,
+        )
+        if handled:
+            return
+
     await _safe_send_typing_action(update.message.chat, source="document_handler")
     if wid:
         await enqueue_status_update(
@@ -1638,18 +1864,31 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
 
-    success, message = await _send_message_to_agent(
-        user.id,
-        thread_id,
-        wid or "",
-        text_to_send,
-    )
+    if wid:
+        success, message, queued = await _send_or_queue_agent_input(
+            context.bot,
+            user.id,
+            thread_id,
+            wid,
+            text_to_send,
+        )
+    else:
+        success, message = await _send_message_to_agent(
+            user.id,
+            thread_id,
+            "",
+            text_to_send,
+        )
+        queued = False
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
 
-    await safe_reply(update.message, FILE_CONFIRMATION_MESSAGE)
-    if wid:
+    await safe_reply(
+        update.message,
+        FILE_QUEUED_MESSAGE if queued else FILE_CONFIRMATION_MESSAGE,
+    )
+    if wid and not queued:
         await mark_window_working(context.bot, user.id, wid, thread_id)
 
 
@@ -2251,6 +2490,66 @@ async def _recover_missing_bound_window(
     )
 
 
+async def _handle_non_codex_bound_window(
+    *,
+    update_message: Any,
+    user_id: int,
+    thread_id: int,
+    window_id: str,
+    pane_command: str,
+    text: str,
+    success_reply: str | None = None,
+) -> bool:
+    """Recover or unbind a topic whose tmux window has fallen back to a shell."""
+    if not is_shell_pane_command(pane_command):
+        return False
+
+    display = session_manager.get_display_name(window_id)
+    state = session_manager.window_states.get(window_id)
+    if state and state.session_id and state.cwd:
+        logger.info(
+            "Recovering non-Codex bound window %s (command=%s, user=%d, thread=%d)",
+            display,
+            pane_command,
+            user_id,
+            thread_id,
+        )
+        await safe_reply(
+            update_message,
+            f"♻️ Window `{display}` is no longer running {PRODUCT_NAME} "
+            f"(current command: `{pane_command}`). Recreating it and resuming "
+            "the previous session...",
+        )
+        await tmux_manager.kill_window(window_id)
+        recovered, recovery_message = await _recover_missing_bound_window(
+            user_id=user_id,
+            thread_id=thread_id,
+            old_window_id=window_id,
+            text=text,
+        )
+        if not recovered:
+            await safe_reply(update_message, f"❌ {recovery_message}")
+        elif success_reply:
+            await safe_reply(update_message, success_reply)
+        return True
+
+    logger.info(
+        "Stale non-Codex binding: window %s command=%s, unbinding (user=%d, thread=%d)",
+        display,
+        pane_command,
+        user_id,
+        thread_id,
+    )
+    session_manager.unbind_thread(user_id, thread_id)
+    await safe_reply(
+        update_message,
+        f"❌ Window '{display}' is not running {PRODUCT_NAME} "
+        f"(current command: {pane_command}). Binding removed.\n"
+        "Send a message to start a new session.",
+    )
+    return True
+
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -2467,6 +2766,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
+    pane_cmd = (getattr(w, "pane_current_command", "") or "").strip()
+    handled = await _handle_non_codex_bound_window(
+        update_message=update.message,
+        user_id=user.id,
+        thread_id=thread_id,
+        window_id=wid,
+        pane_command=pane_cmd,
+        text=text,
+    )
+    if handled:
+        return
+
     await _safe_send_typing_action(update.message.chat, source="text_handler")
     await enqueue_status_update(context.bot, user.id, wid, None, thread_id=thread_id)
 
@@ -2501,18 +2812,22 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if handled:
             return
 
-    # Bound topics can receive text while Codex is working.  Sending directly
-    # lets the TUI queue the prompt for the next turn instead of dropping it
-    # after a local readiness timeout.
-    success, message = await _send_message_to_agent(user.id, thread_id, wid, text)
+    success, message, queued = await _send_or_queue_agent_input(
+        context.bot,
+        user.id,
+        thread_id,
+        wid,
+        text,
+    )
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    await mark_window_working(context.bot, user.id, wid, thread_id)
-    await _refresh_session_map_after_first_prompt(wid, text=text)
+    if not queued:
+        await mark_window_working(context.bot, user.id, wid, thread_id)
+        await _refresh_session_map_after_first_prompt(wid, text=text)
 
     # Start background capture for ! bash command output
-    if input_was_ready and text.startswith("!") and len(text) > 1:
+    if not queued and input_was_ready and text.startswith("!") and len(text) > 1:
         bash_cmd = text[1:]  # strip leading "!"
         task = asyncio.create_task(
             _capture_bash_output(context.bot, user.id, thread_id, wid, bash_cmd)
@@ -3921,13 +4236,15 @@ async def _stop_runtime(
         _auto_update_task = None
         logger.info("Auto-update task stopped")
 
+    await _cancel_agent_input_drain_tasks()
+
     if agent_backend:
         await agent_backend.stop()
         agent_backend = None
         session_monitor = None
         logger.info("Agent backend stopped")
     elif session_monitor:
-        session_monitor.stop()
+        await session_monitor.stop()
         session_monitor = None
         logger.info("Session monitor stopped")
 

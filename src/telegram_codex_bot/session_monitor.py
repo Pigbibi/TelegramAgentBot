@@ -5,6 +5,7 @@ sessions to matching tmux windows by cwd, and emits parsed messages to the bot.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 from dataclasses import dataclass, replace
@@ -538,10 +539,13 @@ class SessionMonitor:
         self._running = True
         self._task = asyncio.create_task(self._monitor_loop())
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         self._running = False
-        if self._task:
-            self._task.cancel()
+        task = self._task
+        if task:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
             self._task = None
         self.discard_deferred_state_updates()
         self.state.save()
