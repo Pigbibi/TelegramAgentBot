@@ -321,6 +321,35 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(pending)
 
+    def test_pane_pending_literal_input_detects_queued_prompt_after_waiting_background(
+        self,
+    ) -> None:
+        manager = tmux_manager_module.TmuxManager(
+            session_name="telegram-codex-bot-test"
+        )
+        capture = (
+            "• Waiting for background terminal (1m 13s • esc to interrupt)\n"
+            "\n"
+            "› Improve documentation in @filename\n"
+            "\n"
+            "  gpt-5.5 xhigh · ~/Projects\n"
+        )
+
+        with patch(
+            "telegram_codex_bot.tmux_manager.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["tmux", "capture-pane"],
+                returncode=0,
+                stdout=capture,
+            ),
+        ):
+            pending = manager._pane_still_has_pending_literal_input(
+                "@9",
+                "Improve documentation in @filename",
+            )
+
+        self.assertTrue(pending)
+
     def test_pane_has_insert_overlay_detects_codex_at_mention_popup(self) -> None:
         manager = tmux_manager_module.TmuxManager(
             session_name="telegram-codex-bot-test"

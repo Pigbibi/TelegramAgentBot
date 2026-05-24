@@ -40,6 +40,9 @@ _INSERT_OVERLAY_RE = re.compile(
 _ACTIVE_WORKING_RE = re.compile(
     r"^[•◦]\s*Working\b|esc\s+to\s+interrupt", re.IGNORECASE
 )
+_WAITING_BACKGROUND_RE = re.compile(
+    r"^[•◦]\s*Waiting for background terminal\b", re.IGNORECASE
+)
 
 
 def _resume_target_id(session_id: str) -> str:
@@ -280,11 +283,38 @@ class TmuxManager:
             return False
 
         tail_lines = pane_text.splitlines()[-30:]
+
+        input_seen = False
+        waiting_background_index: int | None = None
+        for index, line in enumerate(tail_lines):
+            if _WAITING_BACKGROUND_RE.search(line.strip()):
+                waiting_background_index = index
+
+        candidate_lines = self._input_candidate_lines(tail_lines)
+        if waiting_background_index is not None:
+            lower_bound = max(0, len(tail_lines) - len(candidate_lines))
+            input_seen_after_wait = False
+            for offset, line in enumerate(candidate_lines, start=lower_bound):
+                if offset <= waiting_background_index:
+                    continue
+                stripped = line.strip()
+                is_input_start = stripped.startswith(("›", "❯"))
+                is_input_continuation = input_seen_after_wait and line[:1].isspace()
+                if is_input_start:
+                    input_seen_after_wait = True
+                    if may_render_as_folded_paste and _FOLDED_PASTE_INPUT_RE.match(
+                        stripped
+                    ):
+                        return True
+                if (is_input_start or is_input_continuation) and any(
+                    fragment in stripped for fragment in fragments
+                ):
+                    return True
+
         if any(_ACTIVE_WORKING_RE.search(line.strip()) for line in tail_lines):
             return False
 
-        input_seen = False
-        for line in self._input_candidate_lines(tail_lines):
+        for line in candidate_lines:
             stripped = line.strip()
             is_input_start = stripped.startswith(("›", "❯"))
             is_input_continuation = input_seen and line[:1].isspace()

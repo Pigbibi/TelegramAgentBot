@@ -42,6 +42,13 @@ _HOOK_TIMEOUT_SECONDS = 5
 _HOOK_COMMAND_SUFFIX = "telegram-codex-bot hook"
 
 
+def _is_non_interactive_session(payload: dict[str, Any]) -> bool:
+    """Return True for non-TUI Codex sessions that should not own a tmux window."""
+    source = str(payload.get("source") or "").strip().lower()
+    originator = str(payload.get("originator") or "").strip().lower()
+    return source == "exec" or originator == "codex_exec"
+
+
 def _codex_dir() -> Path:
     """Resolve the active Codex home for hook install/runtime."""
     codex_home = os.getenv("CODEX_HOME")
@@ -281,6 +288,15 @@ def hook_main() -> None:
 
     if not session_id or not event:
         logger.debug("Empty session_id or event, ignoring")
+        return
+
+    if _is_non_interactive_session(payload):
+        logger.debug(
+            "Ignoring non-interactive Codex session: session_id=%s, source=%s, originator=%s",
+            session_id,
+            payload.get("source"),
+            payload.get("originator"),
+        )
         return
 
     # Validate session_id format (Codex rollout ids or legacy UUIDs)
