@@ -228,6 +228,30 @@ class TestSendToWindow:
         assert message.startswith("Codex is still busy:")
         send_keys.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_can_queue_prompt_for_busy_codex_when_allowed(
+        self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        find_window = AsyncMock(
+            return_value=SimpleNamespace(
+                window_id="@1",
+                pane_current_command="node",
+            )
+        )
+        capture_pane = AsyncMock(return_value="• Working (1m 13s • esc to interrupt)\n")
+        send_keys = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            session_module.tmux_manager, "find_window_by_id", find_window
+        )
+        monkeypatch.setattr(session_module.tmux_manager, "capture_pane", capture_pane)
+        monkeypatch.setattr(session_module.tmux_manager, "send_keys", send_keys)
+
+        ok, message = await mgr.send_to_window("@1", "hi", reject_busy=False)
+
+        assert ok is True
+        assert message == "Sent to @1"
+        send_keys.assert_awaited_once_with("@1", "hi")
+
 
 class TestSessionMapWait:
     @pytest.mark.asyncio

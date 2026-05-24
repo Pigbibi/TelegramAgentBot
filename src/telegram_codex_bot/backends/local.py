@@ -203,7 +203,11 @@ class LocalTmuxBackend:
         if not window_id:
             return SendResult(False, "Invalid local target")
 
-        ok, message = await session_manager.send_to_window(window_id, text)
+        ok, message = await session_manager.send_to_window(
+            window_id,
+            text,
+            reject_busy=False,
+        )
         return SendResult(ok, message)
 
     async def send_control(self, target: AgentTarget, key: str) -> SendResult:
