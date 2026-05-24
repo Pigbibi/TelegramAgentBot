@@ -40,7 +40,6 @@ _HOOK_TIMEOUT_SECONDS = 5
 
 # The hook command suffix for detection
 _HOOK_COMMAND_SUFFIX = "telegram-codex-bot hook"
-_LEGACY_HOOK_COMMAND_SUFFIXES = ("ccbot hook",)
 
 
 def _codex_dir() -> Path:
@@ -100,60 +99,6 @@ def _is_hook_installed(settings: dict) -> bool:
             if cmd == _HOOK_COMMAND_SUFFIX or cmd.endswith("/" + _HOOK_COMMAND_SUFFIX):
                 return True
     return False
-
-
-def _is_hook_command(cmd: str, suffix: str) -> bool:
-    return cmd == suffix or cmd.endswith("/" + suffix)
-
-
-def _remove_legacy_hooks(settings: dict) -> bool:
-    """Remove old project hook entries from a hooks.json payload."""
-
-    hooks = settings.get("hooks", {})
-    if not isinstance(hooks, dict):
-        return False
-
-    session_start = hooks.get("SessionStart", [])
-    if not isinstance(session_start, list):
-        return False
-
-    changed = False
-    kept_entries: list[Any] = []
-    for entry in session_start:
-        if not isinstance(entry, dict):
-            kept_entries.append(entry)
-            continue
-
-        inner_hooks = entry.get("hooks", [])
-        if not isinstance(inner_hooks, list):
-            kept_entries.append(entry)
-            continue
-
-        kept_hooks = []
-        for hook_config in inner_hooks:
-            if not isinstance(hook_config, dict):
-                kept_hooks.append(hook_config)
-                continue
-
-            command = hook_config.get("command", "")
-            if isinstance(command, str) and any(
-                _is_hook_command(command, suffix)
-                for suffix in _LEGACY_HOOK_COMMAND_SUFFIXES
-            ):
-                changed = True
-                continue
-            kept_hooks.append(hook_config)
-
-        if kept_hooks:
-            if len(kept_hooks) != len(inner_hooks):
-                entry = {**entry, "hooks": kept_hooks}
-            kept_entries.append(entry)
-        else:
-            changed = True
-
-    if changed:
-        hooks["SessionStart"] = kept_entries
-    return changed
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
@@ -254,19 +199,8 @@ def _install_hook() -> int:
         print(message, file=sys.stderr)
         return 1
 
-    removed_legacy_hooks = _remove_legacy_hooks(settings)
-
     # Check if already installed
     if _is_hook_installed(settings):
-        if removed_legacy_hooks:
-            try:
-                hooks_file.parent.mkdir(parents=True, exist_ok=True)
-                _write_json_file(hooks_file, settings)
-            except OSError as e:
-                logger.error("Error writing %s: %s", hooks_file, e)
-                print(f"Error writing {hooks_file}: {e}", file=sys.stderr)
-                return 1
-
         logger.info("Hook already installed in %s", hooks_file)
         print(
             f"Hook already installed in {hooks_file} (Codex hooks enabled in {config_file})"
