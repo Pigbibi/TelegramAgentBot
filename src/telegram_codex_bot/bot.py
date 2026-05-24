@@ -201,6 +201,7 @@ session_monitor: Any | None = None
 # Status polling task
 _status_poll_task: asyncio.Task | None = None
 _auto_update_task: asyncio.Task | None = None
+_runtime_stopped = False
 
 PRODUCT_NAME = "Codex"
 WELCOME_MESSAGE = (
@@ -3829,6 +3830,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 
 async def post_init(application: Application) -> None:
     global agent_backend, session_monitor, _status_poll_task, _auto_update_task
+    global _runtime_stopped
+
+    _runtime_stopped = False
 
     await application.bot.delete_my_commands()
 
@@ -3888,8 +3892,15 @@ async def post_init(application: Application) -> None:
     logger.info("Auto-update task initialized")
 
 
-async def post_shutdown(application: Application) -> None:
+async def _stop_runtime(
+    application: Application, *, drain_message_workers: bool
+) -> None:
     global agent_backend, session_monitor, _status_poll_task, _auto_update_task
+    global _runtime_stopped
+
+    if _runtime_stopped:
+        return
+    _runtime_stopped = True
 
     # Stop status polling
     if _status_poll_task:
@@ -3910,9 +3921,6 @@ async def post_shutdown(application: Application) -> None:
         _auto_update_task = None
         logger.info("Auto-update task stopped")
 
-    # Stop all queue workers
-    await shutdown_workers()
-
     if agent_backend:
         await agent_backend.stop()
         agent_backend = None
@@ -3923,7 +3931,20 @@ async def post_shutdown(application: Application) -> None:
         session_monitor = None
         logger.info("Session monitor stopped")
 
+    # Stop all queue workers while the Telegram request client is still usable.
+    await shutdown_workers(drain=drain_message_workers)
+
     await close_transcribe_client()
+
+
+async def post_stop(application: Application) -> None:
+    """Stop runtime producers and drain Telegram sends before request shutdown."""
+    await _stop_runtime(application, drain_message_workers=True)
+
+
+async def post_shutdown(application: Application) -> None:
+    """Fallback cleanup after Telegram's request client has shut down."""
+    await _stop_runtime(application, drain_message_workers=False)
 
 
 def create_bot() -> Application:
@@ -3948,6 +3969,7 @@ def create_bot() -> Application:
         )
         .rate_limiter(AIORateLimiter(max_retries=5))
         .post_init(post_init)
+        .post_stop(post_stop)
         .post_shutdown(post_shutdown)
         .build()
     )
