@@ -939,10 +939,10 @@ def clear_tool_msg_ids_for_topic(user_id: int, thread_id: int | None = None) -> 
         _tool_msg_ids.pop(key, None)
 
 
-async def shutdown_workers() -> None:
+async def shutdown_workers(*, drain: bool = True) -> None:
     """Stop all queue workers (called during bot shutdown)."""
     queues = list(_message_queues.items())
-    if queues:
+    if drain and queues:
         try:
             await asyncio.wait_for(
                 asyncio.gather(*(queue.join() for _, queue in queues)),
