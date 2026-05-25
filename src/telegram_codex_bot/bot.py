@@ -33,13 +33,16 @@ Key functions: create_bot(), handle_new_message().
 """
 
 import asyncio
+import contextlib
 import io
 import json
 import logging
+import os
 import posixpath
 import re
+import shlex
+import shutil
 import time
-import contextlib
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,9 +71,15 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 from .account_manager import (
+    clear_current_account,
+    get_current_account_name,
     get_default_account_name,
     get_next_account_name,
+    is_valid_account_name,
+    list_account_names,
+    prepare_account_home,
     remember_current_account,
+    save_account_snapshot,
 )
 from .agent_io import (
     capture_agent_output,
@@ -238,6 +247,14 @@ HELP_COMMAND_DESCRIPTION = f"↗ Show {PRODUCT_NAME} help"
 ESC_COMMAND_DESCRIPTION = f"Send Escape to interrupt {PRODUCT_NAME}"
 INTERRUPT_COMMAND_DESCRIPTION = f"Interrupt {PRODUCT_NAME} or send a message"
 USAGE_COMMAND_DESCRIPTION = f"Show {PRODUCT_NAME} usage remaining"
+ACCOUNT_COMMAND_DESCRIPTION = "Manage Codex login accounts"
+CODEX_LOGIN_COMMAND_DESCRIPTION = "Start Codex device login"
+CODEX_LOGIN_TIMEOUT_SECONDS = 16 * 60
+_CODEX_LOGIN_DEFAULT_KEY = "__default__"
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_DEVICE_LOGIN_URL_RE = re.compile(r"https?://\S+")
+_DEVICE_LOGIN_CODE_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4,}\b")
+_codex_login_tasks: dict[str, asyncio.Task[None]] = {}
 
 
 async def _safe_send_typing_action(chat: Chat, *, source: str) -> None:
@@ -940,6 +957,319 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if len(trimmed) > 3000:
             trimmed = trimmed[:3000] + "\n... (truncated)"
         await safe_reply(update.message, f"```\n{trimmed}\n```")
+
+
+def _codex_login_executable() -> str:
+    """Return the Codex executable to use for device login."""
+    try:
+        command_parts = shlex.split(config.codex_command)
+    except ValueError:
+        command_parts = []
+
+    for part in command_parts:
+        name, sep, _value = part.partition("=")
+        if sep and name.isidentifier():
+            continue
+        return shutil.which(part) or part
+    return shutil.which("codex") or "codex"
+
+
+def _extract_device_login_details(output: str) -> tuple[str | None, str | None]:
+    """Extract the browser URL and one-time device code from Codex login output."""
+    clean = _ANSI_ESCAPE_RE.sub("", output)
+    url_match = _DEVICE_LOGIN_URL_RE.search(clean)
+    code_match = _DEVICE_LOGIN_CODE_RE.search(clean)
+    return (
+        url_match.group(0).rstrip(".,)") if url_match else None,
+        code_match.group(0) if code_match else None,
+    )
+
+
+def _login_display_name(account_name: str | None) -> str:
+    if account_name:
+        return f"account `{account_name}`"
+    return "the service user's default Codex account"
+
+
+def _account_command_usage() -> str:
+    return (
+        "Usage:\n"
+        "/codexaccount list\n"
+        "/codexaccount use <name>\n"
+        "/codexaccount clear\n"
+        "/codexaccount save <name>\n"
+        "/codexlogin [name]"
+    )
+
+
+def _format_account_status() -> str:
+    names = list_account_names()
+    current = get_current_account_name()
+    rotation = "enabled" if config.enable_account_rotation else "disabled"
+    lines = [
+        "🔐 Codex account status",
+        f"Automatic quota rotation: {rotation}",
+        (
+            f"New sessions: saved account `{current}`"
+            if current
+            else "New sessions: service user's default CODEX_HOME"
+        ),
+    ]
+    if names:
+        lines.append("Saved accounts:")
+        for name in names:
+            suffix = " (selected)" if name == current else ""
+            lines.append(f"- `{name}`{suffix}")
+    else:
+        lines.append("Saved accounts: none")
+    lines.append("Use /codexlogin [name] to refresh login from Telegram.")
+    return "\n".join(lines)
+
+
+async def _wait_for_codex_login_details(
+    process: asyncio.subprocess.Process,
+) -> tuple[str | None, str | None]:
+    """Read Codex login output until the URL/code pair appears."""
+    if process.stdout is None:
+        return None, None
+
+    output = ""
+    deadline = asyncio.get_running_loop().time() + 30
+    while asyncio.get_running_loop().time() < deadline:
+        timeout = max(0.1, deadline - asyncio.get_running_loop().time())
+        try:
+            line = await asyncio.wait_for(process.stdout.readline(), timeout=timeout)
+        except TimeoutError:
+            break
+        if not line:
+            break
+        output += line.decode("utf-8", errors="replace")
+        login_url, login_code = _extract_device_login_details(output)
+        if login_url and login_code:
+            return login_url, login_code
+    return _extract_device_login_details(output)
+
+
+async def _codex_login_worker(
+    *,
+    bot: Bot,
+    chat_id: int,
+    thread_id: int | None,
+    account_name: str | None,
+    login_key: str,
+) -> None:
+    """Run `codex login --device-auth` and report status back to Telegram."""
+    account_home = None
+    process: asyncio.subprocess.Process | None = None
+    try:
+        env = os.environ.copy()
+        if account_name:
+            account_home = prepare_account_home(account_name)
+            env["CODEX_HOME"] = str(account_home)
+
+        process = await asyncio.create_subprocess_exec(
+            _codex_login_executable(),
+            "login",
+            "--device-auth",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+        )
+
+        login_url, login_code = await _wait_for_codex_login_details(process)
+        if not login_url or not login_code:
+            if process.returncode is None:
+                process.terminate()
+            await safe_send(
+                bot,
+                chat_id,
+                "❌ Codex login did not print a device URL/code. "
+                "Please check the service logs or try again.",
+                message_thread_id=thread_id,
+            )
+            return
+
+        await safe_send(
+            bot,
+            chat_id,
+            "🔐 Codex login started for "
+            f"{_login_display_name(account_name)}.\n"
+            f"Open: {login_url}\n"
+            f"Code: `{login_code}`\n"
+            "Expires in about 15 minutes. Only complete this login if you requested it.",
+            message_thread_id=thread_id,
+        )
+
+        try:
+            return_code = await asyncio.wait_for(
+                process.wait(), timeout=CODEX_LOGIN_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            process.terminate()
+            await safe_send(
+                bot,
+                chat_id,
+                "❌ Codex login timed out. Run /codexlogin again when ready.",
+                message_thread_id=thread_id,
+            )
+            return
+
+        if return_code != 0:
+            await safe_send(
+                bot,
+                chat_id,
+                "❌ Codex login failed or was cancelled. Run /codexlogin again if needed.",
+                message_thread_id=thread_id,
+            )
+            return
+
+        if account_name and account_home is not None:
+            save_account_snapshot(account_name, account_home)
+            remember_current_account(account_name)
+            await safe_send(
+                bot,
+                chat_id,
+                f"✅ Codex login completed for account `{account_name}` and saved.\n"
+                "New topics will use this account. Existing topics keep their current "
+                "window; use /unbind if you want this topic to start fresh.",
+                message_thread_id=thread_id,
+            )
+        else:
+            await safe_send(
+                bot,
+                chat_id,
+                "✅ Codex login completed. Send your message again. Existing topics "
+                "keep their current window; use /unbind if the current pane still errors.",
+                message_thread_id=thread_id,
+            )
+    except Exception as exc:
+        logger.exception("Codex login failed")
+        await safe_send(
+            bot,
+            chat_id,
+            f"❌ Codex login failed: {exc}",
+            message_thread_id=thread_id,
+        )
+    finally:
+        _codex_login_tasks.pop(login_key, None)
+
+
+async def codex_login_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Start Codex device login from Telegram."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message or not update.effective_chat:
+        return
+
+    args = context.args or []
+    if len(args) > 1:
+        await safe_reply(update.message, "Usage: /codexlogin [account-name]")
+        return
+
+    account_name = args[0].strip() if args else None
+    if account_name and not is_valid_account_name(account_name):
+        await safe_reply(
+            update.message,
+            "❌ Invalid account name. Use letters, numbers, dot, underscore, or dash.",
+        )
+        return
+
+    login_key = account_name or _CODEX_LOGIN_DEFAULT_KEY
+    existing = _codex_login_tasks.get(login_key)
+    if existing and not existing.done():
+        await safe_reply(
+            update.message,
+            f"⏳ Codex login is already running for {_login_display_name(account_name)}.",
+        )
+        return
+
+    task = asyncio.create_task(
+        _codex_login_worker(
+            bot=context.bot,
+            chat_id=update.effective_chat.id,
+            thread_id=_get_thread_id(update),
+            account_name=account_name,
+            login_key=login_key,
+        )
+    )
+    _codex_login_tasks[login_key] = task
+    await safe_reply(
+        update.message,
+        f"⏳ Starting Codex device login for {_login_display_name(account_name)}...",
+    )
+
+
+async def codex_account_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Manage saved Codex account snapshots."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    args = context.args or []
+    if not args or args[0].lower() == "list":
+        await safe_reply(update.message, _format_account_status())
+        return
+
+    action = args[0].lower()
+    if action == "clear":
+        clear_current_account()
+        await safe_reply(
+            update.message,
+            "✅ New sessions will use the service user's default CODEX_HOME. "
+            "Existing topics keep their current window; use /unbind to start fresh.",
+        )
+        return
+
+    if action not in {"save", "use", "switch"} or len(args) != 2:
+        await safe_reply(update.message, _account_command_usage())
+        return
+
+    account_name = args[1].strip()
+    if not is_valid_account_name(account_name):
+        await safe_reply(
+            update.message,
+            "❌ Invalid account name. Use letters, numbers, dot, underscore, or dash.",
+        )
+        return
+
+    if action == "save":
+        try:
+            save_account_snapshot(account_name)
+        except FileNotFoundError:
+            await safe_reply(
+                update.message,
+                "❌ Codex auth.json was not found. Use /codexlogin first, "
+                "or run codex login on this machine.",
+            )
+            return
+        await safe_reply(
+            update.message,
+            f"✅ Saved current Codex login as account `{account_name}`. "
+            f"Use /codexaccount use {account_name} to select it for new sessions.",
+        )
+        return
+
+    names = list_account_names()
+    if account_name not in names:
+        await safe_reply(
+            update.message,
+            f"❌ Account `{account_name}` is not saved yet. Use /codexlogin {account_name} first.",
+        )
+        return
+
+    remember_current_account(account_name)
+    await safe_reply(
+        update.message,
+        f"✅ New sessions will use saved account `{account_name}`. Existing topics "
+        "keep their current window; use /unbind if you want this topic to start fresh.",
+    )
 
 
 # --- Screenshot keyboard with quick control keys ---
@@ -2096,6 +2426,18 @@ async def _rotate_thread_after_usage_limit(
     text: str,
 ) -> bool:
     """Rotate the topic onto a fresh account-backed window after quota exhaustion."""
+    if not config.enable_account_rotation:
+        await safe_send(
+            context.bot,
+            session_manager.resolve_chat_id(user_id, thread_id),
+            "⚠️ This session has hit its usage limit. Automatic account rotation "
+            "is disabled. Use /codexlogin to refresh the current Codex login, "
+            "or /codexaccount to choose a saved account. Then /unbind if you "
+            "want this topic to start a fresh session.",
+            message_thread_id=thread_id,
+        )
+        return True
+
     current_state = session_manager.get_window_state(current_window_id)
     next_account = get_next_account_name(current_state.account_name)
     if not next_account:
@@ -2103,9 +2445,9 @@ async def _rotate_thread_after_usage_limit(
             context.bot,
             session_manager.resolve_chat_id(user_id, thread_id),
             "⚠️ This session has hit its usage limit, but no backup account is "
-            "configured for rotation.\n"
-            "Run `codex login` and `~/.telegram-codex-bot/bin/codex-account save <name>` "
-            "to add another account snapshot.",
+            "selected for rotation.\n"
+            "Use /codexlogin <name> to add a saved account, then "
+            "/codexaccount use <name> to select it.",
             message_thread_id=thread_id,
         )
         return True
@@ -4034,23 +4376,24 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             current_state = session_manager.get_window_state(wid)
             next_account = get_next_account_name(current_state.account_name)
             note = "⚠️ This session has hit its usage limit."
-            if next_account:
-                status_text = (
-                    "now marked as exhausted"
-                    if changed
-                    else "already marked as exhausted"
-                )
+            status_text = (
+                "now marked as exhausted" if changed else "already marked as exhausted"
+            )
+            note += f"\nThe window is {status_text}."
+            if config.enable_account_rotation and next_account:
                 note += (
-                    f"\nThe window is {status_text}. On your next "
-                    f"message, TelegramCodexBot will open a new `{next_account}` "
-                    "session automatically."
+                    " On your next message, TelegramCodexBot will open a new "
+                    f"`{next_account}` session automatically."
+                )
+            elif config.enable_account_rotation:
+                note += (
+                    "\nAutomatic rotation is enabled, but no backup account is "
+                    "selected. Use /codexlogin <name> and /codexaccount use <name>."
                 )
             else:
                 note += (
-                    "\nNo backup account snapshots are configured yet, so "
-                    "automatic rotation is unavailable."
-                    "\nRun `codex login` and "
-                    "`~/.telegram-codex-bot/bin/codex-account save <name>` first."
+                    "\nAutomatic account rotation is disabled. Use /codexlogin to "
+                    "refresh the current login, or /codexaccount to choose a saved account."
                 )
             await safe_send(
                 bot,
@@ -4162,6 +4505,8 @@ async def post_init(application: Application) -> None:
         BotCommand("kill", "Kill session and delete topic"),
         BotCommand("unbind", "Unbind topic from session (keeps window running)"),
         BotCommand("usage", USAGE_COMMAND_DESCRIPTION),
+        BotCommand("codexlogin", CODEX_LOGIN_COMMAND_DESCRIPTION),
+        BotCommand("codexaccount", ACCOUNT_COMMAND_DESCRIPTION),
     ]
     # Add Codex slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -4302,6 +4647,8 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("interrupt", interrupt_command))
     application.add_handler(CommandHandler("unbind", unbind_command))
     application.add_handler(CommandHandler("usage", usage_command))
+    application.add_handler(CommandHandler("codexlogin", codex_login_command))
+    application.add_handler(CommandHandler("codexaccount", codex_account_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
     application.add_handler(

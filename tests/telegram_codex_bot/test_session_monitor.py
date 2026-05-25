@@ -177,7 +177,7 @@ class TestReadNewLinesOffsetRecovery:
         assert messages[0].content_type == "text"
         assert messages[0].role == "assistant"
         assert messages[0].text == (
-            "⚠️ Codex error: Your access token could not be refreshed."
+            "⚠️ Codex error: Your access token could not be refreshed.\n\nUse /codexlogin to start a Codex device login from Telegram."
         )
 
     @pytest.mark.asyncio

@@ -27,7 +27,7 @@ TelegramCodexBot is a Telegram controller for live Codex sessions:
 - **Resume existing sessions** — choose an existing Codex session in a directory and continue from there
 - **Closed-session hiding** — sessions closed through topic deletion or cleanup are hidden from the resume picker by default, without deleting their transcripts
 - **Topic cleanup** — stale topics, stale tmux windows, and dead bindings are cleaned up more safely
-- **Usage-limit failover** — when a session hits `usage_limit_exceeded`, the next message can rotate to another saved account in a fresh session
+- **Usage/auth recovery** — usage-limit and login failures are reported in Telegram; optional account failover can be enabled when you have saved backup accounts
 - **Persistent state** — thread bindings, display names, offsets, and monitor state survive restarts
 - **Pluggable agent backend** — local tmux is the default, while advanced users can load a backend plugin for distributed center-bot / agent-node setups
 - **GitHub bridge** — optional `telegram-codex-bridge` CLI can poll GitHub issues and inject structured tasks into Codex tmux sessions
@@ -91,12 +91,13 @@ It reuses the local Codex login state:
 codex login
 ```
 
-If you use multiple Codex accounts:
+If you use multiple Codex accounts or need to refresh login while away from the server, use Telegram commands:
 
-```bash
-~/.telegram-codex-bot/bin/codex-account save main
-~/.telegram-codex-bot/bin/codex-account save backup
-~/.telegram-codex-bot/bin/codex-account use main
+```text
+/codexlogin          # refresh the service user's default Codex login
+/codexlogin backup   # login and save a named backup account
+/codexaccount list
+/codexaccount use backup
 ```
 
 If `~/.telegram-codex-bot/.env` still contains placeholder values, the script will write the
@@ -218,6 +219,7 @@ be committed.
 | `TELEGRAM_CODEX_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
 | `TELEGRAM_CODEX_BOT_PROJECT_ROOTS` | _(none)_ | Optional named roots shown before directory browsing |
 | `TELEGRAM_CODEX_BOT_MONITOR_POLL_INTERVAL` | `2.0` | Poll interval in seconds |
+| `TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION` | `false` | Automatically rotate to the next saved account after `usage_limit_exceeded` |
 | `TELEGRAM_CODEX_BOT_STATUS_POLL_INTERVAL` | `1.0` | Terminal status polling interval in seconds; active `Working (...)` status edits keep Telegram refreshed |
 | `TELEGRAM_CODEX_BOT_AUTO_UPDATE` | `false` | On startup, check and fast-forward git source installs |
 | `TELEGRAM_CODEX_BOT_UPDATE_INTERVAL_SECONDS` | `86400` | Minimum seconds between automatic update checks |
@@ -347,28 +349,23 @@ If Codex runs on a server where you do not want approval prompts in the terminal
 TELEGRAM_CODEX_BOT_CODEX_COMMAND=IS_SANDBOX=1 codex --dangerously-bypass-approvals-and-sandbox
 ```
 
-## Multi-account switching and failover
+## Multi-account login, switching, and failover
 
-This project supports isolated account homes for Codex under `~/.telegram-codex-bot/accounts/homes/`.
+By default, new sessions use the service user's normal `~/.codex` login and **automatic account rotation is disabled**. This keeps single-account installs predictable.
 
-Typical flow:
+Telegram commands:
 
-```bash
-# login account A
-codex login
-~/.telegram-codex-bot/bin/codex-account save main
-
-# login account B
-codex login
-~/.telegram-codex-bot/bin/codex-account save backup
-
-# choose the default account for newly created sessions
-~/.telegram-codex-bot/bin/codex-account use main
+```text
+/codexlogin          # start Codex device login for the default CODEX_HOME
+/codexlogin backup   # login into an isolated account home and save it as backup
+/codexaccount list
+/codexaccount use backup
+/codexaccount clear  # go back to the service user's default CODEX_HOME
 ```
 
-When a live session emits `usage_limit_exceeded`, TelegramCodexBot marks that window as exhausted. On the next message, it can create a fresh tmux window on the next saved account and forward the message there.
+Named accounts are stored under `~/.telegram-codex-bot/accounts/`. Switching affects newly created topics only; existing topics keep their current tmux window. Use `/unbind` when you want the current topic to start a fresh session with the selected account.
 
-Important: this is **session rotation**, not seamless continuation of the exact same Codex session.
+If you want usage-limit failover, set `TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION=true`. When a live session emits `usage_limit_exceeded`, TelegramCodexBot marks that window as exhausted; on the next message it can create a fresh tmux window on the next saved account and forward the message there. This is **session rotation**, not seamless continuation of the exact same Codex session.
 
 ## Session tracking
 
@@ -439,6 +436,8 @@ uv run telegram-codex-bot
 | `/kill` | Kill the bound tmux window and clean up the topic binding |
 | `/unbind` | Unbind the topic without killing the running tmux window |
 | `/usage` | Open Codex usage info in the TUI and send the parsed result |
+| `/codexlogin [name]` | Start Codex device login from Telegram |
+| `/codexaccount` | List, save, select, or clear saved Codex accounts |
 
 ### Forwarded Codex slash commands
 

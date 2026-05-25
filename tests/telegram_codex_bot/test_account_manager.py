@@ -14,13 +14,15 @@ def test_next_account_rotates_by_name(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(account_manager, "SNAPSHOT_DIR", snapshot_dir)
     monkeypatch.setattr(account_manager, "CURRENT_NAME_FILE", current_name_file)
 
-    assert account_manager.get_default_account_name() == "plus1"
+    assert account_manager.get_default_account_name() is None
     assert account_manager.get_next_account_name("plus1") == "plus2"
     assert account_manager.get_next_account_name("plus2") == "team"
     assert account_manager.get_next_account_name("team") == "plus1"
+    assert account_manager.get_next_account_name(None) is None
 
     current_name_file.write_text("plus2\n", encoding="utf-8")
     assert account_manager.get_current_account_name() == "plus2"
+    assert account_manager.get_default_account_name() == "plus2"
     assert account_manager.get_next_account_name(None) == "plus2"
 
 
@@ -98,3 +100,59 @@ def test_disable_codex_update_prompt_uses_default_codex_home(
     assert (codex_dir / "config.toml").read_text(encoding="utf-8") == (
         "check_for_update_on_startup = false\n"
     )
+
+
+def test_account_name_validation() -> None:
+    assert account_manager.is_valid_account_name("main") is True
+    assert account_manager.is_valid_account_name("plus_1.backup") is True
+    assert account_manager.is_valid_account_name("../bad") is False
+    assert account_manager.is_valid_account_name("bad/name") is False
+    assert account_manager.is_valid_account_name("") is False
+
+
+def test_save_account_snapshot_copies_auth(tmp_path, monkeypatch) -> None:
+    snapshot_dir = tmp_path / "snapshots"
+    codex_dir = tmp_path / "codex"
+    codex_dir.mkdir(parents=True)
+    (codex_dir / "auth.json").write_text('{"auth_mode":"chatgpt"}', encoding="utf-8")
+
+    monkeypatch.setattr(account_manager, "SNAPSHOT_DIR", snapshot_dir)
+
+    snapshot = account_manager.save_account_snapshot("main", codex_dir)
+
+    assert snapshot == snapshot_dir / "main"
+    assert (snapshot / "auth.json").read_text(encoding="utf-8") == (
+        '{"auth_mode":"chatgpt"}'
+    )
+
+
+def test_clear_current_account_removes_selection(tmp_path, monkeypatch) -> None:
+    current_name_file = tmp_path / "accounts" / "current_name"
+    current_name_file.parent.mkdir(parents=True)
+    current_name_file.write_text("main\n", encoding="utf-8")
+
+    monkeypatch.setattr(account_manager, "CURRENT_NAME_FILE", current_name_file)
+
+    account_manager.clear_current_account()
+
+    assert not current_name_file.exists()
+
+
+def test_prepare_account_home_does_not_require_auth(tmp_path, monkeypatch) -> None:
+    account_home_dir = tmp_path / "homes"
+    codex_dir = tmp_path / "codex"
+    codex_dir.mkdir(parents=True)
+    (codex_dir / "config.toml").write_text('model = "gpt-5.4"\n', encoding="utf-8")
+
+    monkeypatch.setattr(account_manager, "ACCOUNT_HOME_DIR", account_home_dir)
+    monkeypatch.setattr(account_manager, "CODEX_DIR", codex_dir)
+
+    home = account_manager.prepare_account_home("main")
+
+    assert home == account_home_dir / "main"
+    assert not (home / "auth.json").exists()
+    assert (home / "config.toml").read_text(encoding="utf-8") == (
+        'model = "gpt-5.4"\ncheck_for_update_on_startup = false\n'
+    )
+    assert (home / "memories").is_dir()
+    assert (home / "tmp").is_dir()
