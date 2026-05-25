@@ -1,5 +1,7 @@
 """Tests for telegram-codex-bot.transcript_parser — pure logic, no I/O."""
 
+import json
+
 import pytest
 
 from telegram_codex_bot.transcript_parser import (
@@ -27,6 +29,39 @@ class TestParseLine:
     )
     def test_parse_line(self, line: str, expected: dict | None):
         assert TranscriptParser.parse_line(line) == expected
+
+    def test_event_msg_error_is_normalized_as_assistant_text(self):
+        event = {
+            "type": "event_msg",
+            "timestamp": "2026-05-25T04:33:30.638Z",
+            "payload": {
+                "type": "error",
+                "message": "Your access token could not be refreshed.",
+            },
+        }
+
+        parsed = TranscriptParser.parse_line(json.dumps(event))
+
+        assert parsed is not None
+        assert parsed["type"] == "assistant"
+        assert parsed["message"]["content"] == [
+            {
+                "type": "text",
+                "text": "⚠️ Codex error: Your access token could not be refreshed.",
+            }
+        ]
+
+    def test_usage_limit_error_is_left_for_monitor_handling(self):
+        event = {
+            "type": "event_msg",
+            "payload": {
+                "type": "error",
+                "message": "You've hit your usage limit.",
+                "codex_error_info": "usage_limit_exceeded",
+            },
+        }
+
+        assert TranscriptParser.parse_line(json.dumps(event)) is None
 
 
 # ── extract_text_only ────────────────────────────────────────────────────

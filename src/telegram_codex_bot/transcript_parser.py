@@ -188,6 +188,17 @@ class TranscriptParser:
             if payload.get("type") == "task_complete":
                 return None
 
+            if payload.get("type") == "error":
+                if payload.get("codex_error_info") == "usage_limit_exceeded":
+                    return None
+                message = payload.get("message")
+                if isinstance(message, str) and message.strip():
+                    return cls._build_message_entry(
+                        role="assistant",
+                        timestamp=timestamp,
+                        content=f"⚠️ Codex error: {message.strip()}",
+                    )
+
         if "role" in data and "text" in data:
             role = data.get("role")
             if role in ("assistant", "user"):

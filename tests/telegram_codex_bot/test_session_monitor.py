@@ -143,6 +143,44 @@ class TestReadNewLinesOffsetRecovery:
         assert "usage limit" in messages[0].text.lower()
 
     @pytest.mark.asyncio
+    async def test_generic_error_event_emits_assistant_message(self, monitor, tmp_path):
+        """A non-usage Codex error event should be visible in Telegram output."""
+        jsonl_file = tmp_path / "session.jsonl"
+        event = {
+            "type": "event_msg",
+            "payload": {
+                "type": "error",
+                "message": "Your access token could not be refreshed.",
+            },
+        }
+        jsonl_file.write_text(json.dumps(event) + "\n", encoding="utf-8")
+
+        monitor.scan_projects = AsyncMock(
+            return_value=[
+                SessionInfo(
+                    session_id="session-auth-error",
+                    file_path=jsonl_file,
+                )
+            ]
+        )
+        monitor.state.update_session(
+            TrackedSession(
+                session_id="session-auth-error",
+                file_path=str(jsonl_file),
+                last_byte_offset=0,
+            )
+        )
+
+        messages = await monitor.check_for_updates(set())
+
+        assert len(messages) == 1
+        assert messages[0].content_type == "text"
+        assert messages[0].role == "assistant"
+        assert messages[0].text == (
+            "⚠️ Codex error: Your access token could not be refreshed."
+        )
+
+    @pytest.mark.asyncio
     async def test_deferred_state_waits_for_delivery_ack(self, monitor, tmp_path):
         """Monitor offsets should not persist until Telegram delivery is acked."""
         jsonl_file = tmp_path / "session.jsonl"
