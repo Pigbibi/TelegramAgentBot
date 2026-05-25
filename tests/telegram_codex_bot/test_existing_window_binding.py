@@ -710,6 +710,11 @@ class TestExistingWindowBinding:
                 new_callable=AsyncMock,
             ) as send_message,
             patch(
+                "telegram_codex_bot.bot._discard_queued_agent_input",
+                new_callable=AsyncMock,
+                return_value=1,
+            ) as discard_queue,
+            patch(
                 "telegram_codex_bot.bot._refresh_session_map_after_first_prompt",
                 new_callable=AsyncMock,
             ),
@@ -731,6 +736,7 @@ class TestExistingWindowBinding:
             await interrupt_command(update, context)
 
         send_control.assert_awaited_once_with(12345, 42, "@1", "Escape")
+        discard_queue.assert_awaited_once_with(12345, 42, "@1")
         send_when_ready.assert_awaited_once_with(
             12345,
             42,
@@ -758,6 +764,11 @@ class TestExistingWindowBinding:
                 "telegram_codex_bot.bot.send_agent_control",
                 new_callable=AsyncMock,
             ) as send_control,
+            patch(
+                "telegram_codex_bot.bot._discard_queued_agent_input",
+                new_callable=AsyncMock,
+                return_value=1,
+            ) as discard_queue,
         ):
             mock_sm.resolve_window_for_thread.return_value = "@1"
             mock_sm.resolve_target_for_thread.return_value = AgentTarget(
@@ -772,6 +783,7 @@ class TestExistingWindowBinding:
             await interrupt_command(update, context)
 
         send_control.assert_awaited_once()
+        discard_queue.assert_awaited_once_with(12345, 42, "@1")
         safe_reply.assert_awaited_once_with(update.message, "⎋ Sent Escape")
 
     @pytest.mark.asyncio

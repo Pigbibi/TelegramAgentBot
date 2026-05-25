@@ -1,3 +1,4 @@
+import asyncio
 from collections import deque
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -76,6 +77,33 @@ async def test_send_or_queue_agent_input_sends_immediately_when_ready(monkeypatc
     assert (ok, message, queued) == (True, "Sent", False)
     send_message.assert_awaited_once_with(12345, 42, "@1", "prompt")
     assert bot_module._agent_input_queues == {}
+
+
+@pytest.mark.asyncio
+async def test_discard_queued_agent_input_clears_queue_and_cancels_task():
+    key = (12345, 42, "@1")
+    bot_module._agent_input_queues[key] = deque(
+        [
+            bot_module._QueuedAgentInput(text="old prompt"),
+            bot_module._QueuedAgentInput(text="older prompt"),
+        ]
+    )
+    started = asyncio.Event()
+
+    async def sleeper():
+        started.set()
+        await asyncio.sleep(60)
+
+    task = asyncio.create_task(sleeper())
+    await started.wait()
+    bot_module._agent_input_tasks[key] = task
+
+    dropped = await bot_module._discard_queued_agent_input(12345, 42, "@1")
+
+    assert dropped == 2
+    assert key not in bot_module._agent_input_queues
+    assert key not in bot_module._agent_input_tasks
+    assert task.cancelled()
 
 
 @pytest.mark.asyncio
