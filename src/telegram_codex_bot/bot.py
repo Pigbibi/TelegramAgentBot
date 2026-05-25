@@ -4031,15 +4031,17 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 )
                 continue
             changed = session_manager.mark_window_usage_limit_exceeded(wid, True)
-            if not changed:
-                continue
-
             current_state = session_manager.get_window_state(wid)
             next_account = get_next_account_name(current_state.account_name)
             note = "⚠️ This session has hit its usage limit."
             if next_account:
+                status_text = (
+                    "now marked as exhausted"
+                    if changed
+                    else "already marked as exhausted"
+                )
                 note += (
-                    f"\nThe window is now marked as exhausted. On your next "
+                    f"\nThe window is {status_text}. On your next "
                     f"message, TelegramCodexBot will open a new `{next_account}` "
                     "session automatically."
                 )
