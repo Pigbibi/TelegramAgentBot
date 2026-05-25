@@ -765,6 +765,16 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
+    dropped = await _discard_queued_agent_input(user.id, thread_id, wid or "")
+    if dropped:
+        logger.info(
+            "Discarded %d queued input(s) before Escape (user=%d thread=%s window=%s)",
+            dropped,
+            user.id,
+            thread_id,
+            wid or "",
+        )
+
     result = await send_agent_control(user.id, thread_id, wid or "", "Escape")
     if result is None:
         await safe_reply(update.message, "❌ No session bound to this topic.")
@@ -832,6 +842,16 @@ async def interrupt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     else:
         clear_status_msg_info(user.id, thread_id)
     _cancel_bash_capture(user.id, thread_id)
+    dropped = await _discard_queued_agent_input(user.id, thread_id, wid or "")
+    if dropped:
+        logger.info(
+            "Discarded %d queued input(s) before interrupt replacement "
+            "(user=%d thread=%s window=%s)",
+            dropped,
+            user.id,
+            thread_id,
+            wid or "",
+        )
 
     pane_text = None
     input_was_ready = False
@@ -1509,6 +1529,25 @@ async def _cancel_agent_input_drain_tasks() -> None:
             await task
     _agent_input_tasks.clear()
     _agent_input_queues.clear()
+
+
+async def _discard_queued_agent_input(
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+) -> int:
+    """Drop pending user prompts for a target before an explicit interrupt."""
+    key = _agent_input_key(user_id, thread_id, window_id)
+    queue = _agent_input_queues.pop(key, None)
+    dropped = len(queue) if queue else 0
+
+    task = _agent_input_tasks.pop(key, None)
+    if task and not task.done() and task is not asyncio.current_task():
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    return dropped
 
 
 def _remote_target_for_thread(
