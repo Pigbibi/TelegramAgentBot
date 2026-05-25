@@ -44,7 +44,7 @@ import shlex
 import shutil
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypedDict, cast
 
@@ -220,11 +220,13 @@ _runtime_stopped = False
 @dataclass
 class _QueuedAgentInput:
     text: str
+    created_at: float = field(default_factory=time.monotonic)
 
 
 _AGENT_INPUT_POLL_INTERVAL_SECONDS = 1.0
 _agent_input_queues: dict[tuple[int, int, str], deque[_QueuedAgentInput]] = {}
 _agent_input_tasks: dict[tuple[int, int, str], asyncio.Task] = {}
+_agent_input_locks: dict[tuple[int, int, str], asyncio.Lock] = {}
 
 PRODUCT_NAME = "Codex"
 WELCOME_MESSAGE = (
@@ -1391,6 +1393,62 @@ def _agent_input_key(
     return (user_id, thread_id or 0, window_id)
 
 
+def _agent_input_lock(key: tuple[int, int, str]) -> asyncio.Lock:
+    lock = _agent_input_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _agent_input_locks[key] = lock
+    return lock
+
+
+def _agent_input_queue_max_size() -> int:
+    return max(1, int(getattr(config, "agent_input_queue_max_size", 20)))
+
+
+def _agent_input_queue_max_wait_seconds() -> float:
+    return max(
+        1.0,
+        float(getattr(config, "agent_input_queue_max_wait_seconds", 1800.0)),
+    )
+
+
+def _queue_agent_input(
+    key: tuple[int, int, str],
+    text: str,
+) -> tuple[bool, int, int]:
+    queue = _agent_input_queues.setdefault(key, deque())
+    limit = _agent_input_queue_max_size()
+    if len(queue) >= limit:
+        return False, len(queue), limit
+    queue.append(_QueuedAgentInput(text=text))
+    return True, len(queue), limit
+
+
+async def _drop_expired_agent_input(
+    bot: Bot,
+    key: tuple[int, int, str],
+    queue: deque[_QueuedAgentInput],
+) -> None:
+    max_wait = _agent_input_queue_max_wait_seconds()
+    now = time.monotonic()
+    expired = 0
+    while queue and now - queue[0].created_at >= max_wait:
+        queue.popleft()
+        expired += 1
+
+    if expired:
+        user_id, thread_key, _window_id = key
+        thread_id = thread_key or None
+        wait_display = int(max_wait)
+        await _notify_queued_input_failure(
+            bot,
+            user_id,
+            thread_id,
+            f"{expired} queued input(s) expired after waiting {wait_display}s "
+            "for Codex to become ready",
+        )
+
+
 def _ensure_agent_input_drain_task(
     bot: Bot,
     key: tuple[int, int, str],
@@ -1410,33 +1468,61 @@ async def _send_or_queue_agent_input(
 ) -> tuple[bool, str, bool]:
     """Send now when Codex is ready, otherwise queue for the next ready prompt."""
     key = _agent_input_key(user_id, thread_id, window_id)
-    queue = _agent_input_queues.get(key)
-    if queue:
-        queue.append(_QueuedAgentInput(text=text))
-        _ensure_agent_input_drain_task(bot, key)
-        return True, "Queued until Codex is ready", True
+    result: tuple[bool, str, bool]
+    async with _agent_input_lock(key):
+        queue = _agent_input_queues.get(key)
+        if queue is not None:
+            queued, depth, limit = _queue_agent_input(key, text)
+            if not queued:
+                _ensure_agent_input_drain_task(bot, key)
+                result = (
+                    False,
+                    "Codex is still busy and the input queue is full "
+                    f"({limit} pending). Wait for it to finish or use /interrupt.",
+                    False,
+                )
+            else:
+                _ensure_agent_input_drain_task(bot, key)
+                result = True, f"Queued until Codex is ready ({depth}/{limit})", True
+            return result
 
-    capture = await capture_agent_output(user_id, thread_id, window_id)
-    if capture is None:
-        return False, "No session bound", False
-    if capture.missing:
-        return False, "Window not found (may have been closed)", False
+        capture = await capture_agent_output(user_id, thread_id, window_id)
+        if capture is None:
+            result = False, "No session bound", False
+        elif capture.missing:
+            result = False, "Window not found (may have been closed)", False
+        else:
+            pane_text = capture.text or ""
+            if not is_codex_input_ready(pane_text) or is_interactive_ui(pane_text):
+                queued, depth, limit = _queue_agent_input(key, text)
+                if not queued:
+                    result = (
+                        False,
+                        "Codex is still busy and the input queue is full "
+                        f"({limit} pending). Wait for it to finish or use /interrupt.",
+                        False,
+                    )
+                else:
+                    _ensure_agent_input_drain_task(bot, key)
+                    status = parse_status_update(pane_text)
+                    message = (
+                        f"Queued until Codex is ready ({depth}/{limit}): {status}"
+                        if status
+                        else f"Queued until Codex is ready ({depth}/{limit})"
+                    )
+                    result = True, message, True
+            else:
+                success, message = await _send_message_to_agent(
+                    user_id,
+                    thread_id,
+                    window_id,
+                    text,
+                )
+                result = success, message, False
 
-    pane_text = capture.text or ""
-    if not is_codex_input_ready(pane_text) or is_interactive_ui(pane_text):
-        queue = _agent_input_queues.setdefault(key, deque())
-        queue.append(_QueuedAgentInput(text=text))
-        _ensure_agent_input_drain_task(bot, key)
-        status = parse_status_update(pane_text)
-        message = (
-            f"Queued until Codex is ready: {status}"
-            if status
-            else "Queued until Codex is ready"
-        )
-        return True, message, True
-
-    success, message = await _send_message_to_agent(user_id, thread_id, window_id, text)
-    return success, message, False
+    if key not in _agent_input_queues and key not in _agent_input_tasks:
+        _agent_input_locks.pop(key, None)
+    return result
 
 
 async def _notify_queued_input_failure(
@@ -1470,6 +1556,9 @@ async def _drain_agent_input_queue(
     try:
         while True:
             queue = _agent_input_queues.get(key)
+            if not queue:
+                return
+            await _drop_expired_agent_input(bot, key, queue)
             if not queue:
                 return
 
@@ -1526,6 +1615,8 @@ async def _drain_agent_input_queue(
             _agent_input_queues.pop(key, None)
         if _agent_input_tasks.get(key) is asyncio.current_task():
             _agent_input_tasks.pop(key, None)
+        if key not in _agent_input_queues and key not in _agent_input_tasks:
+            _agent_input_locks.pop(key, None)
 
 
 async def _cancel_agent_input_drain_tasks() -> None:
@@ -1537,6 +1628,7 @@ async def _cancel_agent_input_drain_tasks() -> None:
             await task
     _agent_input_tasks.clear()
     _agent_input_queues.clear()
+    _agent_input_locks.clear()
 
 
 async def _discard_queued_agent_input(
@@ -1546,14 +1638,18 @@ async def _discard_queued_agent_input(
 ) -> int:
     """Drop pending user prompts for a target before an explicit interrupt."""
     key = _agent_input_key(user_id, thread_id, window_id)
-    queue = _agent_input_queues.pop(key, None)
-    dropped = len(queue) if queue else 0
+    async with _agent_input_lock(key):
+        queue = _agent_input_queues.pop(key, None)
+        dropped = len(queue) if queue else 0
 
-    task = _agent_input_tasks.pop(key, None)
-    if task and not task.done() and task is not asyncio.current_task():
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        task = _agent_input_tasks.pop(key, None)
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    if key not in _agent_input_queues and key not in _agent_input_tasks:
+        _agent_input_locks.pop(key, None)
 
     return dropped
 
