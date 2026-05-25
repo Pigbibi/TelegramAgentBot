@@ -162,6 +162,19 @@ class Config:
         self.status_poll_interval = float(
             os.getenv("TELEGRAM_CODEX_BOT_STATUS_POLL_INTERVAL", "1.0")
         )
+        self.agent_input_queue_max_size = max(
+            1,
+            int(os.getenv("TELEGRAM_CODEX_BOT_AGENT_INPUT_QUEUE_MAX_SIZE", "20")),
+        )
+        self.agent_input_queue_max_wait_seconds = max(
+            1.0,
+            float(
+                os.getenv(
+                    "TELEGRAM_CODEX_BOT_AGENT_INPUT_QUEUE_MAX_WAIT_SECONDS",
+                    "1800",
+                )
+            ),
+        )
 
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix

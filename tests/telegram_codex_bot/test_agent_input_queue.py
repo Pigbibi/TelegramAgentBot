@@ -12,9 +12,11 @@ from telegram_codex_bot import bot as bot_module
 def clear_agent_input_queue_state():
     bot_module._agent_input_queues.clear()
     bot_module._agent_input_tasks.clear()
+    bot_module._agent_input_locks.clear()
     yield
     bot_module._agent_input_queues.clear()
     bot_module._agent_input_tasks.clear()
+    bot_module._agent_input_locks.clear()
 
 
 @pytest.mark.asyncio
@@ -77,6 +79,29 @@ async def test_send_or_queue_agent_input_sends_immediately_when_ready(monkeypatc
     assert (ok, message, queued) == (True, "Sent", False)
     send_message.assert_awaited_once_with(12345, 42, "@1", "prompt")
     assert bot_module._agent_input_queues == {}
+    assert bot_module._agent_input_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_send_or_queue_agent_input_rejects_when_queue_is_full(monkeypatch):
+    key = (12345, 42, "@1")
+    bot_module._agent_input_queues[key] = deque(
+        [bot_module._QueuedAgentInput(text="old prompt")]
+    )
+    monkeypatch.setattr(bot_module.config, "agent_input_queue_max_size", 1)
+    monkeypatch.setattr(bot_module, "_ensure_agent_input_drain_task", lambda *_: None)
+
+    ok, message, queued = await bot_module._send_or_queue_agent_input(
+        MagicMock(),
+        12345,
+        42,
+        "@1",
+        "new prompt",
+    )
+
+    assert (ok, queued) == (False, False)
+    assert "input queue is full" in message
+    assert [item.text for item in bot_module._agent_input_queues[key]] == ["old prompt"]
 
 
 @pytest.mark.asyncio
@@ -143,6 +168,25 @@ async def test_drain_agent_input_queue_waits_until_ready(monkeypatch):
     send_message.assert_awaited_once_with(12345, 42, "@1", "queued prompt")
     mark_working.assert_awaited_once_with(telegram_bot, 12345, "@1", 42)
     refresh_session.assert_awaited_once_with("@1", text="queued prompt")
+    assert key not in bot_module._agent_input_queues
+
+
+@pytest.mark.asyncio
+async def test_drain_agent_input_queue_drops_expired_items(monkeypatch):
+    key = (12345, 42, "@1")
+    bot_module._agent_input_queues[key] = deque(
+        [bot_module._QueuedAgentInput(text="queued prompt", created_at=1.0)]
+    )
+    notify = AsyncMock()
+
+    monkeypatch.setattr(bot_module.config, "agent_input_queue_max_wait_seconds", 10.0)
+    monkeypatch.setattr(bot_module.time, "monotonic", lambda: 12.0)
+    monkeypatch.setattr(bot_module, "_notify_queued_input_failure", notify)
+
+    await bot_module._drain_agent_input_queue(MagicMock(), key)
+
+    notify.assert_awaited_once()
+    assert "expired" in notify.await_args.args[3]
     assert key not in bot_module._agent_input_queues
 
 
