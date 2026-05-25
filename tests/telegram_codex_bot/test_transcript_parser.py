@@ -47,7 +47,7 @@ class TestParseLine:
         assert parsed["message"]["content"] == [
             {
                 "type": "text",
-                "text": "⚠️ Codex error: Your access token could not be refreshed.",
+                "text": "⚠️ Codex error: Your access token could not be refreshed.\n\nUse /codexlogin to start a Codex device login from Telegram.",
             }
         ]
 

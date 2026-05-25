@@ -190,6 +190,14 @@ class Config:
             == "true"
         )
 
+        # Automatic multi-account failover is opt-in. Manual account
+        # switching remains available via Telegram commands. The default only
+        # reports usage/auth errors instead of rotating accounts automatically.
+        self.enable_account_rotation = (
+            os.getenv("TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION", "").lower()
+            == "true"
+        )
+
         # Show hidden (dot) directories in directory browser
         self.show_hidden_dirs = (
             os.getenv("TELEGRAM_CODEX_BOT_SHOW_HIDDEN_DIRS", "").lower() == "true"

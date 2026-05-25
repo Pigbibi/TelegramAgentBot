@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -16,6 +18,12 @@ SNAPSHOT_DIR = TELEGRAM_CODEX_BOT_ACCOUNTS_DIR / "snapshots"
 CURRENT_NAME_FILE = TELEGRAM_CODEX_BOT_ACCOUNTS_DIR / "current_name"
 ACCOUNT_HOME_DIR = TELEGRAM_CODEX_BOT_ACCOUNTS_DIR / "homes"
 CODEX_DIR = Path.home() / ".codex"
+_ACCOUNT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+
+
+def is_valid_account_name(name: str) -> bool:
+    """Return whether name is safe for use as a snapshot directory."""
+    return bool(_ACCOUNT_NAME_RE.fullmatch(name)) and name not in {".", ".."}
 
 
 def list_account_names() -> list[str]:
@@ -43,7 +51,7 @@ def list_account_homes() -> list[Path]:
 
 
 def get_current_account_name() -> str | None:
-    """Return the currently selected snapshot name, if any."""
+    """Return the manually selected snapshot name, if any."""
     if not CURRENT_NAME_FILE.is_file():
         return None
     try:
@@ -54,14 +62,13 @@ def get_current_account_name() -> str | None:
 
 
 def get_default_account_name() -> str | None:
-    """Return the preferred account for new sessions."""
-    names = list_account_names()
-    if not names:
-        return None
-    current = get_current_account_name()
-    if current in names:
-        return current
-    return names[0]
+    """Return the saved account selected for new sessions, if any.
+
+    A missing current selection intentionally means "use the service user's
+    default CODEX_HOME". Saving snapshots alone should not silently move new
+    sessions away from the primary account.
+    """
+    return get_current_account_name()
 
 
 def get_next_account_name(current_name: str | None) -> str | None:
@@ -77,7 +84,7 @@ def get_next_account_name(current_name: str | None) -> str | None:
     fallback_current = get_current_account_name()
     if fallback_current in names:
         return fallback_current
-    return get_default_account_name()
+    return None
 
 
 def remember_current_account(name: str) -> None:
@@ -86,6 +93,12 @@ def remember_current_account(name: str) -> None:
         return
     TELEGRAM_CODEX_BOT_ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
     CURRENT_NAME_FILE.write_text(f"{name}\n", encoding="utf-8")
+
+
+def clear_current_account() -> None:
+    """Use the service user's default CODEX_HOME for new sessions."""
+    with contextlib.suppress(OSError):
+        CURRENT_NAME_FILE.unlink()
 
 
 def _copy_if_different(source: Path, dest: Path) -> None:
@@ -147,23 +160,44 @@ def disable_codex_update_prompt(codex_home: Path | None = None) -> None:
     _disable_codex_update_prompt(codex_home / "config.toml")
 
 
+def save_account_snapshot(name: str, codex_home: Path | None = None) -> Path:
+    """Save auth.json from codex_home into a named account snapshot."""
+    if not is_valid_account_name(name):
+        raise ValueError(f"Invalid account name: {name}")
+    codex_home = codex_home or CODEX_DIR
+    source_auth = codex_home / "auth.json"
+    if not source_auth.is_file():
+        raise FileNotFoundError(f"Codex auth file not found: {source_auth}")
+    snapshot_dir = SNAPSHOT_DIR / name
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    _copy_if_different(source_auth, snapshot_dir / "auth.json")
+    return snapshot_dir
+
+
+def prepare_account_home(name: str) -> Path:
+    """Create a dedicated CODEX_HOME for a named account without requiring auth."""
+    if not is_valid_account_name(name):
+        raise ValueError(f"Invalid account name: {name}")
+    account_home = ACCOUNT_HOME_DIR / name
+    account_home.mkdir(parents=True, exist_ok=True)
+    _copy_if_different(CODEX_DIR / "config.toml", account_home / "config.toml")
+    _copy_if_different(CODEX_DIR / "hooks.json", account_home / "hooks.json")
+    disable_codex_update_prompt(account_home)
+    for child in ("memories", "tmp"):
+        (account_home / child).mkdir(parents=True, exist_ok=True)
+    return account_home
+
+
 def ensure_account_home(name: str) -> Path:
     """Ensure a dedicated CODEX_HOME exists for one saved snapshot."""
     snapshot_dir = SNAPSHOT_DIR / name
     snapshot_auth = snapshot_dir / "auth.json"
-    account_home = ACCOUNT_HOME_DIR / name
-    account_home.mkdir(parents=True, exist_ok=True)
+    account_home = prepare_account_home(name)
 
     if not (account_home / "auth.json").is_file():
         if not snapshot_auth.is_file():
             raise FileNotFoundError(f"Account snapshot not found: {name}")
         _copy_if_different(snapshot_auth, account_home / "auth.json")
-    _copy_if_different(CODEX_DIR / "config.toml", account_home / "config.toml")
-    _copy_if_different(CODEX_DIR / "hooks.json", account_home / "hooks.json")
-    disable_codex_update_prompt(account_home)
-
-    for child in ("memories", "tmp"):
-        (account_home / child).mkdir(parents=True, exist_ok=True)
 
     logger.debug("Prepared CODEX_HOME for %s at %s", name, account_home)
     return account_home

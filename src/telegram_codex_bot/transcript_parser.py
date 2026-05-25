@@ -76,6 +76,23 @@ class TranscriptParser:
     _NO_CONTENT_PLACEHOLDER = "(no content)"
     _INTERRUPTED_TEXT = "[Request interrupted by user for tool use]"
     _MAX_SUMMARY_LENGTH = 200
+    _AUTH_ERROR_HINT_MARKERS = (
+        "could not be refreshed",
+        "log out and sign in again",
+        "refresh token",
+        "refresh_token_reused",
+        "token_invalidated",
+    )
+    _AUTH_ERROR_HINT = "Use /codexlogin to start a Codex device login from Telegram."
+
+    @classmethod
+    def _format_error_message(cls, message: str) -> str:
+        """Format a Codex runtime error for Telegram."""
+        formatted = f"⚠️ Codex error: {message.strip()}"
+        lowered = message.lower()
+        if any(marker in lowered for marker in cls._AUTH_ERROR_HINT_MARKERS):
+            formatted = f"{formatted}\n\n{cls._AUTH_ERROR_HINT}"
+        return formatted
 
     @staticmethod
     def _extract_nested_text(content: Any) -> list[str]:
@@ -196,7 +213,7 @@ class TranscriptParser:
                     return cls._build_message_entry(
                         role="assistant",
                         timestamp=timestamp,
-                        content=f"⚠️ Codex error: {message.strip()}",
+                        content=cls._format_error_message(message),
                     )
 
         if "role" in data and "text" in data:

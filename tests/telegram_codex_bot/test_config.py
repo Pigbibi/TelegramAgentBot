@@ -16,6 +16,7 @@ def _base_env(monkeypatch, tmp_path):
     monkeypatch.delenv("TELEGRAM_CODEX_BOT_PROJECT_ROOTS", raising=False)
     monkeypatch.delenv("CODEX_HOME", raising=False)
     monkeypatch.delenv("TELEGRAM_CODEX_BOT_CODEX_COMMAND", raising=False)
+    monkeypatch.delenv("TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION", raising=False)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test:token")
     monkeypatch.setenv("ALLOWED_USERS", "12345")
     monkeypatch.setenv("TELEGRAM_CODEX_BOT_DIR", str(tmp_path))
@@ -66,6 +67,15 @@ class TestConfigValid:
         monkeypatch.setenv("TELEGRAM_CODEX_BOT_STATUS_POLL_INTERVAL", "0.5")
         cfg = Config()
         assert cfg.status_poll_interval == 0.5
+
+    def test_account_rotation_defaults_disabled(self):
+        cfg = Config()
+        assert cfg.enable_account_rotation is False
+
+    def test_account_rotation_can_be_enabled(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION", "true")
+        cfg = Config()
+        assert cfg.enable_account_rotation is True
 
     def test_is_user_allowed_true(self):
         cfg = Config()

@@ -27,7 +27,7 @@ TelegramCodexBot 是一个通过 Telegram 远程控制 Codex 会话的工具：
 - **恢复已有会话** —— 在目录里挑已有 Codex session 继续跑
 - **已关闭会话默认隐藏** —— topic 删除或清理后，对应 session 默认不再出现在 Resume 列表里，但 transcript 文件不会删
 - **topic / 窗口清理** —— 对 stale topic、stale tmux 窗口和残留绑定做更稳的清理
-- **额度失败转移** —— 某个账号打满后，下一条消息可以切到另一个已保存账号的新 session
+- **额度 / 登录故障恢复** —— usage-limit 和登录失效会在 Telegram 明确提示；如已保存备用账号，也可以选择启用自动失败转移
 - **持久化状态** —— thread bindings、display name、offset、monitor state 重启后还能保留
 - **可插拔 agent backend** —— 默认仍是本机 tmux，高级用法可以通过插件接入中心 bot / 多 agent 节点
 
@@ -90,12 +90,13 @@ chmod +x scripts/bootstrap-macos.sh
 codex login
 ```
 
-如果你平时有多账号切换：
+如果你平时有多账号切换，或需要在不 SSH 到服务器的情况下重新登录，可以直接用 Telegram 命令：
 
-```bash
-~/.telegram-codex-bot/bin/codex-account save main
-~/.telegram-codex-bot/bin/codex-account save backup
-~/.telegram-codex-bot/bin/codex-account use main
+```text
+/codexlogin          # 重新登录默认 CODEX_HOME
+/codexlogin backup   # 登录并保存一个名为 backup 的账号
+/codexaccount list
+/codexaccount use backup
 ```
 
 如果 `~/.telegram-codex-bot/.env` 里还是占位值，脚本只会写好 launchd 文件，
@@ -214,6 +215,7 @@ TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES=true
 | `TELEGRAM_CODEX_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | 创建新会话时默认展示的目录 |
 | `TELEGRAM_CODEX_BOT_PROJECT_ROOTS` | _(空)_ | 可选：进入目录浏览前展示的命名根目录 |
 | `TELEGRAM_CODEX_BOT_MONITOR_POLL_INTERVAL` | `2.0` | 轮询间隔，单位秒 |
+| `TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION` | `false` | 遇到 `usage_limit_exceeded` 后是否自动切到下一个已保存账号 |
 | `TELEGRAM_CODEX_BOT_STATUS_POLL_INTERVAL` | `1.0` | 终端状态轮询间隔，单位秒；用于持续编辑 Telegram 里的 `Working (...)` 状态 |
 | `TELEGRAM_CODEX_BOT_AUTO_UPDATE` | `false` | 启动时自动检查并 fast-forward 更新 git 源码安装 |
 | `TELEGRAM_CODEX_BOT_UPDATE_INTERVAL_SECONDS` | `86400` | 两次自动更新检查之间的最短间隔 |
@@ -325,28 +327,23 @@ Codex CLI 检查和 telegram-codex-bot 自更新是分开的。示例 `.env` 会
 TELEGRAM_CODEX_BOT_CODEX_COMMAND=IS_SANDBOX=1 codex --dangerously-bypass-approvals-and-sandbox
 ```
 
-## 多账号切换与额度失败转移
+## 多账号登录、切换与额度失败转移
 
-这个项目支持在 `~/.telegram-codex-bot/accounts/homes/` 下保存多个隔离的 Codex 账号 home。
+默认情况下，新 session 使用服务用户正常的 `~/.codex` 登录，并且**不会自动切换账号**。这样单账号部署最可控。
 
-典型流程：
+Telegram 命令：
 
-```bash
-# 登录账号 A
-codex login
-~/.telegram-codex-bot/bin/codex-account save main
-
-# 登录账号 B
-codex login
-~/.telegram-codex-bot/bin/codex-account save backup
-
-# 选择新 session 默认使用哪个账号
-~/.telegram-codex-bot/bin/codex-account use main
+```text
+/codexlogin          # 给默认 CODEX_HOME 发起 Codex device login
+/codexlogin backup   # 登录到隔离账号 home，并保存为 backup
+/codexaccount list
+/codexaccount use backup
+/codexaccount clear  # 回到服务用户默认 CODEX_HOME
 ```
 
-当某个 live session 产生 `usage_limit_exceeded` 时，TelegramCodexBot 会把这个窗口标记为已耗尽；下一条消息到来时，可以自动在下一个已保存账号上新开 tmux 窗口，并把消息转发过去。
+命名账号保存在 `~/.telegram-codex-bot/accounts/`。切换只影响新创建的 topic；已有 topic 仍绑定原 tmux window。如果希望当前 topic 使用新账号，请先 `/unbind`，再重新发消息创建新 session。
 
-要注意：这属于 **切到新 session**，不是把原 session 无缝续活。
+如果确实需要额度自动失败转移，可以设置 `TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION=true`。当某个 live session 产生 `usage_limit_exceeded` 时，TelegramCodexBot 会把这个窗口标记为已耗尽；下一条消息到来时，可以在下一个已保存账号上新开 tmux 窗口，并把消息转发过去。这属于 **切到新 session**，不是把原 session 无缝续活。
 
 ## 会话追踪
 
@@ -417,6 +414,8 @@ uv run telegram-codex-bot
 | `/kill` | 杀掉绑定的 tmux 窗口并清理 topic 绑定 |
 | `/unbind` | 解绑 topic，但不杀当前 tmux 窗口 |
 | `/usage` | 打开 Codex 的 usage 界面并回传解析结果 |
+| `/codexlogin [name]` | 从 Telegram 发起 Codex device login |
+| `/codexaccount` | 查看、保存、选择或清除 Codex 账号 |
 
 ### 会转发给 Codex 的 slash 命令
 

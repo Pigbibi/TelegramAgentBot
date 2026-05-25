@@ -111,10 +111,11 @@ Next steps:
      - ALLOWED_USERS
      - optional OPENAI_API_KEY / OPENAI_BASE_URL
   2. Run: codex login
-  3. Optional multi-account:
-     ~/.telegram-codex-bot/bin/codex-account save main
-     ~/.telegram-codex-bot/bin/codex-account save backup
-     ~/.telegram-codex-bot/bin/codex-account use main
+  3. Optional Telegram recovery commands:
+     /codexlogin
+     /codexlogin backup
+     /codexaccount list
+     /codexaccount use backup
 
 Service started automatically: $started
 EOF
