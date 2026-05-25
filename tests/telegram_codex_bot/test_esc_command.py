@@ -41,6 +41,10 @@ class TestEscCommand:
             patch(
                 "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
             ) as safe_reply,
+            patch("telegram_codex_bot.bot.clear_window_working") as clear_working,
+            patch(
+                "telegram_codex_bot.bot.enqueue_status_update", new_callable=AsyncMock
+            ) as enqueue_status,
         ):
             mock_sm.resolve_window_for_thread.return_value = "@5"
             mock_sm.resolve_target_for_thread.return_value = AgentTarget(
@@ -56,6 +60,14 @@ class TestEscCommand:
             await esc_command(update, context)
 
         mock_send_control.assert_awaited_once_with(1, 42, "@5", "Escape")
+        clear_working.assert_called_once_with(1, "@5", 42)
+        enqueue_status.assert_awaited_once_with(
+            context.bot,
+            1,
+            "@5",
+            None,
+            thread_id=42,
+        )
         safe_reply.assert_awaited_once()
         assert safe_reply.await_args.args[1].endswith("Sent Escape")
 
@@ -75,6 +87,10 @@ class TestEscCommand:
             patch(
                 "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
             ) as safe_reply,
+            patch("telegram_codex_bot.bot.clear_window_working") as clear_working,
+            patch(
+                "telegram_codex_bot.bot.enqueue_status_update", new_callable=AsyncMock
+            ) as enqueue_status,
         ):
             mock_sm.resolve_window_for_thread.return_value = "@5"
             mock_sm.resolve_target_for_thread.return_value = AgentTarget(
@@ -92,3 +108,5 @@ class TestEscCommand:
 
         safe_reply.assert_awaited_once()
         assert "Failed to send Escape" in safe_reply.await_args.args[1]
+        clear_working.assert_not_called()
+        enqueue_status.assert_not_awaited()

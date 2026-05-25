@@ -769,6 +769,10 @@ class TestExistingWindowBinding:
                 new_callable=AsyncMock,
                 return_value=1,
             ) as discard_queue,
+            patch("telegram_codex_bot.bot.clear_window_working") as clear_working,
+            patch(
+                "telegram_codex_bot.bot.enqueue_status_update", new_callable=AsyncMock
+            ) as enqueue_status,
         ):
             mock_sm.resolve_window_for_thread.return_value = "@1"
             mock_sm.resolve_target_for_thread.return_value = AgentTarget(
@@ -784,6 +788,14 @@ class TestExistingWindowBinding:
 
         send_control.assert_awaited_once()
         discard_queue.assert_awaited_once_with(12345, 42, "@1")
+        clear_working.assert_called_once_with(12345, "@1", 42)
+        enqueue_status.assert_awaited_once_with(
+            context.bot,
+            12345,
+            "@1",
+            None,
+            thread_id=42,
+        )
         safe_reply.assert_awaited_once_with(update.message, "⎋ Sent Escape")
 
     @pytest.mark.asyncio

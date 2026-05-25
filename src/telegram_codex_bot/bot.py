@@ -175,6 +175,7 @@ from .handlers.message_sender import (
 from .markdown_v2 import convert_markdown
 from .handlers.response_builder import build_response_parts
 from .handlers.status_polling import (
+    clear_window_working,
     forget_missing_bound_window,
     mark_window_working,
     status_poll_loop,
@@ -787,6 +788,13 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not result.ok:
         await safe_reply(update.message, "❌ Failed to send Escape.")
         return
+    if wid:
+        clear_window_working(user.id, wid, thread_id)
+        await enqueue_status_update(
+            context.bot, user.id, wid, None, thread_id=thread_id
+        )
+    else:
+        clear_status_msg_info(user.id, thread_id)
     await safe_reply(update.message, "⎋ Sent Escape")
 
 
