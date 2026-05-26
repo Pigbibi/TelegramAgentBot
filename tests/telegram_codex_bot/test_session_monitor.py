@@ -181,6 +181,45 @@ class TestReadNewLinesOffsetRecovery:
         )
 
     @pytest.mark.asyncio
+    async def test_stale_backlog_before_latest_user_is_not_replayed(
+        self, monitor, tmp_path, make_jsonl_entry
+    ):
+        """When monitor lags, do not replay old assistant replies before a newer prompt."""
+        jsonl_file = tmp_path / "session.jsonl"
+        old_answer = make_jsonl_entry(msg_type="assistant", content="old answer")
+        latest_user = make_jsonl_entry(msg_type="user", content="new question")
+        latest_answer = make_jsonl_entry(msg_type="assistant", content="new answer")
+        jsonl_file.write_text(
+            "\n".join(
+                json.dumps(entry) for entry in (old_answer, latest_user, latest_answer)
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        monitor.scan_projects = AsyncMock(
+            return_value=[
+                SessionInfo(
+                    session_id="session-stale-backlog",
+                    file_path=jsonl_file,
+                )
+            ]
+        )
+        monitor.state.update_session(
+            TrackedSession(
+                session_id="session-stale-backlog",
+                file_path=str(jsonl_file),
+                last_byte_offset=0,
+            )
+        )
+
+        with patch("telegram_codex_bot.session_monitor.config") as mock_config:
+            mock_config.show_user_messages = False
+            messages = await monitor.check_for_updates(set())
+
+        assert [message.text for message in messages] == ["new answer"]
+
+    @pytest.mark.asyncio
     async def test_deferred_state_waits_for_delivery_ack(self, monitor, tmp_path):
         """Monitor offsets should not persist until Telegram delivery is acked."""
         jsonl_file = tmp_path / "session.jsonl"
