@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from telegram_codex_bot.config import config
 from telegram_codex_bot.transcript_parser import (
     ParsedMessage,
     TranscriptParser,
@@ -450,6 +451,43 @@ class TestParseEntries:
         assert EXPQUOTE_START in result[0].text
         assert EXPQUOTE_END in result[0].text
         assert "reasoning here" in result[0].text
+
+    def test_bash_tool_calls_can_be_hidden_without_hiding_other_tools(
+        self,
+        make_jsonl_entry,
+        make_tool_use_block,
+        make_tool_result_block,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(config, "show_bash_tool_calls", False)
+        entries = [
+            make_jsonl_entry(
+                "assistant",
+                [
+                    make_tool_use_block("t1", "Bash", {"command": "pytest -q"}),
+                    make_tool_use_block("t2", "Grep", {"pattern": "TODO"}),
+                ],
+            ),
+            make_jsonl_entry(
+                "user",
+                [
+                    make_tool_result_block("t1", "3 passed"),
+                    make_tool_result_block("t2", "app.py:1:TODO"),
+                ],
+            ),
+        ]
+
+        result, pending = TranscriptParser.parse_entries(entries)
+
+        assert not pending
+        assert [entry.content_type for entry in result] == [
+            "tool_use",
+            "tool_result",
+        ]
+        assert result[0].text == "**Grep**(TODO)"
+        assert "Found 1 matches" in result[1].text
+        assert all("Bash" not in entry.text for entry in result)
+        assert all(entry.tool_use_id != "t1" for entry in result)
 
     def test_response_item_function_call_pair_renders_tool_detail(self):
         lines = [

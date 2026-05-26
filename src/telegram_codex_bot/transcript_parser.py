@@ -746,6 +746,7 @@ class TranscriptParser:
                         name = block.get("name", "unknown")
                         inp = block.get("input", {})
                         summary = cls.format_tool_use_summary(name, inp)
+                        should_emit_tool = name != "Bash" or config.show_bash_tool_calls
 
                         # ExitPlanMode: emit plan content as text before tool_use entry
                         if name == "ExitPlanMode" and isinstance(inp, dict):
@@ -771,17 +772,18 @@ class TranscriptParser:
                                 input_data=input_data,
                             )
                             # Also emit tool_use entry with tool_name for immediate handling
-                            result.append(
-                                ParsedEntry(
-                                    role="assistant",
-                                    text=summary,
-                                    content_type="tool_use",
-                                    tool_use_id=tool_id,
-                                    timestamp=entry_timestamp,
-                                    tool_name=name,
+                            if should_emit_tool:
+                                result.append(
+                                    ParsedEntry(
+                                        role="assistant",
+                                        text=summary,
+                                        content_type="tool_use",
+                                        tool_use_id=tool_id,
+                                        timestamp=entry_timestamp,
+                                        tool_name=name,
+                                    )
                                 )
-                            )
-                        else:
+                        elif should_emit_tool:
                             result.append(
                                 ParsedEntry(
                                     role="assistant",
@@ -845,6 +847,9 @@ class TranscriptParser:
                             tool_summary = tool_info.summary
                             tool_name = tool_info.tool_name
                             tool_input_data = tool_info.input_data
+
+                        if tool_name == "Bash" and not config.show_bash_tool_calls:
+                            continue
 
                         if not result_text and not result_images:
                             continue

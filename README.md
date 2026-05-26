@@ -233,6 +233,8 @@ be committed.
 | `TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK` | `false` | Check npm for Codex CLI updates during the idle update loop |
 | `TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE` | `false` | Run `npm install -g @openai/codex@latest` when an idle Codex update exists |
 | `TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES` | `false` | Forward Codex commentary/thinking messages |
+| `TELEGRAM_CODEX_BOT_SHOW_TOOL_CALLS` | `true` | Forward tool call notifications and outputs |
+| `TELEGRAM_CODEX_BOT_SHOW_BASH_TOOL_CALLS` | `true` | Forward Bash command and output notifications; set `false` to hide Bash only |
 | `TELEGRAM_CODEX_BOT_SHOW_HIDDEN_DIRS` | `false` | Show dot-directories in the directory picker |
 | `OPENAI_API_KEY` | _(none)_ | Used for voice transcription |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Custom OpenAI-compatible endpoint |
