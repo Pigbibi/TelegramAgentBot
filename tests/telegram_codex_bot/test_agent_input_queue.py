@@ -20,6 +20,31 @@ def clear_agent_input_queue_state():
 
 
 @pytest.mark.asyncio
+async def test_queue_agent_input_after_interrupt_queues_and_starts_drain(monkeypatch):
+    ensured: list[tuple[int, int, str]] = []
+    monkeypatch.setattr(
+        bot_module,
+        "_ensure_agent_input_drain_task",
+        lambda _bot, key: ensured.append(key),
+    )
+
+    ok, message = await bot_module._queue_agent_input_after_interrupt(
+        MagicMock(),
+        12345,
+        42,
+        "@1",
+        "replacement prompt",
+    )
+
+    assert ok is True
+    assert message == "Interrupt requested; queued message until Codex is ready (1/20)"
+    assert [
+        item.text for item in bot_module._agent_input_queues[(12345, 42, "@1")]
+    ] == ["replacement prompt"]
+    assert ensured == [(12345, 42, "@1")]
+
+
+@pytest.mark.asyncio
 async def test_send_or_queue_agent_input_sends_to_codex_native_queue_when_busy(
     monkeypatch,
 ):

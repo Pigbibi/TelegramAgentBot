@@ -247,8 +247,8 @@ FILE_QUEUED_MESSAGE = (
 )
 SESSION_STILL_RUNNING_MESSAGE = f"The {PRODUCT_NAME} session is still running in tmux."
 HELP_COMMAND_DESCRIPTION = f"↗ Show {PRODUCT_NAME} help"
-ESC_COMMAND_DESCRIPTION = f"Send Escape to interrupt {PRODUCT_NAME}"
-INTERRUPT_COMMAND_DESCRIPTION = f"Interrupt {PRODUCT_NAME} or send a message"
+ESC_COMMAND_DESCRIPTION = f"Interrupt current {PRODUCT_NAME} run"
+INTERRUPT_COMMAND_DESCRIPTION = "Interrupt; optional text sends next"
 USAGE_COMMAND_DESCRIPTION = f"Show {PRODUCT_NAME} usage remaining"
 ACCOUNT_COMMAND_DESCRIPTION = "Manage Codex login accounts"
 CODEX_LOGIN_COMMAND_DESCRIPTION = "Start Codex device login"
@@ -885,6 +885,7 @@ async def interrupt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             if handled:
                 return
 
+    queued_replacement = False
     if input_was_ready:
         success, message = await _send_message_to_agent(
             user.id,
@@ -916,16 +917,18 @@ async def interrupt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             if not success:
                 logger.warning(
                     "Codex did not become ready after interrupt in window %s: %s; "
-                    "falling back to direct send",
+                    "queuing replacement until ready",
                     wid,
                     message,
                 )
-                success, message = await _send_message_to_agent(
+                success, message = await _queue_agent_input_after_interrupt(
+                    context.bot,
                     user.id,
                     thread_id,
                     wid,
                     payload,
                 )
+                queued_replacement = success
         else:
             success, message = await _send_message_to_agent(
                 user.id,
@@ -938,6 +941,10 @@ async def interrupt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await safe_reply(update.message, f"❌ {message}")
         return
     if wid:
+        if queued_replacement:
+            await mark_window_working(context.bot, user.id, wid, thread_id)
+            await safe_reply(update.message, f"⎋ {message}")
+            return
         await mark_window_working(context.bot, user.id, wid, thread_id)
         await _refresh_session_map_after_first_prompt(wid)
 
@@ -1460,6 +1467,31 @@ def _ensure_agent_input_drain_task(
     if task and not task.done():
         return
     _agent_input_tasks[key] = asyncio.create_task(_drain_agent_input_queue(bot, key))
+
+
+async def _queue_agent_input_after_interrupt(
+    bot: Bot,
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+    text: str,
+) -> tuple[bool, str]:
+    """Queue replacement text after an explicit interrupt request."""
+    key = _agent_input_key(user_id, thread_id, window_id)
+    async with _agent_input_lock(key):
+        queued, depth, limit = _queue_agent_input(key, text)
+        if not queued:
+            _ensure_agent_input_drain_task(bot, key)
+            return (
+                False,
+                "Codex is still handling the interrupt and the input queue is full "
+                f"({limit} pending). Wait for it to finish or use /esc first.",
+            )
+        _ensure_agent_input_drain_task(bot, key)
+        return (
+            True,
+            f"Interrupt requested; queued message until Codex is ready ({depth}/{limit})",
+        )
 
 
 async def _send_or_queue_agent_input(
