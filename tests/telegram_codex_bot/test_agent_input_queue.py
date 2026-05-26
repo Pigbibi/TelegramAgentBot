@@ -175,7 +175,7 @@ async def test_drain_agent_input_queue_waits_until_ready(monkeypatch):
     )
     send_message = AsyncMock(return_value=(True, "Sent"))
     mark_working = AsyncMock()
-    refresh_session = AsyncMock()
+    refresh_session = AsyncMock(return_value=True)
 
     monkeypatch.setattr(
         bot_module,
@@ -196,7 +196,48 @@ async def test_drain_agent_input_queue_waits_until_ready(monkeypatch):
 
     send_message.assert_awaited_once_with(12345, 42, "@1", "queued prompt")
     mark_working.assert_awaited_once_with(telegram_bot, 12345, "@1", 42)
-    refresh_session.assert_awaited_once_with("@1", text="queued prompt")
+    refresh_session.assert_awaited_once_with(
+        "@1",
+        text="queued prompt",
+        confirm_existing_session=True,
+    )
+    assert key not in bot_module._agent_input_queues
+
+
+@pytest.mark.asyncio
+async def test_drain_agent_input_queue_notifies_when_submit_confirmation_fails(
+    monkeypatch,
+):
+    key = (12345, 42, "@1")
+    bot_module._agent_input_queues[key] = deque(
+        [bot_module._QueuedAgentInput(text="queued prompt")]
+    )
+    capture_ready = SimpleNamespace(
+        text="previous output\n\n›\n\n  gpt-5.5 · ~/repo", missing=False
+    )
+    notify = AsyncMock()
+
+    monkeypatch.setattr(
+        bot_module,
+        "capture_agent_output",
+        AsyncMock(return_value=capture_ready),
+    )
+    monkeypatch.setattr(
+        bot_module, "_send_message_to_agent", AsyncMock(return_value=(True, "Sent"))
+    )
+    monkeypatch.setattr(bot_module, "mark_window_working", AsyncMock())
+    monkeypatch.setattr(
+        bot_module,
+        "_refresh_session_map_after_first_prompt",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(bot_module, "_notify_queued_input_failure", notify)
+    monkeypatch.setattr(bot_module.asyncio, "sleep", AsyncMock())
+
+    await bot_module._drain_agent_input_queue(MagicMock(), key)
+
+    notify.assert_awaited_once()
+    assert "did not confirm" in notify.await_args.args[3]
     assert key not in bot_module._agent_input_queues
 
 

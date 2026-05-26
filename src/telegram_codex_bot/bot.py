@@ -1601,7 +1601,19 @@ async def _drain_agent_input_queue(
 
             queue.popleft()
             await mark_window_working(bot, user_id, window_id, thread_id)
-            await _refresh_session_map_after_first_prompt(window_id, text=item.text)
+            confirmed = await _refresh_session_map_after_first_prompt(
+                window_id,
+                text=item.text,
+                confirm_existing_session=True,
+            )
+            if not confirmed:
+                await _notify_queued_input_failure(
+                    bot,
+                    user_id,
+                    thread_id,
+                    "Codex did not confirm that the queued message reached the "
+                    "transcript after submit retry",
+                )
             await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
     except asyncio.CancelledError:
         raise
@@ -3312,7 +3324,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     if not queued:
         await mark_window_working(context.bot, user.id, wid, thread_id)
-        await _refresh_session_map_after_first_prompt(wid, text=text)
+        confirmed = await _refresh_session_map_after_first_prompt(
+            wid,
+            text=text,
+            confirm_existing_session=True,
+        )
+        if not confirmed:
+            await safe_reply(
+                update.message,
+                "⚠️ I sent the message, but Codex did not confirm it reached "
+                "the transcript after a submit retry. If the topic stays idle, "
+                "send it again or use /interrupt.",
+            )
 
     # Start background capture for ! bash command output
     if not queued and input_was_ready and text.startswith("!") and len(text) > 1:
