@@ -155,6 +155,99 @@ class TranscriptParser:
             },
         }
 
+    @staticmethod
+    def _load_function_arguments(arguments: Any) -> dict:
+        """Decode Codex response_item function_call arguments."""
+        if isinstance(arguments, dict):
+            return arguments
+        if isinstance(arguments, str) and arguments.strip():
+            try:
+                parsed = json.loads(arguments)
+            except json.JSONDecodeError:
+                return {"arguments": arguments}
+            return parsed if isinstance(parsed, dict) else {"arguments": parsed}
+        return {}
+
+    @staticmethod
+    def _display_tool_name(name: str) -> str:
+        """Map Codex runtime tool names to compact Telegram labels."""
+        return {
+            "exec_command": "Bash",
+            "write_stdin": "Wait",
+        }.get(name, name)
+
+    @staticmethod
+    def _clean_runtime_tool_output(output: str) -> str:
+        """Strip Codex runtime wrapper metadata from tool output text."""
+        normalized = output.replace("\r\n", "\n")
+        for marker in ("\nOutput:\n", "\nOutput:"):
+            if marker in normalized:
+                return normalized.rsplit(marker, 1)[1].strip()
+        return output.strip()
+
+    @classmethod
+    def _normalize_function_call(
+        cls, payload: dict, timestamp: str | None
+    ) -> dict | None:
+        call_id = payload.get("call_id") or payload.get("id")
+        raw_name = payload.get("name")
+        if not isinstance(call_id, str) or not isinstance(raw_name, str):
+            return None
+
+        input_data = cls._load_function_arguments(payload.get("arguments"))
+        if raw_name == "exec_command" and isinstance(input_data.get("cmd"), str):
+            input_data = {**input_data, "command": input_data["cmd"]}
+        elif raw_name == "write_stdin":
+            chars = input_data.get("chars")
+            input_data = {
+                **input_data,
+                "summary": "background terminal" if chars in (None, "") else "stdin",
+            }
+
+        return {
+            "type": "assistant",
+            "role": "assistant",
+            "timestamp": timestamp,
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": call_id,
+                        "name": cls._display_tool_name(raw_name),
+                        "input": input_data,
+                    }
+                ],
+            },
+        }
+
+    @classmethod
+    def _normalize_function_call_output(
+        cls, payload: dict, timestamp: str | None
+    ) -> dict | None:
+        call_id = payload.get("call_id")
+        if not isinstance(call_id, str):
+            return None
+        output = payload.get("output", "")
+        if not isinstance(output, str):
+            output = json.dumps(output, ensure_ascii=False)
+        output = cls._clean_runtime_tool_output(output)
+        return {
+            "type": "user",
+            "role": "user",
+            "timestamp": timestamp,
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": call_id,
+                        "content": output,
+                    }
+                ],
+            },
+        }
+
     @classmethod
     def parse_line(cls, line: str) -> dict | None:
         """Parse one JSONL line and normalize new Codex transcript formats."""
@@ -174,7 +267,15 @@ class TranscriptParser:
 
         if entry_type == "response_item":
             payload = data.get("payload")
-            if not isinstance(payload, dict) or payload.get("type") != "message":
+            if not isinstance(payload, dict):
+                return None
+
+            payload_type = payload.get("type")
+            if payload_type == "function_call":
+                return cls._normalize_function_call(payload, timestamp)
+            if payload_type == "function_call_output":
+                return cls._normalize_function_call_output(payload, timestamp)
+            if payload_type != "message":
                 return None
 
             role = payload.get("role")
@@ -322,6 +423,8 @@ class TranscriptParser:
             # not here. We just show the tool name and file path.
         elif name == "Bash":
             summary = input_data.get("command", "")
+        elif name == "Wait":
+            summary = input_data.get("summary", "")
         elif name == "Grep":
             summary = input_data.get("pattern", "")
         elif name == "Task":
@@ -742,6 +845,9 @@ class TranscriptParser:
                             tool_summary = tool_info.summary
                             tool_name = tool_info.tool_name
                             tool_input_data = tool_info.input_data
+
+                        if not result_text and not result_images:
+                            continue
 
                         if is_interrupted:
                             # Show interruption inline with tool summary

@@ -1,5 +1,6 @@
 """Shared helpers for the per-topic Codex working timer."""
 
+import re
 import time
 
 from ..terminal_parser import is_codex_input_ready, parse_status_update
@@ -41,6 +42,19 @@ def is_active_working_status(status_text: str | None) -> bool:
     )
 
 
+def _active_status_public_detail(status_text: str) -> str | None:
+    """Return extra public detail from a native Working/Thinking status line."""
+    marker = "esc to interrupt"
+    marker_index = status_text.lower().find(marker)
+    if marker_index < 0:
+        return None
+    tail = status_text[marker_index + len(marker) :]
+    tail = re.sub(r"^[\s\])）·•:;\-–—]+", "", tail).strip()
+    if not tail:
+        return None
+    return f"◦ {tail}"
+
+
 def format_working_status(
     started_at: float,
     *,
@@ -54,8 +68,14 @@ def format_working_status(
     """
     elapsed = max(0, int((now if now is not None else time.monotonic()) - started_at))
     timer = f"💭 Thinking ({format_elapsed(elapsed)}) · esc to interrupt"
-    if detail and not is_active_working_status(detail):
-        return f"{detail}\n\n{timer}"
+    if detail:
+        public_detail = (
+            _active_status_public_detail(detail)
+            if is_active_working_status(detail)
+            else detail
+        )
+        if public_detail:
+            return f"{public_detail}\n\n{timer}"
     return timer
 
 
