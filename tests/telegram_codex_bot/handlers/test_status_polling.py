@@ -388,6 +388,47 @@ class TestStatusPollerSettingsDetection:
         assert status_polling._synthetic_working_starts[(1, 42, window_id)] == 100.0
 
     @pytest.mark.asyncio
+    async def test_synthetic_working_preserves_native_background_detail(
+        self, mock_bot: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Native active status extras should stay visible above the timer."""
+        window_id = "@5"
+        pane = (
+            "◦ Working (4m 47s • esc to interrupt) · "
+            "1 background terminal running · /ps to view\n"
+            "──────────────────────────────────────\n"
+            "❯ \n"
+        )
+
+        status_polling._synthetic_working_starts[(1, 42, window_id)] = 100.0
+        monkeypatch.setattr(status_polling.time, "monotonic", lambda: 106.0)
+
+        with (
+            patch(
+                "telegram_codex_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture,
+            patch(
+                "telegram_codex_bot.handlers.status_polling.handle_interactive_ui",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "telegram_codex_bot.handlers.status_polling.enqueue_status_update",
+                new_callable=AsyncMock,
+            ) as mock_enqueue_status,
+        ):
+            mock_capture.return_value = capture_result(window_id, pane)
+
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+
+        mock_enqueue_status.assert_awaited_once()
+        status_text = mock_enqueue_status.await_args.args[3]
+        assert "◦ 1 background terminal running · /ps to view" in status_text
+        assert status_text.endswith("💭 Thinking (6s) · esc to interrupt")
+
+    @pytest.mark.asyncio
     async def test_synthetic_working_keeps_timer_below_public_progress(
         self, mock_bot: AsyncMock, monkeypatch: pytest.MonkeyPatch
     ):

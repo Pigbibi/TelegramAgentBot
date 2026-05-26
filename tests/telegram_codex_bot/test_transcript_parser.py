@@ -63,6 +63,52 @@ class TestParseLine:
 
         assert TranscriptParser.parse_line(json.dumps(event)) is None
 
+    def test_response_item_function_call_is_normalized_as_tool_use(self):
+        item = {
+            "type": "response_item",
+            "timestamp": "2026-05-26T00:00:00Z",
+            "payload": {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "exec_command",
+                "arguments": json.dumps({"cmd": "pytest -q"}),
+            },
+        }
+
+        parsed = TranscriptParser.parse_line(json.dumps(item))
+
+        assert parsed is not None
+        assert parsed["type"] == "assistant"
+        block = parsed["message"]["content"][0]
+        assert block == {
+            "type": "tool_use",
+            "id": "call_1",
+            "name": "Bash",
+            "input": {"cmd": "pytest -q", "command": "pytest -q"},
+        }
+
+    def test_response_item_function_call_output_is_normalized_as_tool_result(self):
+        item = {
+            "type": "response_item",
+            "timestamp": "2026-05-26T00:00:01Z",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "Chunk ID: abc\nWall time: 0.0\nOutput:\n3 passed",
+            },
+        }
+
+        parsed = TranscriptParser.parse_line(json.dumps(item))
+
+        assert parsed is not None
+        assert parsed["type"] == "user"
+        block = parsed["message"]["content"][0]
+        assert block == {
+            "type": "tool_result",
+            "tool_use_id": "call_1",
+            "content": "3 passed",
+        }
+
 
 # ── extract_text_only ────────────────────────────────────────────────────
 
@@ -404,6 +450,90 @@ class TestParseEntries:
         assert EXPQUOTE_START in result[0].text
         assert EXPQUOTE_END in result[0].text
         assert "reasoning here" in result[0].text
+
+    def test_response_item_function_call_pair_renders_tool_detail(self):
+        lines = [
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "exec_command",
+                        "arguments": json.dumps({"cmd": "pytest -q"}),
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "call_1",
+                        "output": "3 passed",
+                    },
+                }
+            ),
+        ]
+        entries = [TranscriptParser.parse_line(line) for line in lines]
+        result, pending = TranscriptParser.parse_entries([e for e in entries if e])
+
+        assert not pending
+        assert [entry.content_type for entry in result] == ["tool_use", "tool_result"]
+        assert result[0].text == "**Bash**(pytest -q)"
+        assert "Output 1 lines" in result[1].text
+        assert "3 passed" in result[1].text
+
+    def test_wait_function_call_renders_background_terminal_detail(self):
+        parsed = TranscriptParser.parse_line(
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "call_id": "call_2",
+                        "name": "write_stdin",
+                        "arguments": json.dumps({"session_id": 123, "chars": ""}),
+                    },
+                }
+            )
+        )
+        result, pending = TranscriptParser.parse_entries([parsed])
+
+        assert "call_2" in pending
+        assert result[0].content_type == "tool_use"
+        assert result[0].text == "**Wait**(background terminal)"
+
+    def test_wait_function_call_empty_output_does_not_duplicate_detail(self):
+        lines = [
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "call_id": "call_2",
+                        "name": "write_stdin",
+                        "arguments": json.dumps({"session_id": 123, "chars": ""}),
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "call_2",
+                        "output": "Chunk ID: empty\nWall time: 0.0\nOutput:",
+                    },
+                }
+            ),
+        ]
+        entries = [TranscriptParser.parse_line(line) for line in lines]
+        result, pending = TranscriptParser.parse_entries([e for e in entries if e])
+
+        assert not pending
+        assert [entry.content_type for entry in result] == ["tool_use"]
+        assert result[0].text == "**Wait**(background terminal)"
 
     def test_local_command_with_stdout(self, make_jsonl_entry, make_text_block):
         xml = (
