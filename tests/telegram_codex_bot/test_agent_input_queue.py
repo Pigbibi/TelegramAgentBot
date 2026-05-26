@@ -191,6 +191,37 @@ async def test_drain_agent_input_queue_drops_expired_items(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_drain_agent_input_queue_keeps_items_when_expiry_disabled(monkeypatch):
+    key = (12345, 42, "@1")
+    bot_module._agent_input_queues[key] = deque(
+        [bot_module._QueuedAgentInput(text="queued prompt", created_at=1.0)]
+    )
+    notify = AsyncMock()
+    capture_busy = SimpleNamespace(
+        text="• Working (12s • esc to interrupt)\n\n  gpt-5.5 · ~/repo",
+        missing=False,
+    )
+
+    monkeypatch.setattr(bot_module.config, "agent_input_queue_max_wait_seconds", 0.0)
+    monkeypatch.setattr(bot_module.time, "monotonic", lambda: 9999.0)
+    monkeypatch.setattr(bot_module, "_notify_queued_input_failure", notify)
+    monkeypatch.setattr(
+        bot_module,
+        "capture_agent_output",
+        AsyncMock(side_effect=[capture_busy, asyncio.CancelledError()]),
+    )
+    monkeypatch.setattr(bot_module.asyncio, "sleep", AsyncMock())
+
+    with pytest.raises(asyncio.CancelledError):
+        await bot_module._drain_agent_input_queue(MagicMock(), key)
+
+    notify.assert_not_awaited()
+    assert [item.text for item in bot_module._agent_input_queues[key]] == [
+        "queued prompt"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_handle_non_codex_bound_window_recovers_resumable_shell(monkeypatch):
     update_message = MagicMock()
     session_manager = MagicMock()

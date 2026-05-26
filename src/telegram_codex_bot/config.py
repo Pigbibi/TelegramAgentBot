@@ -167,7 +167,7 @@ class Config:
             int(os.getenv("TELEGRAM_CODEX_BOT_AGENT_INPUT_QUEUE_MAX_SIZE", "20")),
         )
         self.agent_input_queue_max_wait_seconds = max(
-            1.0,
+            0.0,
             float(
                 os.getenv(
                     "TELEGRAM_CODEX_BOT_AGENT_INPUT_QUEUE_MAX_WAIT_SECONDS",
