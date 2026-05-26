@@ -598,6 +598,15 @@ class TestExistingWindowBinding:
                 return_value=(True, "Sent", False),
             ) as send_or_queue,
             patch(
+                "telegram_codex_bot.bot.mark_window_working",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "telegram_codex_bot.bot._refresh_session_map_after_first_prompt",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as refresh_session_map,
+            patch(
                 "telegram_codex_bot.bot._send_to_window_when_codex_ready",
                 new_callable=AsyncMock,
                 return_value=(True, "Sent"),
@@ -616,7 +625,61 @@ class TestExistingWindowBinding:
         enqueue_status_update.assert_awaited_once()
         send_when_ready.assert_not_awaited()
         send_or_queue.assert_awaited_once_with(context.bot, 12345, 42, "@1", "hi")
+        refresh_session_map.assert_awaited_once_with(
+            "@1",
+            text="hi",
+            confirm_existing_session=True,
+        )
         safe_reply.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_bound_topic_reports_when_submit_confirmation_fails(self):
+        update = _make_text_update("hi")
+        context = _make_context()
+
+        fake_window = MagicMock()
+        fake_window.window_id = "@1"
+        fake_window.window_name = "Projects"
+        fake_window.cwd = "/tmp/project"
+
+        with (
+            patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
+            patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+            patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
+            patch(
+                "telegram_codex_bot.bot.enqueue_status_update", new_callable=AsyncMock
+            ),
+            patch(
+                "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
+            ) as safe_reply,
+            patch(
+                "telegram_codex_bot.bot._send_or_queue_agent_input",
+                new_callable=AsyncMock,
+                return_value=(True, "Sent", False),
+            ),
+            patch(
+                "telegram_codex_bot.bot.mark_window_working",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "telegram_codex_bot.bot._refresh_session_map_after_first_prompt",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch("telegram_codex_bot.bot._cancel_bash_capture"),
+        ):
+            mock_sm.get_window_for_thread.return_value = "@1"
+            mock_sm.window_has_usage_limit_exceeded = AsyncMock(return_value=False)
+            mock_tmux.find_window_by_id = AsyncMock(return_value=fake_window)
+            mock_tmux.capture_pane = AsyncMock(return_value="")
+
+            from telegram_codex_bot.bot import text_handler
+
+            await text_handler(update, context)
+
+        safe_reply.assert_awaited_once()
+        assert "did not confirm" in safe_reply.await_args.args[1]
 
     @pytest.mark.asyncio
     async def test_bound_topic_reports_when_direct_send_fails(self):
