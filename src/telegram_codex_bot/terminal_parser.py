@@ -264,22 +264,57 @@ def parse_status_line(pane_text: str) -> str | None:
 
 def is_codex_input_ready(pane_text: str) -> bool:
     """Return True when the visible Codex TUI is ready for a new prompt."""
+    return codex_input_text(pane_text) is not None
+
+
+def codex_input_text(pane_text: str) -> str | None:
+    """Return the visible Codex input-row text, or None when not input-ready.
+
+    Empty string means the prompt is focused and ready. A non-empty value means
+    Codex already has unsubmitted text in the input row.
+    """
     if not pane_text:
-        return False
+        return None
 
     if parse_status_update(pane_text):
-        return False
+        return None
 
     lines = pane_text.split("\n")
-    for line in lines[-12:]:
-        stripped = line.strip()
+    tail = lines[-12:]
+    prompt_idx: int | None = None
+    prompt_text = ""
+
+    for idx in range(len(tail) - 1, -1, -1):
+        stripped = tail[idx].strip()
         if not stripped:
             continue
-        if stripped == "›" or stripped == "❯":
-            return True
+        if stripped in _PROMPT_PREFIXES:
+            prompt_idx = idx
+            prompt_text = ""
+            break
         if stripped.startswith("› ") or stripped.startswith("❯ "):
-            return True
-    return False
+            prompt_idx = idx
+            prompt_text = stripped[1:].strip()
+            break
+
+    if prompt_idx is None:
+        return None
+
+    parts = [prompt_text] if prompt_text else []
+    for line in tail[prompt_idx + 1 :]:
+        stripped = line.strip()
+        if not stripped:
+            break
+        if "gpt-" in stripped or "· ~" in stripped:
+            break
+        if stripped.startswith(_PROMPT_PREFIXES):
+            break
+        if line[:1].isspace():
+            parts.append(stripped)
+            continue
+        break
+
+    return " ".join(parts).strip()
 
 
 def _truncate_progress_text(text: str) -> str:

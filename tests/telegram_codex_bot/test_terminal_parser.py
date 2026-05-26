@@ -3,6 +3,7 @@
 import pytest
 
 from telegram_codex_bot.terminal_parser import (
+    codex_input_text,
     extract_bash_output,
     extract_interactive_content,
     is_codex_input_ready,
@@ -131,6 +132,24 @@ class TestParseStatusUpdate:
             f"{chrome}"
         )
         assert is_codex_input_ready(pane)
+        assert codex_input_text(pane) == ""
+
+    def test_codex_input_text_returns_empty_for_empty_prompt(self):
+        pane = "previous output\n\n›\n\n  gpt-5.5 · ~/repo"
+        assert is_codex_input_ready(pane)
+        assert codex_input_text(pane) == ""
+
+    def test_codex_input_text_joins_wrapped_prompt(self):
+        pane = (
+            "previous output\n\n"
+            "› Implement a more robust submit confirmation with a long\n"
+            "  wrapped continuation line\n\n"
+            "  gpt-5.5 · ~/repo"
+        )
+        assert codex_input_text(pane) == (
+            "Implement a more robust submit confirmation with a long "
+            "wrapped continuation line"
+        )
 
     def test_codex_input_not_ready_while_working_even_with_prompt_row(
         self, chrome: str
@@ -156,6 +175,7 @@ class TestParseStatusUpdate:
             == "• Waiting for background terminal (52s • esc to interrupt)"
         )
         assert not is_codex_input_ready(pane)
+        assert codex_input_text(pane) is None
 
     def test_codex_input_not_ready_without_prompt(self):
         assert not is_codex_input_ready("output only\nno prompt")
