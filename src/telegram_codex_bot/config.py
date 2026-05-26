@@ -196,6 +196,12 @@ class Config:
             os.getenv("TELEGRAM_CODEX_BOT_SHOW_TOOL_CALLS", "true").lower() != "false"
         )
 
+        # Show Bash command and output notifications while keeping other tools visible
+        self.show_bash_tool_calls = (
+            os.getenv("TELEGRAM_CODEX_BOT_SHOW_BASH_TOOL_CALLS", "true").lower()
+            != "false"
+        )
+
         # Show Codex sessions created outside telegram-codex-bot in the Telegram resume picker.
         # Keep this opt-in so local VSCode/CLI history does not clutter Telegram.
         self.show_external_resume_sessions = (

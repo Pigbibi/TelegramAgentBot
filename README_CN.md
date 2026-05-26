@@ -229,6 +229,8 @@ TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES=true
 | `TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK` | `false` | 在空闲更新循环里检查 Codex CLI 的 npm 新版本 |
 | `TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE` | `false` | 空闲且发现新版本时，执行 `npm install -g @openai/codex@latest` |
 | `TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES` | `false` | 是否把 Codex commentary/thinking 转发到 Telegram |
+| `TELEGRAM_CODEX_BOT_SHOW_TOOL_CALLS` | `true` | 是否转发工具调用通知和输出 |
+| `TELEGRAM_CODEX_BOT_SHOW_BASH_TOOL_CALLS` | `true` | 是否转发 Bash 命令和输出；设为 `false` 只隐藏 Bash |
 | `TELEGRAM_CODEX_BOT_SHOW_HIDDEN_DIRS` | `false` | 目录浏览器里是否显示点目录 |
 | `OPENAI_API_KEY` | _(空)_ | 语音转录使用 |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | 自定义 OpenAI 兼容接口 |
