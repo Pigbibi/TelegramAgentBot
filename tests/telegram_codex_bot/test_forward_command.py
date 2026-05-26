@@ -44,7 +44,8 @@ class TestForwardCommand:
             patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
             patch("telegram_codex_bot.bot.session_manager") as mock_sm,
             patch(
-                "telegram_codex_bot.bot._send_or_queue_agent_input", new_callable=AsyncMock
+                "telegram_codex_bot.bot._send_or_queue_agent_input",
+                new_callable=AsyncMock,
             ) as mock_send,
             patch("telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock),
         ):
@@ -72,7 +73,8 @@ class TestForwardCommand:
             patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
             patch("telegram_codex_bot.bot.session_manager") as mock_sm,
             patch(
-                "telegram_codex_bot.bot._send_or_queue_agent_input", new_callable=AsyncMock
+                "telegram_codex_bot.bot._send_or_queue_agent_input",
+                new_callable=AsyncMock,
             ) as mock_send,
             patch("telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock),
         ):
@@ -89,7 +91,6 @@ class TestForwardCommand:
 
             mock_send.assert_awaited_once_with(context.bot, 1, 42, "@5", "/cost")
 
-
     @pytest.mark.asyncio
     async def test_command_queues_during_interactive_ui(self):
         update = _make_update("/model")
@@ -104,7 +105,9 @@ class TestForwardCommand:
                 new_callable=AsyncMock,
                 return_value=(True, "Queued", True),
             ) as mock_send,
-            patch("telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock) as safe_reply,
+            patch(
+                "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
+            ) as safe_reply,
         ):
             mock_sm.resolve_window_for_thread.return_value = "@5"
             mock_sm.resolve_target_for_thread.return_value = AgentTarget(
@@ -117,7 +120,9 @@ class TestForwardCommand:
             await forward_command_handler(update, context)
 
         mock_send.assert_awaited_once_with(context.bot, 1, 42, "@5", "/model")
-        safe_reply.assert_awaited_once_with(update.message, "⚡ [project] Queued: /model")
+        safe_reply.assert_awaited_once_with(
+            update.message, "⚡ [project] Queued: /model"
+        )
 
     @pytest.mark.asyncio
     async def test_clear_clears_session(self):
