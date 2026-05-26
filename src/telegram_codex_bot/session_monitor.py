@@ -566,6 +566,28 @@ class SessionMonitor:
             self.state.save_if_dirty()
         return new_messages
 
+    async def _dispatch_new_messages(self, messages: list[NewMessage]) -> None:
+        """Dispatch transcript messages without letting one session starve others.
+
+        Message queue workers already preserve Telegram ordering per topic. The
+        monitor should still preserve ordering within each Codex session, but it
+        should not make an unrelated topic wait behind a large backlog from
+        another session.
+        """
+        callback = self._message_callback
+        if not messages or callback is None:
+            return
+
+        groups: dict[str, list[NewMessage]] = {}
+        for message in messages:
+            groups.setdefault(message.session_id, []).append(message)
+
+        async def _dispatch_group(group: list[NewMessage]) -> None:
+            for message in group:
+                await callback(message)
+
+        await asyncio.gather(*(_dispatch_group(group) for group in groups.values()))
+
     async def _monitor_loop(self) -> None:
         """Poll recursively discovered transcripts and forward new messages."""
         logger.info("Monitor started (Aggressive Auto-Binding Mode)")
@@ -580,9 +602,7 @@ class SessionMonitor:
             try:
                 await session_manager.load_session_map()
                 new_messages = await self.check_for_updates(set(), save_state=False)
-                for message in new_messages:
-                    if self._message_callback:
-                        await self._message_callback(message)
+                await self._dispatch_new_messages(new_messages)
                 self.commit_deferred_state_updates()
             except asyncio.CancelledError:
                 self.discard_deferred_state_updates()

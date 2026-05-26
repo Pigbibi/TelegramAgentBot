@@ -32,7 +32,11 @@ class BrandingStringTests(unittest.TestCase):
         )
         self.assertEqual(bot.HELP_COMMAND_DESCRIPTION, "↗ Show Codex help")
         self.assertEqual(bot.CC_COMMANDS["memory"], "↗ Edit AGENTS.md")
-        self.assertEqual(bot.ESC_COMMAND_DESCRIPTION, "Send Escape to interrupt Codex")
+        self.assertEqual(bot.ESC_COMMAND_DESCRIPTION, "Interrupt current Codex run")
+        self.assertEqual(
+            bot.INTERRUPT_COMMAND_DESCRIPTION,
+            "Interrupt; optional text sends next",
+        )
         self.assertEqual(bot.USAGE_COMMAND_DESCRIPTION, "Show Codex usage remaining")
 
     def test_default_directory_browser_path_is_not_machine_specific(self) -> None:

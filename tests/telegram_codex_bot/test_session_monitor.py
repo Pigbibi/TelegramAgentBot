@@ -1,5 +1,6 @@
 """Unit tests for SessionMonitor JSONL reading and offset handling."""
 
+import asyncio
 import json
 import os
 from types import SimpleNamespace
@@ -9,7 +10,52 @@ from unittest.mock import patch
 import pytest
 
 from telegram_codex_bot.monitor_state import TrackedSession
-from telegram_codex_bot.session_monitor import SessionInfo, SessionMonitor
+from telegram_codex_bot.session_monitor import NewMessage, SessionInfo, SessionMonitor
+
+
+class TestSessionMonitorDispatch:
+    """Tests for monitor dispatch fairness across sessions."""
+
+    @pytest.mark.asyncio
+    async def test_dispatches_different_sessions_concurrently(self, tmp_path):
+        monitor = SessionMonitor(
+            projects_path=tmp_path / "projects",
+            state_file=tmp_path / "monitor_state.json",
+        )
+        first_session_can_finish = asyncio.Event()
+        first_session_started = asyncio.Event()
+        started: list[str] = []
+        completed: list[str] = []
+
+        async def callback(message: NewMessage) -> None:
+            started.append(message.text)
+            if message.text == "a1":
+                first_session_started.set()
+                await first_session_can_finish.wait()
+            completed.append(message.text)
+
+        monitor.set_message_callback(callback)
+        dispatch_task = asyncio.create_task(
+            monitor._dispatch_new_messages(
+                [
+                    NewMessage("session-a", "a1", True),
+                    NewMessage("session-a", "a2", True),
+                    NewMessage("session-b", "b1", True),
+                ]
+            )
+        )
+
+        await asyncio.wait_for(first_session_started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+
+        assert "b1" in started
+        assert "a2" not in started
+
+        first_session_can_finish.set()
+        await dispatch_task
+
+        assert completed.index("a1") < completed.index("a2")
+        assert "b1" in completed
 
 
 class TestReadNewLinesOffsetRecovery:

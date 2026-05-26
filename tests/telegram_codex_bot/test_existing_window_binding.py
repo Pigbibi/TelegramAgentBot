@@ -812,6 +812,109 @@ class TestExistingWindowBinding:
         safe_reply.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_interrupt_command_queues_replacement_when_ready_times_out(self):
+        update = _make_text_update("/interrupt replace me")
+        context = _make_context()
+
+        fake_window = MagicMock()
+        fake_window.window_id = "@1"
+        fake_window.window_name = "Projects"
+        fake_window.cwd = "/tmp/project"
+        capture = MagicMock()
+        capture.text = "• Working (12s • esc to interrupt)"
+        capture.missing = False
+
+        with (
+            patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
+            patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+            patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
+            patch(
+                "telegram_codex_bot.bot.enqueue_status_update", new_callable=AsyncMock
+            ),
+            patch(
+                "telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock
+            ) as safe_reply,
+            patch(
+                "telegram_codex_bot.bot.capture_agent_output",
+                new_callable=AsyncMock,
+                return_value=capture,
+            ),
+            patch(
+                "telegram_codex_bot.bot._send_control_to_agent",
+                new_callable=AsyncMock,
+                return_value=(True, ""),
+            ) as send_control,
+            patch(
+                "telegram_codex_bot.bot._send_to_window_when_codex_ready",
+                new_callable=AsyncMock,
+                return_value=(False, "Timed out waiting for Codex to become ready"),
+            ) as send_when_ready,
+            patch(
+                "telegram_codex_bot.bot._queue_agent_input_after_interrupt",
+                new_callable=AsyncMock,
+                return_value=(
+                    True,
+                    "Interrupt requested; queued message until Codex is ready (1/20)",
+                ),
+            ) as queue_after_interrupt,
+            patch(
+                "telegram_codex_bot.bot._send_message_to_agent",
+                new_callable=AsyncMock,
+            ) as send_message,
+            patch(
+                "telegram_codex_bot.bot._discard_queued_agent_input",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "telegram_codex_bot.bot._refresh_session_map_after_first_prompt",
+                new_callable=AsyncMock,
+            ) as refresh_session,
+            patch(
+                "telegram_codex_bot.bot.mark_window_working", new_callable=AsyncMock
+            ) as mark_working,
+            patch("telegram_codex_bot.bot._cancel_bash_capture"),
+            patch("telegram_codex_bot.bot.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            mock_sm.resolve_window_for_thread.return_value = "@1"
+            mock_sm.resolve_target_for_thread.return_value = AgentTarget(
+                "local",
+                "local",
+                window_id="@1",
+            )
+            mock_sm.window_has_usage_limit_exceeded = AsyncMock(return_value=False)
+            mock_tmux.find_window_by_id = AsyncMock(return_value=fake_window)
+
+            from telegram_codex_bot.bot import interrupt_command
+
+            await interrupt_command(update, context)
+
+        send_control.assert_awaited_once_with(12345, 42, "@1", "Escape")
+        send_when_ready.assert_awaited_once_with(
+            12345,
+            42,
+            "@1",
+            "replace me",
+            timeout=15.0,
+            interval=0.25,
+        )
+        queue_after_interrupt.assert_awaited_once_with(
+            context.bot,
+            12345,
+            42,
+            "@1",
+            "replace me",
+        )
+        send_message.assert_not_awaited()
+        refresh_session.assert_not_awaited()
+        mark_working.assert_awaited_once_with(context.bot, 12345, "@1", 42)
+        safe_reply.assert_awaited_once_with(
+            update.message,
+            "⎋ Interrupt requested; queued message until Codex is ready (1/20)",
+        )
+
+    @pytest.mark.asyncio
     async def test_interrupt_command_without_payload_sends_escape(self):
         update = _make_text_update("/interrupt")
         context = _make_context()
