@@ -112,6 +112,33 @@ async def test_send_or_queue_agent_input_sends_immediately_when_ready(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_send_or_queue_agent_input_rejects_when_prompt_row_has_text(monkeypatch):
+    capture = SimpleNamespace(
+        text="previous output\n\n› stale prompt\n\n  gpt-5.5 · ~/repo",
+        missing=False,
+    )
+    send_message = AsyncMock()
+
+    monkeypatch.setattr(
+        bot_module, "capture_agent_output", AsyncMock(return_value=capture)
+    )
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+
+    ok, message, queued = await bot_module._send_or_queue_agent_input(
+        MagicMock(),
+        12345,
+        42,
+        "@1",
+        "new prompt",
+    )
+
+    assert (ok, queued) == (False, False)
+    assert "unsubmitted input" in message
+    send_message.assert_not_awaited()
+    assert bot_module._agent_input_queues == {}
+
+
+@pytest.mark.asyncio
 async def test_send_or_queue_agent_input_rejects_when_queue_is_full(monkeypatch):
     key = (12345, 42, "@1")
     bot_module._agent_input_queues[key] = deque(
@@ -238,6 +265,36 @@ async def test_drain_agent_input_queue_notifies_when_submit_confirmation_fails(
 
     notify.assert_awaited_once()
     assert "did not confirm" in notify.await_args.args[3]
+    assert key not in bot_module._agent_input_queues
+
+
+@pytest.mark.asyncio
+async def test_drain_agent_input_queue_stops_when_prompt_row_has_text(monkeypatch):
+    key = (12345, 42, "@1")
+    bot_module._agent_input_queues[key] = deque(
+        [bot_module._QueuedAgentInput(text="queued prompt")]
+    )
+    capture_ready_with_stale_input = SimpleNamespace(
+        text="previous output\n\n› stale prompt\n\n  gpt-5.5 · ~/repo",
+        missing=False,
+    )
+    notify = AsyncMock()
+    send_message = AsyncMock()
+
+    monkeypatch.setattr(
+        bot_module,
+        "capture_agent_output",
+        AsyncMock(return_value=capture_ready_with_stale_input),
+    )
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+    monkeypatch.setattr(bot_module, "_notify_queued_input_failure", notify)
+    monkeypatch.setattr(bot_module.asyncio, "sleep", AsyncMock())
+
+    await bot_module._drain_agent_input_queue(MagicMock(), key)
+
+    notify.assert_awaited_once()
+    assert "unsubmitted input" in notify.await_args.args[3]
+    send_message.assert_not_awaited()
     assert key not in bot_module._agent_input_queues
 
 

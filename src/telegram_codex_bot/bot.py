@@ -184,6 +184,7 @@ from .screenshot import text_to_image
 from .session import CodexSession, is_shell_pane_command, session_manager
 from .session_monitor import NewMessage
 from .terminal_parser import (
+    codex_input_text,
     extract_bash_output,
     is_codex_input_ready,
     is_interactive_ui,
@@ -1515,6 +1516,15 @@ async def _send_or_queue_agent_input(
                         True,
                     )
             else:
+                pending_input = codex_input_text(pane_text)
+                if pending_input:
+                    result = (
+                        False,
+                        "Codex already has unsubmitted input in the prompt row. "
+                        "Use /interrupt or clear the tmux input before sending more.",
+                        False,
+                    )
+                    return result
                 success, message = await _send_message_to_agent(
                     user_id,
                     thread_id,
@@ -1586,6 +1596,17 @@ async def _drain_agent_input_queue(
             if not is_codex_input_ready(pane_text) or is_interactive_ui(pane_text):
                 await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
                 continue
+            pending_input = codex_input_text(pane_text)
+            if pending_input:
+                await _notify_queued_input_failure(
+                    bot,
+                    user_id,
+                    thread_id,
+                    "Codex already has unsubmitted input in the prompt row. "
+                    "Use /interrupt or clear the tmux input before sending more.",
+                )
+                queue.clear()
+                return
 
             item = queue[0]
             success, message = await _send_message_to_agent(
