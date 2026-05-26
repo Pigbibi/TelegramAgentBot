@@ -48,18 +48,22 @@ async def test_send_or_queue_agent_input_sends_to_codex_native_queue_when_busy(
 
 
 @pytest.mark.asyncio
-async def test_send_or_queue_agent_input_queues_during_interactive_ui(monkeypatch):
+async def test_send_or_queue_agent_input_interrupts_and_queues_during_interactive_ui(
+    monkeypatch,
+):
     capture = SimpleNamespace(
         text="  Do you want to proceed?\n  Some permission details\n  Esc to cancel\n",
         missing=False,
     )
     send_message = AsyncMock()
+    send_control = AsyncMock(return_value=(True, ""))
     ensured: list[tuple[int, int, str]] = []
 
     monkeypatch.setattr(
         bot_module, "capture_agent_output", AsyncMock(return_value=capture)
     )
     monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+    monkeypatch.setattr(bot_module, "_send_control_to_agent", send_control)
     monkeypatch.setattr(
         bot_module,
         "_ensure_agent_input_drain_task",
@@ -76,12 +80,13 @@ async def test_send_or_queue_agent_input_queues_during_interactive_ui(monkeypatc
 
     assert ok is True
     assert queued is True
-    assert message.startswith("Queued until Codex finishes the interactive prompt")
+    assert message.startswith("Interrupted Codex prompt and queued")
     assert (
         list(bot_module._agent_input_queues[(12345, 42, "@1")])[0].text
         == "answer after prompt"
     )
     assert ensured == [(12345, 42, "@1")]
+    send_control.assert_awaited_once_with(12345, 42, "@1", "Escape")
     send_message.assert_not_awaited()
 
 
@@ -112,12 +117,14 @@ async def test_send_or_queue_agent_input_sends_immediately_when_ready(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_send_or_queue_agent_input_rejects_when_prompt_row_has_text(monkeypatch):
+async def test_send_or_queue_agent_input_sends_when_idle_prompt_text_is_visible(
+    monkeypatch,
+):
     capture = SimpleNamespace(
-        text="previous output\n\n› stale prompt\n\n  gpt-5.5 · ~/repo",
+        text="previous output\n\n› Improve documentation in @filename\n\n  gpt-5.5 · ~/repo",
         missing=False,
     )
-    send_message = AsyncMock()
+    send_message = AsyncMock(return_value=(True, "Sent"))
 
     monkeypatch.setattr(
         bot_module, "capture_agent_output", AsyncMock(return_value=capture)
@@ -132,9 +139,8 @@ async def test_send_or_queue_agent_input_rejects_when_prompt_row_has_text(monkey
         "new prompt",
     )
 
-    assert (ok, queued) == (False, False)
-    assert "unsubmitted input" in message
-    send_message.assert_not_awaited()
+    assert (ok, message, queued) == (True, "Sent", False)
+    send_message.assert_awaited_once_with(12345, 42, "@1", "new prompt")
     assert bot_module._agent_input_queues == {}
 
 
@@ -269,32 +275,45 @@ async def test_drain_agent_input_queue_notifies_when_submit_confirmation_fails(
 
 
 @pytest.mark.asyncio
-async def test_drain_agent_input_queue_stops_when_prompt_row_has_text(monkeypatch):
+async def test_drain_agent_input_queue_sends_when_idle_prompt_text_is_visible(
+    monkeypatch,
+):
     key = (12345, 42, "@1")
     bot_module._agent_input_queues[key] = deque(
         [bot_module._QueuedAgentInput(text="queued prompt")]
     )
-    capture_ready_with_stale_input = SimpleNamespace(
-        text="previous output\n\n› stale prompt\n\n  gpt-5.5 · ~/repo",
+    capture_ready_with_visible_prompt = SimpleNamespace(
+        text="previous output\n\n› Improve documentation in @filename\n\n  gpt-5.5 · ~/repo",
         missing=False,
     )
     notify = AsyncMock()
-    send_message = AsyncMock()
+    send_message = AsyncMock(return_value=(True, "Sent"))
+    mark_working = AsyncMock()
+    refresh_session = AsyncMock(return_value=True)
+    sleep = AsyncMock()
 
     monkeypatch.setattr(
         bot_module,
         "capture_agent_output",
-        AsyncMock(return_value=capture_ready_with_stale_input),
+        AsyncMock(return_value=capture_ready_with_visible_prompt),
     )
     monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
     monkeypatch.setattr(bot_module, "_notify_queued_input_failure", notify)
-    monkeypatch.setattr(bot_module.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(bot_module, "mark_window_working", mark_working)
+    monkeypatch.setattr(
+        bot_module,
+        "_refresh_session_map_after_first_prompt",
+        refresh_session,
+    )
+    monkeypatch.setattr(bot_module.asyncio, "sleep", sleep)
 
     await bot_module._drain_agent_input_queue(MagicMock(), key)
 
-    notify.assert_awaited_once()
-    assert "unsubmitted input" in notify.await_args.args[3]
-    send_message.assert_not_awaited()
+    notify.assert_not_awaited()
+    sleep.assert_awaited_once_with(bot_module._AGENT_INPUT_POLL_INTERVAL_SECONDS)
+    send_message.assert_awaited_once_with(12345, 42, "@1", "queued prompt")
+    mark_working.assert_awaited_once()
+    refresh_session.assert_awaited_once()
     assert key not in bot_module._agent_input_queues
 
 
@@ -346,6 +365,31 @@ async def test_drain_agent_input_queue_keeps_items_when_expiry_disabled(monkeypa
     assert [item.text for item in bot_module._agent_input_queues[key]] == [
         "queued prompt"
     ]
+
+
+@pytest.mark.asyncio
+async def test_send_to_window_when_ready_sends_with_visible_idle_prompt(monkeypatch):
+    capture = SimpleNamespace(
+        text="previous output\n\n› Improve documentation in @filename\n\n  gpt-5.5 · ~/repo",
+        missing=False,
+    )
+    send_message = AsyncMock(return_value=(True, "Sent"))
+
+    monkeypatch.setattr(
+        bot_module, "capture_agent_output", AsyncMock(return_value=capture)
+    )
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+
+    ok, message = await bot_module._send_to_window_when_codex_ready(
+        12345,
+        42,
+        "@1",
+        "queued prompt",
+        timeout=0.1,
+    )
+
+    assert (ok, message) == (True, "Sent")
+    send_message.assert_awaited_once_with(12345, 42, "@1", "queued prompt")
 
 
 @pytest.mark.asyncio

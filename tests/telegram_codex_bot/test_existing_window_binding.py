@@ -947,6 +947,30 @@ class TestExistingWindowBinding:
 
 
 @pytest.mark.asyncio
+async def test_confirm_first_prompt_delivery_prefers_transcript_confirmation():
+    from telegram_codex_bot.bot import _confirm_first_prompt_delivery
+
+    with (
+        patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+        patch("telegram_codex_bot.bot.tmux_manager") as mock_tmux,
+    ):
+        mock_sm.wait_for_transcript_user_message = AsyncMock(return_value=True)
+        mock_tmux.prompt_still_pending = AsyncMock(return_value=True)
+        mock_tmux.send_control_key = AsyncMock(return_value=True)
+
+        ok = await _confirm_first_prompt_delivery("@9", "hello")
+
+    assert ok is True
+    mock_sm.wait_for_transcript_user_message.assert_awaited_once_with(
+        "@9",
+        "hello",
+        timeout=5.0,
+    )
+    mock_tmux.prompt_still_pending.assert_not_awaited()
+    mock_tmux.send_control_key.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_refresh_session_map_retries_enter_when_first_prompt_is_pending():
     from telegram_codex_bot.bot import _refresh_session_map_after_first_prompt
 
@@ -968,7 +992,7 @@ async def test_refresh_session_map_retries_enter_when_first_prompt_is_pending():
 
     assert ok is True
     assert mock_sm.wait_for_session_map_entry.await_count == 2
-    assert mock_tmux.prompt_still_pending.await_count == 2
+    assert mock_tmux.prompt_still_pending.await_count == 1
     mock_tmux.send_control_key.assert_awaited_once_with("@9", "Enter")
     mock_sm.wait_for_transcript_user_message.assert_awaited_once_with(
         "@9",
@@ -999,5 +1023,5 @@ async def test_refresh_session_map_retries_enter_when_resume_prompt_is_pending()
 
     assert ok is True
     mock_sm.wait_for_session_map_entry.assert_not_awaited()
-    assert mock_sm.wait_for_transcript_user_message.await_count == 1
+    assert mock_sm.wait_for_transcript_user_message.await_count == 2
     mock_tmux.send_control_key.assert_awaited_once_with("@9", "Enter")
