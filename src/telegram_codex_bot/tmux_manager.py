@@ -665,11 +665,25 @@ class TmuxManager:
                     window_id,
                     text,
                 ):
-                    logger.error(
-                        "Codex prompt still appears pending in window %s after retry",
+                    # Codex can briefly leave the submitted prompt rendered near the
+                    # footer before the working status is painted. Give the TUI one
+                    # final settle window so a successful submit is not reported as
+                    # a send failure.
+                    await asyncio.sleep(1.0)
+                    if await asyncio.to_thread(
+                        self._pane_still_has_pending_literal_input,
+                        window_id,
+                        text,
+                    ):
+                        logger.error(
+                            "Codex prompt still appears pending in window %s after retry",
+                            window_id,
+                        )
+                        return False
+                    logger.info(
+                        "Codex prompt cleared in window %s after submit settle grace",
                         window_id,
                     )
-                    return False
             return True
 
         # Other cases: special keys (literal=False) or no-enter

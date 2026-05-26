@@ -584,6 +584,34 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
             ["Escape", "Enter"],
         )
 
+    async def test_send_keys_allows_slow_submit_status_after_retry(self) -> None:
+        pane = _SendKeysDummyPane()
+        window = _SendKeysDummyWindow(pane)
+        session = _SendKeysDummySession(window)
+        manager = tmux_manager_module.TmuxManager(
+            session_name="telegram-codex-bot-test"
+        )
+
+        with (
+            patch.object(manager, "get_session", return_value=session),
+            patch(
+                "telegram_codex_bot.tmux_manager.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    args=["tmux", "send-keys"], returncode=0
+                ),
+            ) as run_mock,
+            patch.object(
+                manager,
+                "_pane_still_has_pending_literal_input",
+                side_effect=[True, True, False],
+            ),
+            patch.object(manager, "_pane_has_insert_overlay", return_value=False),
+        ):
+            ok = await manager.send_keys("@9", "hello")
+
+        self.assertTrue(ok)
+        self.assertEqual(run_mock.call_count, 2)
+
     async def test_send_keys_returns_false_when_retry_leaves_prompt_pending(
         self,
     ) -> None:
@@ -605,7 +633,7 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 manager,
                 "_pane_still_has_pending_literal_input",
-                side_effect=[True, True],
+                side_effect=[True, True, True],
             ),
             patch.object(manager, "_pane_has_insert_overlay", return_value=False),
         ):
