@@ -184,7 +184,6 @@ from .screenshot import text_to_image
 from .session import CodexSession, is_shell_pane_command, session_manager
 from .session_monitor import NewMessage
 from .terminal_parser import (
-    codex_input_text,
     extract_bash_output,
     is_codex_input_ready,
     is_interactive_ui,
@@ -1498,6 +1497,21 @@ async def _send_or_queue_agent_input(
         else:
             pane_text = capture.text or ""
             if is_interactive_ui(pane_text):
+                ok, control_message = await _send_control_to_agent(
+                    user_id,
+                    thread_id,
+                    window_id,
+                    "Escape",
+                )
+                if not ok:
+                    logger.warning(
+                        "Failed to interrupt Codex interactive prompt before "
+                        "queuing input (user=%d thread=%s window=%s): %s",
+                        user_id,
+                        thread_id,
+                        window_id,
+                        control_message,
+                    )
                 queued, depth, limit = _queue_agent_input(key, text)
                 if not queued:
                     result = (
@@ -1511,20 +1525,11 @@ async def _send_or_queue_agent_input(
                     _ensure_agent_input_drain_task(bot, key)
                     result = (
                         True,
-                        "Queued until Codex finishes the interactive prompt "
+                        "Interrupted Codex prompt and queued until Codex is ready "
                         f"({depth}/{limit})",
                         True,
                     )
             else:
-                pending_input = codex_input_text(pane_text)
-                if pending_input:
-                    result = (
-                        False,
-                        "Codex already has unsubmitted input in the prompt row. "
-                        "Use /interrupt or clear the tmux input before sending more.",
-                        False,
-                    )
-                    return result
                 success, message = await _send_message_to_agent(
                     user_id,
                     thread_id,
@@ -1596,18 +1601,6 @@ async def _drain_agent_input_queue(
             if not is_codex_input_ready(pane_text) or is_interactive_ui(pane_text):
                 await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
                 continue
-            pending_input = codex_input_text(pane_text)
-            if pending_input:
-                await _notify_queued_input_failure(
-                    bot,
-                    user_id,
-                    thread_id,
-                    "Codex already has unsubmitted input in the prompt row. "
-                    "Use /interrupt or clear the tmux input before sending more.",
-                )
-                queue.clear()
-                return
-
             item = queue[0]
             success, message = await _send_message_to_agent(
                 user_id,
@@ -1951,6 +1944,22 @@ async def forward_command_handler(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
     )
     await _safe_send_typing_action(update.message.chat, source="history_command")
+    is_clear_command = cc_slash.strip().lower() == "/clear"
+    if wid and not is_clear_command:
+        success, message, queued = await _send_or_queue_agent_input(
+            context.bot,
+            user.id,
+            thread_id,
+            wid,
+            cc_slash,
+        )
+        if not success:
+            await safe_reply(update.message, f"❌ {message}")
+            return
+        action = "Queued" if queued else "Sent"
+        await safe_reply(update.message, f"⚡ [{display}] {action}: {cc_slash}")
+        return
+
     result = await send_agent_message(user.id, thread_id, wid or "", cc_slash)
     if result is None:
         await safe_reply(update.message, "❌ No session bound to this topic.")
@@ -1962,8 +1971,9 @@ async def forward_command_handler(
     if result.ok:
         await safe_reply(update.message, f"⚡ [{display}] Sent: {cc_slash}")
         # If /clear command was sent, clear the session association
-        # so we can detect the new session after first message
-        if wid and cc_slash.strip().lower() == "/clear":
+        # so we can detect the new session after first message.  Keep /clear
+        # out of the bot-side queue so this state update remains synchronous.
+        if wid and is_clear_command:
             logger.info("Clearing session for window %s after /clear", display)
             session_manager.clear_window_session(wid)
 
@@ -2490,13 +2500,31 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    success, message = await _send_message_to_agent(user.id, thread_id, wid or "", text)
+    if wid:
+        success, message, queued = await _send_or_queue_agent_input(
+            context.bot,
+            user.id,
+            thread_id,
+            wid,
+            text,
+        )
+    else:
+        success, message = await _send_message_to_agent(
+            user.id,
+            thread_id,
+            "",
+            text,
+        )
+        queued = False
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
 
-    await safe_reply(update.message, f'🎤 "{text}"')
-    if wid:
+    await safe_reply(
+        update.message,
+        f'🎤 Queued: "{text}"' if queued else f'🎤 "{text}"',
+    )
+    if wid and not queued:
         await mark_window_working(context.bot, user.id, wid, thread_id)
 
 
@@ -2815,6 +2843,14 @@ async def _confirm_first_prompt_delivery(
     transcript_timeout: float = 5.0,
 ) -> bool:
     """Confirm that the first forwarded prompt reached the Codex transcript."""
+    transcript_ok = await session_manager.wait_for_transcript_user_message(
+        window_id,
+        text,
+        timeout=transcript_timeout,
+    )
+    if transcript_ok:
+        return True
+
     if await tmux_manager.prompt_still_pending(window_id, text):
         logger.warning(
             "Codex window %s still has the first prompt in the input row after session "
@@ -2847,11 +2883,6 @@ async def _confirm_first_prompt_delivery(
         )
         return True
 
-    transcript_ok = await session_manager.wait_for_transcript_user_message(
-        window_id,
-        text,
-        timeout=transcript_timeout,
-    )
     if transcript_ok:
         return True
 
