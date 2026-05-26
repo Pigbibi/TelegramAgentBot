@@ -1407,7 +1407,7 @@ def _agent_input_queue_max_size() -> int:
 
 def _agent_input_queue_max_wait_seconds() -> float:
     return max(
-        1.0,
+        0.0,
         float(getattr(config, "agent_input_queue_max_wait_seconds", 1800.0)),
     )
 
@@ -1430,6 +1430,9 @@ async def _drop_expired_agent_input(
     queue: deque[_QueuedAgentInput],
 ) -> None:
     max_wait = _agent_input_queue_max_wait_seconds()
+    if max_wait <= 0:
+        return
+
     now = time.monotonic()
     expired = 0
     while queue and now - queue[0].created_at >= max_wait:

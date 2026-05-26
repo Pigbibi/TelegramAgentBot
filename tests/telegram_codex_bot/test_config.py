@@ -83,6 +83,11 @@ class TestConfigValid:
         assert cfg.agent_input_queue_max_size == 3
         assert cfg.agent_input_queue_max_wait_seconds == 15.5
 
+    def test_agent_input_queue_expiry_can_be_disabled(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_CODEX_BOT_AGENT_INPUT_QUEUE_MAX_WAIT_SECONDS", "0")
+        cfg = Config()
+        assert cfg.agent_input_queue_max_wait_seconds == 0
+
     def test_account_rotation_defaults_disabled(self):
         cfg = Config()
         assert cfg.enable_account_rotation is False
