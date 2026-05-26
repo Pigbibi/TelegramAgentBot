@@ -383,39 +383,6 @@ class SessionMonitor:
         """Drop uncommitted offsets so undelivered transcript lines can replay."""
         self._deferred_state_updates.clear()
 
-    @staticmethod
-    def _drop_stale_backlog_before_latest_user(
-        session_id: str,
-        entries: list[Any],
-    ) -> list[Any]:
-        """Keep only messages at/after the newest user prompt in a backlog.
-
-        If the monitor falls behind while Codex keeps running, an unread slice can
-        contain assistant replies to older prompts followed by a newer user prompt.
-        Replaying those older assistant messages in Telegram makes the bot look as
-        if it answered the newest prompt with stale context.  Once a newer user
-        prompt is present in the same unread slice, older assistant output is no
-        longer useful as live bridge output; history remains available in Codex.
-        """
-        latest_user_index: int | None = None
-        for index, entry in enumerate(entries):
-            if (
-                getattr(entry, "role", None) == "user"
-                and getattr(entry, "content_type", None) == "text"
-            ):
-                latest_user_index = index
-
-        if latest_user_index is None or latest_user_index == 0:
-            return entries
-
-        logger.warning(
-            "Dropping %d stale transcript message(s) before latest user prompt "
-            "for session %s",
-            latest_user_index,
-            session_id,
-        )
-        return entries[latest_user_index:]
-
     async def check_for_updates(
         self,
         active_session_ids: set[str],
@@ -505,11 +472,6 @@ class SessionMonitor:
                     self._pending_tools[session_info.session_id] = remaining
                 else:
                     self._pending_tools.pop(session_info.session_id, None)
-
-                parsed_entries = self._drop_stale_backlog_before_latest_user(
-                    session_info.session_id,
-                    parsed_entries,
-                )
 
                 for entry in parsed_entries:
                     if not entry.text and not entry.image_data:
