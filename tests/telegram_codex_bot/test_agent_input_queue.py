@@ -20,9 +20,37 @@ def clear_agent_input_queue_state():
 
 
 @pytest.mark.asyncio
-async def test_send_or_queue_agent_input_queues_when_codex_is_busy(monkeypatch):
+async def test_send_or_queue_agent_input_sends_to_codex_native_queue_when_busy(
+    monkeypatch,
+):
     capture = SimpleNamespace(
         text="• Working (12s • esc to interrupt)\n\n  gpt-5.5 · ~/repo",
+        missing=False,
+    )
+    send_message = AsyncMock(return_value=(True, "Sent"))
+
+    monkeypatch.setattr(
+        bot_module, "capture_agent_output", AsyncMock(return_value=capture)
+    )
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+
+    ok, message, queued = await bot_module._send_or_queue_agent_input(
+        MagicMock(),
+        12345,
+        42,
+        "@1",
+        "next prompt",
+    )
+
+    assert (ok, message, queued) == (True, "Sent", False)
+    send_message.assert_awaited_once_with(12345, 42, "@1", "next prompt")
+    assert bot_module._agent_input_queues == {}
+
+
+@pytest.mark.asyncio
+async def test_send_or_queue_agent_input_queues_during_interactive_ui(monkeypatch):
+    capture = SimpleNamespace(
+        text="  Do you want to proceed?\n  Some permission details\n  Esc to cancel\n",
         missing=False,
     )
     send_message = AsyncMock()
@@ -43,14 +71,15 @@ async def test_send_or_queue_agent_input_queues_when_codex_is_busy(monkeypatch):
         12345,
         42,
         "@1",
-        "next prompt",
+        "answer after prompt",
     )
 
     assert ok is True
     assert queued is True
-    assert message.startswith("Queued until Codex is ready")
+    assert message.startswith("Queued until Codex finishes the interactive prompt")
     assert (
-        list(bot_module._agent_input_queues[(12345, 42, "@1")])[0].text == "next prompt"
+        list(bot_module._agent_input_queues[(12345, 42, "@1")])[0].text
+        == "answer after prompt"
     )
     assert ensured == [(12345, 42, "@1")]
     send_message.assert_not_awaited()

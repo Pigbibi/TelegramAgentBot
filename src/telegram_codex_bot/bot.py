@@ -1469,7 +1469,7 @@ async def _send_or_queue_agent_input(
     window_id: str,
     text: str,
 ) -> tuple[bool, str, bool]:
-    """Send now when Codex is ready, otherwise queue for the next ready prompt."""
+    """Send to Codex directly unless a pending interactive UI needs bot-side ordering."""
     key = _agent_input_key(user_id, thread_id, window_id)
     result: tuple[bool, str, bool]
     async with _agent_input_lock(key):
@@ -1496,24 +1496,24 @@ async def _send_or_queue_agent_input(
             result = False, "Window not found (may have been closed)", False
         else:
             pane_text = capture.text or ""
-            if not is_codex_input_ready(pane_text) or is_interactive_ui(pane_text):
+            if is_interactive_ui(pane_text):
                 queued, depth, limit = _queue_agent_input(key, text)
                 if not queued:
                     result = (
                         False,
-                        "Codex is still busy and the input queue is full "
+                        "Codex is waiting for an interactive choice and the input "
+                        "queue is full "
                         f"({limit} pending). Wait for it to finish or use /interrupt.",
                         False,
                     )
                 else:
                     _ensure_agent_input_drain_task(bot, key)
-                    status = parse_status_update(pane_text)
-                    message = (
-                        f"Queued until Codex is ready ({depth}/{limit}): {status}"
-                        if status
-                        else f"Queued until Codex is ready ({depth}/{limit})"
+                    result = (
+                        True,
+                        "Queued until Codex finishes the interactive prompt "
+                        f"({depth}/{limit})",
+                        True,
                     )
-                    result = True, message, True
             else:
                 success, message = await _send_message_to_agent(
                     user_id,
@@ -3278,14 +3278,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     pane_text = capture.text if capture and not capture.missing else None
     input_was_ready = is_codex_input_ready(pane_text or "")
     if pane_text and is_interactive_ui(pane_text):
-        # UI detected — show it to user, then send text (acts as Enter)
+        # UI detected: show it to the user before the text is bot-side queued.
         logger.info(
             "Detected pending interactive UI before sending text (user=%d, thread=%s)",
             user.id,
             thread_id,
         )
         await handle_interactive_ui(context.bot, user.id, wid, thread_id)
-        # Small delay to let UI render in Telegram before text arrives
+        # Small delay to let the Telegram controls render before queue feedback.
         await asyncio.sleep(0.3)
 
     if await session_manager.window_has_usage_limit_exceeded(wid):
