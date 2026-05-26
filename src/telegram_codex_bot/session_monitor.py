@@ -383,6 +383,61 @@ class SessionMonitor:
         """Drop uncommitted offsets so undelivered transcript lines can replay."""
         self._deferred_state_updates.clear()
 
+    @staticmethod
+    def _label_backlog_before_latest_user(
+        session_id: str,
+        entries: list[Any],
+    ) -> list[Any]:
+        """Label, but never drop, output that predates a newer prompt.
+
+        If the monitor falls behind, one unread slice may contain assistant output
+        for an older prompt followed by a newer user prompt and its later output.
+        Telegram cannot place the older output above the message the user already
+        sent, so label it explicitly instead of making it look like the answer to
+        the newest prompt.  This preserves Codex-native transcript completeness.
+        """
+        latest_user_index: int | None = None
+        for index, entry in enumerate(entries):
+            if (
+                getattr(entry, "role", None) == "user"
+                and getattr(entry, "content_type", None) == "text"
+            ):
+                latest_user_index = index
+
+        if latest_user_index is None or latest_user_index == 0:
+            return entries
+
+        labeled: list[Any] = []
+        labeled_count = 0
+        for index, entry in enumerate(entries):
+            if (
+                index < latest_user_index
+                and getattr(entry, "role", None) != "user"
+                and getattr(entry, "text", "")
+            ):
+                content_type = getattr(entry, "content_type", "text")
+                label = "↩️ Earlier Codex output"
+                if content_type not in ("text", "local_command"):
+                    label = "↩️ Earlier Codex process output"
+                labeled.append(
+                    replace(
+                        entry,
+                        text=f"{label} (before your latest message)\n\n{entry.text}",
+                    )
+                )
+                labeled_count += 1
+            else:
+                labeled.append(entry)
+
+        if labeled_count:
+            logger.warning(
+                "Labeled %d stale transcript message(s) before latest user prompt "
+                "for session %s",
+                labeled_count,
+                session_id,
+            )
+        return labeled
+
     async def check_for_updates(
         self,
         active_session_ids: set[str],
@@ -472,6 +527,11 @@ class SessionMonitor:
                     self._pending_tools[session_info.session_id] = remaining
                 else:
                     self._pending_tools.pop(session_info.session_id, None)
+
+                parsed_entries = self._label_backlog_before_latest_user(
+                    session_info.session_id,
+                    parsed_entries,
+                )
 
                 for entry in parsed_entries:
                     if not entry.text and not entry.image_data:
