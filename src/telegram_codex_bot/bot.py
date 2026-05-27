@@ -4589,6 +4589,28 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # --- Streaming response / notifications ---
 
 
+async def _mark_transcript_message_delivered(
+    user_id: int,
+    window_id: str,
+    msg: NewMessage,
+) -> None:
+    """Advance read offset only through the transcript bytes just delivered."""
+    if not window_id:
+        return
+
+    if msg.source_offset > 0:
+        session_manager.update_user_window_offset(user_id, window_id, msg.source_offset)
+        return
+
+    session = await session_manager.resolve_session_for_window(window_id)
+    if session and session.file_path:
+        try:
+            file_size = Path(session.file_path).stat().st_size
+            session_manager.update_user_window_offset(user_id, window_id, file_size)
+        except OSError:
+            pass
+
+
 async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     """Handle a new assistant message — enqueue for sequential processing.
 
@@ -4673,16 +4695,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             await asyncio.sleep(0.3)
             handled = await handle_interactive_ui(bot, user_id, wid, thread_id)
             if handled:
-                # Update user's read offset
-                session = await session_manager.resolve_session_for_window(wid)
-                if session and session.file_path:
-                    try:
-                        file_size = Path(session.file_path).stat().st_size
-                        session_manager.update_user_window_offset(
-                            user_id, wid, file_size
-                        )
-                    except OSError:
-                        pass
+                await _mark_transcript_message_delivered(user_id, wid, msg)
                 continue  # Don't send the normal tool_use message
             else:
                 # UI not rendered — clear the early-set mode
@@ -4741,19 +4754,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 wait_until_sent=True,
             )
 
-            # Update user's read offset to current file position
-            # This marks these messages as "read" for this user
-            session = (
-                await session_manager.resolve_session_for_window(wid)
-                if not is_remote_target
-                else None
-            )
-            if session and session.file_path:
-                try:
-                    file_size = Path(session.file_path).stat().st_size
-                    session_manager.update_user_window_offset(user_id, wid, file_size)
-                except OSError:
-                    pass
+            # Mark only the delivered transcript bytes as read for this user.
+            if not is_remote_target:
+                await _mark_transcript_message_delivered(user_id, wid, msg)
 
 
 # --- App lifecycle ---

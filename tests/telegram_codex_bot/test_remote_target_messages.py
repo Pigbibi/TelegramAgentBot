@@ -59,6 +59,39 @@ async def test_handle_new_message_routes_remote_target_session() -> None:
 
 
 @pytest.mark.asyncio
+async def test_handle_new_message_uses_source_offset_for_delivered_local_message() -> None:
+    bot = AsyncMock()
+    msg = NewMessage(
+        session_id="local-1",
+        text="local response",
+        is_complete=True,
+        source_offset=123,
+    )
+
+    with (
+        patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+        patch(
+            "telegram_codex_bot.bot.enqueue_content_message",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "telegram_codex_bot.bot.build_response_parts",
+            return_value=["local response"],
+        ),
+    ):
+        mock_sm.find_users_for_session = AsyncMock(return_value=[(12345, "@1", 42)])
+        mock_sm.find_users_for_target_session.return_value = []
+        mock_sm.resolve_session_for_window = AsyncMock()
+
+        from telegram_codex_bot.bot import handle_new_message
+
+        await handle_new_message(msg, bot)
+
+    mock_sm.update_user_window_offset.assert_called_once_with(12345, "@1", 123)
+    mock_sm.resolve_session_for_window.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_handle_new_message_renders_encrypted_reasoning_as_status() -> None:
     bot = AsyncMock()
     msg = NewMessage(

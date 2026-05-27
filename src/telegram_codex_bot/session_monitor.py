@@ -23,6 +23,7 @@ from .transcript_parser import PendingToolInfo, TranscriptParser
 from .utils import is_subagent_transcript, read_cwd_from_jsonl
 
 logger = logging.getLogger(__name__)
+_ENTRY_END_OFFSET_KEY = "_telegram_codex_bot_end_offset"
 
 
 @dataclass
@@ -46,6 +47,7 @@ class NewMessage:
     role: str = "assistant"
     tool_name: str | None = None
     image_data: list[tuple[str, bytes]] | None = None
+    source_offset: int = 0
 
 
 class SessionMonitor:
@@ -259,18 +261,20 @@ class SessionMonitor:
 
                 safe_offset = session.last_byte_offset
                 async for line in file_obj:
+                    line_end_offset = await file_obj.tell()
                     usage_limit_text = self._extract_usage_limit_message(line)
                     if usage_limit_text:
                         usage_limit_messages.append(usage_limit_text)
 
                     data = TranscriptParser.parse_line(line)
                     if data:
+                        data[_ENTRY_END_OFFSET_KEY] = line_end_offset
                         new_entries.append(data)
-                        safe_offset = await file_obj.tell()
+                        safe_offset = line_end_offset
                     elif not line.strip():
-                        safe_offset = await file_obj.tell()
+                        safe_offset = line_end_offset
                     elif self._is_complete_json_line(line):
-                        safe_offset = await file_obj.tell()
+                        safe_offset = line_end_offset
                     elif line.strip():
                         logger.warning(
                             "Partial JSONL line in session %s, will retry next cycle",
@@ -595,6 +599,7 @@ class SessionMonitor:
                             role=entry.role,
                             tool_name=entry.tool_name,
                             image_data=entry.image_data,
+                            source_offset=entry.source_offset,
                         )
                     )
 

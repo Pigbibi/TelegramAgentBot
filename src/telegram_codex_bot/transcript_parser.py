@@ -49,6 +49,7 @@ class ParsedEntry:
     image_data: list[tuple[str, bytes]] | None = (
         None  # For tool_result entries with images: (media_type, raw_bytes)
     )
+    source_offset: int = 0
 
 
 @dataclass
@@ -720,6 +721,12 @@ class TranscriptParser:
         """
         result: list[ParsedEntry] = []
         last_cmd_name: str | None = None
+        current_source_offset = 0
+
+        def append_result(entry: ParsedEntry) -> None:
+            if current_source_offset and entry.source_offset <= 0:
+                entry.source_offset = current_source_offset
+            result.append(entry)
         # Pending tool_use blocks keyed by id
         _carry_over = pending_tools is not None
         if pending_tools is None:
@@ -728,6 +735,12 @@ class TranscriptParser:
             pending_tools = dict(pending_tools)  # don't mutate caller's dict
 
         for data in entries:
+            raw_source_offset = data.get("_telegram_codex_bot_end_offset")
+            current_source_offset = (
+                raw_source_offset
+                if isinstance(raw_source_offset, int) and raw_source_offset > 0
+                else 0
+            )
             msg_type = cls.get_message_type(data)
             if msg_type not in ("user", "assistant"):
                 continue
@@ -762,7 +775,7 @@ class TranscriptParser:
                             formatted = f"```\n{text}\n```"
                         else:
                             formatted = f"`{text}`"
-                    result.append(
+                    append_result(
                         ParsedEntry(
                             role="assistant",
                             text=formatted,
@@ -785,7 +798,7 @@ class TranscriptParser:
                     if btype == "text":
                         t = block.get("text", "").strip()
                         if t and t != cls._NO_CONTENT_PLACEHOLDER:
-                            result.append(
+                            append_result(
                                 ParsedEntry(
                                     role="assistant",
                                     text=t,
@@ -809,7 +822,7 @@ class TranscriptParser:
                         if name == "ExitPlanMode" and isinstance(inp, dict):
                             plan = inp.get("plan", "")
                             if plan:
-                                result.append(
+                                append_result(
                                     ParsedEntry(
                                         role="assistant",
                                         text=plan,
@@ -830,7 +843,7 @@ class TranscriptParser:
                             )
                             # Also emit tool_use entry with tool_name for immediate handling
                             if should_emit_tool:
-                                result.append(
+                                append_result(
                                     ParsedEntry(
                                         role="assistant",
                                         text=summary,
@@ -841,7 +854,7 @@ class TranscriptParser:
                                     )
                                 )
                         elif should_emit_tool:
-                            result.append(
+                            append_result(
                                 ParsedEntry(
                                     role="assistant",
                                     text=summary,
@@ -856,7 +869,7 @@ class TranscriptParser:
                         thinking_text = block.get("thinking", "")
                         if thinking_text:
                             quoted = cls._format_expandable_quote(thinking_text)
-                            result.append(
+                            append_result(
                                 ParsedEntry(
                                     role="assistant",
                                     text=quoted,
@@ -865,7 +878,7 @@ class TranscriptParser:
                                 )
                             )
                         elif not has_text:
-                            result.append(
+                            append_result(
                                 ParsedEntry(
                                     role="assistant",
                                     text="(thinking)",
@@ -921,7 +934,7 @@ class TranscriptParser:
                                 entry_text += "\n⏹ Interrupted"
                             else:
                                 entry_text = "⏹ Interrupted"
-                            result.append(
+                            append_result(
                                 ParsedEntry(
                                     role="assistant",
                                     text=entry_text,
@@ -951,7 +964,7 @@ class TranscriptParser:
                                     )
                             else:
                                 entry_text += "\n  ⎿  Error"
-                            result.append(
+                            append_result(
                                 ParsedEntry(
                                     role="assistant",
                                     text=entry_text,
@@ -998,7 +1011,7 @@ class TranscriptParser:
                                 entry_text += "\n" + cls._format_tool_result_text(
                                     result_text, tool_name
                                 )
-                            result.append(
+                            append_result(
                                 ParsedEntry(
                                     role="assistant",
                                     text=entry_text,
@@ -1010,7 +1023,7 @@ class TranscriptParser:
                                 )
                             )
                         elif result_text or result_images:
-                            result.append(
+                            append_result(
                                 ParsedEntry(
                                     role="assistant",
                                     text=cls._format_tool_result_text(
@@ -1038,7 +1051,7 @@ class TranscriptParser:
                     if not cls._RE_LOCAL_STDOUT.search(
                         combined
                     ) and not cls._RE_COMMAND_NAME.search(combined):
-                        result.append(
+                        append_result(
                             ParsedEntry(
                                 role="user",
                                 text=combined,
@@ -1055,7 +1068,7 @@ class TranscriptParser:
             for tool_id, tool_info in pending_tools.items():
                 if cls._is_internal_tool_name(tool_info.tool_name):
                     continue
-                result.append(
+                append_result(
                     ParsedEntry(
                         role="assistant",
                         text=tool_info.summary,
