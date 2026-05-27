@@ -301,6 +301,48 @@ class TestReadNewLinesOffsetRecovery:
         assert tracked.last_byte_offset == jsonl_file.stat().st_size
 
     @pytest.mark.asyncio
+    async def test_stale_monitor_state_fast_forwards_from_user_window_offset(
+        self, monitor, tmp_path, make_jsonl_entry
+    ):
+        """A tracked session behind the delivered window offset should not replay."""
+        jsonl_file = tmp_path / "session.jsonl"
+        old_answer = make_jsonl_entry(msg_type="assistant", content="old answer")
+        jsonl_file.write_text(json.dumps(old_answer) + "\n", encoding="utf-8")
+        old_size = jsonl_file.stat().st_size
+        new_answer = make_jsonl_entry(msg_type="assistant", content="new answer")
+        with jsonl_file.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(new_answer) + "\n")
+
+        monitor.scan_projects = AsyncMock(
+            return_value=[
+                SessionInfo(
+                    session_id="session-stale-state",
+                    file_path=jsonl_file,
+                )
+            ]
+        )
+        monitor.state.update_session(
+            TrackedSession(
+                session_id="session-stale-state",
+                file_path=str(jsonl_file),
+                last_byte_offset=0,
+            )
+        )
+
+        state = SimpleNamespace(session_id="session-stale-state")
+        with patch("telegram_codex_bot.session.session_manager") as mock_sm:
+            mock_sm.has_bound_thread_for_session.return_value = True
+            mock_sm.iter_thread_bindings.return_value = [(12345, 42, "@1")]
+            mock_sm.get_window_state.return_value = state
+            mock_sm.user_window_offsets = {12345: {"@1": old_size}}
+            messages = await monitor.check_for_updates(set())
+
+        assert [message.text for message in messages] == ["new answer"]
+        tracked = monitor.state.get_session("session-stale-state")
+        assert tracked is not None
+        assert tracked.last_byte_offset == jsonl_file.stat().st_size
+
+    @pytest.mark.asyncio
     async def test_deferred_state_waits_for_delivery_ack(self, monitor, tmp_path):
         """Monitor offsets should not persist until Telegram delivery is acked."""
         jsonl_file = tmp_path / "session.jsonl"

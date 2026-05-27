@@ -432,9 +432,10 @@ class SessionMonitor:
     ) -> int:
         """Return a safe resume offset for an already-bound session.
 
-        When monitor_state loses a tracked session but Telegram has already
-        advanced a bound window offset, starting from byte 0 replays old output.
-        Reuse the largest per-user window offset for that bound session instead.
+        When monitor_state loses or falls behind a tracked session but Telegram
+        has already advanced a bound window offset, reading older bytes replays
+        old output.  Reuse the largest per-user window offset for that bound
+        session instead.
         """
         try:
             file_size = file_path.stat().st_size
@@ -506,6 +507,23 @@ class SessionMonitor:
 
                 if tracked.file_path != str(session_info.file_path):
                     tracked.file_path = str(session_info.file_path)
+
+                resume_offset = self._initial_offset_from_user_window_offsets(
+                    session_info.session_id,
+                    session_info.file_path,
+                    session_manager,
+                )
+                if resume_offset > tracked.last_byte_offset:
+                    logger.warning(
+                        "Fast-forwarded stale monitor offset for session %s from "
+                        "%d to user window offset %d",
+                        session_info.session_id,
+                        tracked.last_byte_offset,
+                        resume_offset,
+                    )
+                    tracked.last_byte_offset = resume_offset
+                    if save_state:
+                        self.state.update_session(tracked)
 
                 if project_path and not session_manager.has_bound_thread_for_session(
                     session_info.session_id
