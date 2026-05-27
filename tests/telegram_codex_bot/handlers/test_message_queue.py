@@ -474,6 +474,52 @@ async def test_status_update_preserves_pending_clear():
 
 
 @pytest.mark.asyncio
+async def test_priority_status_update_moves_ahead_of_pending_content():
+    """A just-submitted prompt should show Thinking before old queued output drains."""
+    queue: asyncio.Queue[message_queue.MessageTask] = asyncio.Queue()
+    lock = asyncio.Lock()
+
+    queue.put_nowait(
+        message_queue.MessageTask(
+            task_type="status_clear",
+            thread_id=42,
+        )
+    )
+    queue.put_nowait(
+        message_queue.MessageTask(
+            task_type="content",
+            parts=["old backlog"],
+            window_id="@1",
+            thread_id=42,
+        )
+    )
+
+    dropped = await message_queue._enqueue_coalesced_status_task(
+        queue,
+        message_queue.MessageTask(
+            task_type="status_update",
+            text="💭 Thinking (0s) · esc to interrupt",
+            window_id="@1",
+            thread_id=42,
+        ),
+        lock,
+        prefer_before_content=True,
+    )
+
+    items = []
+    while not queue.empty():
+        items.append(queue.get_nowait())
+        queue.task_done()
+
+    assert dropped == 0
+    assert [item.task_type for item in items] == [
+        "status_clear",
+        "status_update",
+        "content",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_status_updates_are_coalesced_behind_content(monkeypatch):
     """Queued Working timer edits should not bury real Codex output."""
     await message_queue.shutdown_workers()

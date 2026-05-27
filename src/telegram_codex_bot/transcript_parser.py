@@ -75,6 +75,7 @@ class TranscriptParser:
     # Magic string constants
     _NO_CONTENT_PLACEHOLDER = "(no content)"
     _INTERRUPTED_TEXT = "[Request interrupted by user for tool use]"
+    _INTERNAL_TOOL_NAMES = {"update_plan"}
     _MAX_SUMMARY_LENGTH = 200
     _AUTH_ERROR_HINT_MARKERS = (
         "could not be refreshed",
@@ -186,6 +187,12 @@ class TranscriptParser:
             "exec_command": "Bash",
             "write_stdin": "Wait",
         }.get(name, name)
+
+    @classmethod
+    def _is_internal_tool_name(cls, name: str | None) -> bool:
+        if not isinstance(name, str):
+            return False
+        return name.lower() in cls._INTERNAL_TOOL_NAMES
 
     @staticmethod
     def _clean_runtime_tool_output(output: str) -> str:
@@ -793,7 +800,10 @@ class TranscriptParser:
                         name = block.get("name", "unknown")
                         inp = block.get("input", {})
                         summary = cls.format_tool_use_summary(name, inp)
-                        should_emit_tool = name != "Bash" or config.show_bash_tool_calls
+                        is_internal_tool = cls._is_internal_tool_name(name)
+                        should_emit_tool = not is_internal_tool and (
+                            name != "Bash" or config.show_bash_tool_calls
+                        )
 
                         # ExitPlanMode: emit plan content as text before tool_use entry
                         if name == "ExitPlanMode" and isinstance(inp, dict):
@@ -894,6 +904,9 @@ class TranscriptParser:
                             tool_summary = tool_info.summary
                             tool_name = tool_info.tool_name
                             tool_input_data = tool_info.input_data
+
+                        if cls._is_internal_tool_name(tool_name):
+                            continue
 
                         if tool_name == "Bash" and not config.show_bash_tool_calls:
                             continue
@@ -1036,6 +1049,8 @@ class TranscriptParser:
         remaining_pending = dict(pending_tools)
         if not _carry_over:
             for tool_id, tool_info in pending_tools.items():
+                if cls._is_internal_tool_name(tool_info.tool_name):
+                    continue
                 result.append(
                     ParsedEntry(
                         role="assistant",

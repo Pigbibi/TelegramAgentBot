@@ -278,6 +278,7 @@ class TestStatusPollerSettingsDetection:
             "@5",
             "💭 Thinking (0s) · esc to interrupt",
             thread_id=42,
+            prefer_before_content=True,
         )
         assert status_polling._synthetic_working_starts[(1, 42, "@5")] == 100.0
 
