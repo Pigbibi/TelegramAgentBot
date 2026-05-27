@@ -384,17 +384,17 @@ class SessionMonitor:
         self._deferred_state_updates.clear()
 
     @staticmethod
-    def _label_backlog_before_latest_user(
+    def _drop_backlog_before_latest_user(
         session_id: str,
         entries: list[Any],
     ) -> list[Any]:
-        """Label, but never drop, output that predates a newer prompt.
+        """Drop stale assistant output that predates a newer prompt.
 
         If the monitor falls behind, one unread slice may contain assistant output
         for an older prompt followed by a newer user prompt and its later output.
         Telegram cannot place the older output above the message the user already
-        sent, so label it explicitly instead of making it look like the answer to
-        the newest prompt.  This preserves Codex-native transcript completeness.
+        sent, and replaying it after the new prompt is confusing, so keep the
+        newest user prompt and later output only.
         """
         latest_user_index: int | None = None
         for index, entry in enumerate(entries):
@@ -407,36 +407,53 @@ class SessionMonitor:
         if latest_user_index is None or latest_user_index == 0:
             return entries
 
-        labeled: list[Any] = []
-        labeled_count = 0
+        filtered: list[Any] = []
+        dropped_count = 0
         for index, entry in enumerate(entries):
-            if (
-                index < latest_user_index
-                and getattr(entry, "role", None) != "user"
-                and getattr(entry, "text", "")
-            ):
-                content_type = getattr(entry, "content_type", "text")
-                label = "↩️ Earlier Codex output"
-                if content_type not in ("text", "local_command"):
-                    label = "↩️ Earlier Codex process output"
-                labeled.append(
-                    replace(
-                        entry,
-                        text=f"{label} (before your latest message)\n\n{entry.text}",
-                    )
-                )
-                labeled_count += 1
-            else:
-                labeled.append(entry)
+            if index < latest_user_index and getattr(entry, "role", None) != "user":
+                dropped_count += 1
+                continue
+            filtered.append(entry)
 
-        if labeled_count:
+        if dropped_count:
             logger.warning(
-                "Labeled %d stale transcript message(s) before latest user prompt "
+                "Dropped %d stale transcript message(s) before latest user prompt "
                 "for session %s",
-                labeled_count,
+                dropped_count,
                 session_id,
             )
-        return labeled
+        return filtered
+
+    @staticmethod
+    def _initial_offset_from_user_window_offsets(
+        session_id: str,
+        file_path: Path,
+        session_manager: Any,
+    ) -> int:
+        """Return a safe resume offset for an already-bound session.
+
+        When monitor_state loses a tracked session but Telegram has already
+        advanced a bound window offset, starting from byte 0 replays old output.
+        Reuse the largest per-user window offset for that bound session instead.
+        """
+        try:
+            file_size = file_path.stat().st_size
+        except OSError:
+            file_size = 0
+
+        offsets: list[int] = []
+        for _user_id, _thread_id, window_id in session_manager.iter_thread_bindings():
+            state = session_manager.get_window_state(window_id)
+            if not _session_ids_match(getattr(state, "session_id", ""), session_id):
+                continue
+            for user_offsets in getattr(
+                session_manager, "user_window_offsets", {}
+            ).values():
+                offset = user_offsets.get(window_id)
+                if isinstance(offset, int) and 0 < offset <= file_size:
+                    offsets.append(offset)
+
+        return max(offsets, default=0)
 
     async def check_for_updates(
         self,
@@ -459,10 +476,22 @@ class SessionMonitor:
                 project_path = session_info.cwd
                 tracked = self.state.get_session(session_info.session_id)
                 if tracked is None:
+                    initial_offset = self._initial_offset_from_user_window_offsets(
+                        session_info.session_id,
+                        session_info.file_path,
+                        session_manager,
+                    )
+                    if initial_offset:
+                        logger.warning(
+                            "Initialized missing monitor offset for session %s from "
+                            "user window offset: %d",
+                            session_info.session_id,
+                            initial_offset,
+                        )
                     tracked = TrackedSession(
                         session_id=session_info.session_id,
                         file_path=str(session_info.file_path),
-                        last_byte_offset=0,
+                        last_byte_offset=initial_offset,
                     )
                     if save_state:
                         self.state.update_session(tracked)
@@ -528,7 +557,7 @@ class SessionMonitor:
                 else:
                     self._pending_tools.pop(session_info.session_id, None)
 
-                parsed_entries = self._label_backlog_before_latest_user(
+                parsed_entries = self._drop_backlog_before_latest_user(
                     session_info.session_id,
                     parsed_entries,
                 )
