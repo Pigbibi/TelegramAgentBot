@@ -84,6 +84,7 @@ class TranscriptParser:
         "token_invalidated",
     )
     _AUTH_ERROR_HINT = "Use /codexlogin to start a Codex device login from Telegram."
+    _ENCRYPTED_REASONING_PLACEHOLDER = "Working on it…"
 
     @classmethod
     def _format_error_message(cls, message: str) -> str:
@@ -186,6 +187,40 @@ class TranscriptParser:
         return output.strip()
 
     @classmethod
+    def _normalize_reasoning(cls, payload: dict, timestamp: str | None) -> dict | None:
+        """Normalize Codex reasoning into a visible thinking entry when allowed."""
+        if not config.show_commentary_messages:
+            return None
+
+        texts: list[str] = []
+        for key in ("summary", "content"):
+            texts.extend(cls._extract_nested_text(payload.get(key)))
+        thinking_text = "\n".join(
+            text.strip() for text in texts if text.strip()
+        ).strip()
+
+        if not thinking_text:
+            encrypted_content = payload.get("encrypted_content")
+            if not isinstance(encrypted_content, str) or not encrypted_content:
+                return None
+            thinking_text = cls._ENCRYPTED_REASONING_PLACEHOLDER
+
+        return {
+            "type": "assistant",
+            "role": "assistant",
+            "timestamp": timestamp,
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": thinking_text,
+                    }
+                ],
+            },
+        }
+
+    @classmethod
     def _normalize_function_call(
         cls, payload: dict, timestamp: str | None
     ) -> dict | None:
@@ -271,6 +306,8 @@ class TranscriptParser:
                 return None
 
             payload_type = payload.get("type")
+            if payload_type == "reasoning":
+                return cls._normalize_reasoning(payload, timestamp)
             if payload_type == "function_call":
                 return cls._normalize_function_call(payload, timestamp)
             if payload_type == "function_call_output":
