@@ -48,6 +48,7 @@ async def test_handle_new_message_routes_remote_target_session() -> None:
         window_id="",
         parts=["remote response"],
         tool_use_id=None,
+        tool_name=None,
         content_type="text",
         role="assistant",
         text="remote response",

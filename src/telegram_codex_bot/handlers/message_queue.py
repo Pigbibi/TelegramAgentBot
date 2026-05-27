@@ -18,6 +18,7 @@ Key components:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -74,6 +75,7 @@ class MessageTask:
     # content type fields
     parts: list[str] = field(default_factory=list)
     tool_use_id: str | None = None
+    tool_name: str | None = None
     content_type: str = "text"
     role: str = "assistant"
     thread_id: int | None = None  # Telegram topic thread_id for targeted send
@@ -93,6 +95,9 @@ _active_queue_keys: set[QueueKey] = set()
 # Map (tool_use_id, user_id, thread_id_or_0) -> telegram message_id
 # for editing tool_use messages with results
 _tool_msg_ids: dict[tuple[str, int, int], int] = {}
+_ephemeral_tool_cleanup_tasks: dict[tuple[str, int, int], asyncio.Task[None]] = {}
+_AUTO_CLEAR_TOOL_NAMES = {"Wait"}
+_AUTO_CLEAR_TOOL_VISIBLE_SECONDS = 20.0
 
 # Status message tracking:
 # (user_id, thread_id_or_0) -> (message_id, window_id, last_text, created_at)
@@ -313,6 +318,7 @@ async def _merge_content_tasks(
             window_id=first.window_id,
             parts=merged_parts,
             tool_use_id=first.tool_use_id,
+            tool_name=first.tool_name,
             content_type=first.content_type,
             role=first.role,
             thread_id=first.thread_id,
@@ -499,6 +505,73 @@ async def _send_task_images(bot: Bot, chat_id: int, task: MessageTask) -> None:
     )
 
 
+def _is_auto_clear_tool_task(task: MessageTask) -> bool:
+    """Return whether a tool notification should be automatically removed."""
+    return task.tool_name in _AUTO_CLEAR_TOOL_NAMES
+
+
+async def _delete_tool_message(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    *,
+    context: str,
+) -> None:
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except RetryAfter:
+        raise
+    except Exception as exc:
+        logger.debug("Failed to delete %s message %d: %s", context, message_id, exc)
+
+
+async def _auto_clear_tool_message(
+    bot: Bot,
+    chat_id: int,
+    tool_key: tuple[str, int, int],
+    message_id: int,
+) -> None:
+    try:
+        await asyncio.sleep(_AUTO_CLEAR_TOOL_VISIBLE_SECONDS)
+        if _tool_msg_ids.get(tool_key) != message_id:
+            return
+        _tool_msg_ids.pop(tool_key, None)
+        await _delete_tool_message(
+            bot,
+            chat_id,
+            message_id,
+            context="ephemeral tool",
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.debug("Auto-clear failed for tool message %s: %s", tool_key, exc)
+    finally:
+        current = asyncio.current_task()
+        if _ephemeral_tool_cleanup_tasks.get(tool_key) is current:
+            _ephemeral_tool_cleanup_tasks.pop(tool_key, None)
+
+
+def _schedule_auto_clear_tool_message(
+    bot: Bot,
+    chat_id: int,
+    tool_key: tuple[str, int, int],
+    message_id: int,
+) -> None:
+    old_task = _ephemeral_tool_cleanup_tasks.pop(tool_key, None)
+    if old_task and not old_task.done():
+        old_task.cancel()
+    _ephemeral_tool_cleanup_tasks[tool_key] = asyncio.create_task(
+        _auto_clear_tool_message(bot, chat_id, tool_key, message_id)
+    )
+
+
+def _cancel_auto_clear_tool_message(tool_key: tuple[str, int, int]) -> None:
+    task = _ephemeral_tool_cleanup_tasks.pop(tool_key, None)
+    if task and not task.done():
+        task.cancel()
+
+
 async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> None:
     """Process a content message task."""
     wid = task.window_id or ""
@@ -517,6 +590,18 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     if task.content_type == "tool_result" and task.tool_use_id:
         _tkey = (task.tool_use_id, user_id, tid)
         edit_msg_id = _tool_msg_ids.pop(_tkey, None)
+        _cancel_auto_clear_tool_message(_tkey)
+        if _is_auto_clear_tool_task(task):
+            if edit_msg_id is not None:
+                await _delete_tool_message(
+                    bot,
+                    chat_id,
+                    edit_msg_id,
+                    context="auto-clear tool result",
+                )
+            await _send_task_images(bot, chat_id, task)
+            await _check_and_send_status(bot, user_id, wid, task.thread_id)
+            return
         if edit_msg_id is not None:
             # Clear status message first
             await _do_clear_status_message(bot, user_id, tid)
@@ -619,7 +704,10 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
 
     # 3. Record tool_use message ID for later editing
     if last_msg_id and task.tool_use_id and task.content_type == "tool_use":
-        _tool_msg_ids[(task.tool_use_id, user_id, tid)] = last_msg_id
+        tool_key = (task.tool_use_id, user_id, tid)
+        _tool_msg_ids[tool_key] = last_msg_id
+        if _is_auto_clear_tool_task(task):
+            _schedule_auto_clear_tool_message(bot, chat_id, tool_key, last_msg_id)
 
     # 4. Send images if present (from tool_result with base64 image blocks)
     await _send_task_images(bot, chat_id, task)
@@ -901,6 +989,7 @@ async def enqueue_content_message(
     window_id: str,
     parts: list[str],
     tool_use_id: str | None = None,
+    tool_name: str | None = None,
     content_type: str = "text",
     role: str = "assistant",
     text: str | None = None,
@@ -924,6 +1013,7 @@ async def enqueue_content_message(
         window_id=window_id,
         parts=parts,
         tool_use_id=tool_use_id,
+        tool_name=tool_name,
         content_type=content_type,
         role=role,
         thread_id=thread_id,
@@ -1004,6 +1094,7 @@ def clear_tool_msg_ids_for_topic(user_id: int, thread_id: int | None = None) -> 
     ]
     for key in keys_to_remove:
         _tool_msg_ids.pop(key, None)
+        _cancel_auto_clear_tool_message(key)
 
 
 async def shutdown_workers(*, drain: bool = True) -> None:
@@ -1032,8 +1123,14 @@ async def shutdown_workers(*, drain: bool = True) -> None:
             await worker
         except asyncio.CancelledError:
             pass
+    for cleanup_task in list(_ephemeral_tool_cleanup_tasks.values()):
+        cleanup_task.cancel()
+    for cleanup_task in list(_ephemeral_tool_cleanup_tasks.values()):
+        with contextlib.suppress(asyncio.CancelledError):
+            await cleanup_task
     _queue_workers.clear()
     _message_queues.clear()
     _queue_locks.clear()
     _active_queue_keys.clear()
+    _ephemeral_tool_cleanup_tasks.clear()
     logger.info("Message queue workers stopped")

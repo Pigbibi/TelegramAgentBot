@@ -928,6 +928,7 @@ class TranscriptParser:
                                     content_type="tool_result",
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
+                                    tool_name=tool_name,
                                 )
                             )
                         elif is_error:
@@ -957,6 +958,7 @@ class TranscriptParser:
                                     content_type="tool_result",
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
+                                    tool_name=tool_name,
                                     image_data=result_images,
                                 )
                             )
@@ -1003,6 +1005,7 @@ class TranscriptParser:
                                     content_type="tool_result",
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
+                                    tool_name=tool_name,
                                     image_data=result_images,
                                 )
                             )
@@ -1018,6 +1021,7 @@ class TranscriptParser:
                                     content_type="tool_result",
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
+                                    tool_name=tool_name,
                                     image_data=result_images,
                                 )
                             )
@@ -1057,6 +1061,7 @@ class TranscriptParser:
                         text=tool_info.summary,
                         content_type="tool_use",
                         tool_use_id=tool_id,
+                        tool_name=tool_info.tool_name,
                     )
                 )
 
