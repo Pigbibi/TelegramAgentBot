@@ -2,7 +2,7 @@
 
 Provides a queue-based message processing system that ensures:
   - Messages are sent in receive order (FIFO)
-  - Status messages always follow content messages
+  - Status messages are coalesced, with fresh prompt status allowed ahead of backlog
   - Consecutive content messages can be merged for efficiency
   - Thread-aware sending: each MessageTask carries an optional thread_id
     for Telegram topic support
@@ -325,6 +325,8 @@ async def _enqueue_coalesced_status_task(
     queue: asyncio.Queue[MessageTask],
     task: MessageTask,
     lock: asyncio.Lock,
+    *,
+    prefer_before_content: bool = False,
 ) -> int:
     """Enqueue the latest status task, dropping stale pending status tasks.
 
@@ -339,7 +341,8 @@ async def _enqueue_coalesced_status_task(
 
     async with lock:
         items = _inspect_queue(queue)
-        kept_status_clear = False
+        kept_status_clear: MessageTask | None = None
+        preserved: list[MessageTask] = []
         for item in items:
             if item.task_type == "status_update":
                 queue.task_done()
@@ -347,22 +350,35 @@ async def _enqueue_coalesced_status_task(
                 continue
 
             if item.task_type == "status_clear":
-                if task.task_type == "status_update" and not kept_status_clear:
-                    queue.put_nowait(item)
-                    queue.task_done()
-                    kept_status_clear = True
+                if task.task_type == "status_update" and kept_status_clear is None:
+                    kept_status_clear = item
                     continue
 
                 queue.task_done()
                 dropped += 1
                 continue
 
+            preserved.append(item)
+
+        if prefer_before_content and task.task_type == "status_update":
+            ordered = []
+            if kept_status_clear is not None:
+                ordered.append(kept_status_clear)
+            ordered.append(task)
+            ordered.extend(preserved)
+        else:
+            ordered = []
+            if kept_status_clear is not None:
+                ordered.append(kept_status_clear)
+            ordered.extend(preserved)
+            ordered.append(task)
+
+        for item in ordered:
             queue.put_nowait(item)
             # Compensate for put_nowait increment. This task was already counted
             # when originally enqueued.
-            queue.task_done()
-
-        queue.put_nowait(task)
+            if item is not task:
+                queue.task_done()
 
     return dropped
 
@@ -924,6 +940,8 @@ async def enqueue_status_update(
     window_id: str,
     status_text: str | None,
     thread_id: int | None = None,
+    *,
+    prefer_before_content: bool = False,
 ) -> None:
     """Enqueue status update. Skipped if text unchanged or during flood control."""
     # Don't enqueue during flood control — they'd just be dropped
@@ -953,7 +971,12 @@ async def enqueue_status_update(
     else:
         task = MessageTask(task_type="status_clear", thread_id=thread_id)
 
-    dropped = await _enqueue_coalesced_status_task(queue, task, _queue_locks[key])
+    dropped = await _enqueue_coalesced_status_task(
+        queue,
+        task,
+        _queue_locks[key],
+        prefer_before_content=prefer_before_content,
+    )
     if dropped:
         logger.debug(
             "Coalesced %d queued status tasks for user=%d thread=%d",

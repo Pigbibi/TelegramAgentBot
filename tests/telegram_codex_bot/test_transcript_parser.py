@@ -134,6 +134,36 @@ class TestParseLine:
             "input": {"cmd": "pytest -q", "command": "pytest -q"},
         }
 
+    def test_update_plan_function_call_is_hidden_from_messages(self):
+        use_item = {
+            "type": "response_item",
+            "timestamp": "2026-05-26T00:00:00Z",
+            "payload": {
+                "type": "function_call",
+                "call_id": "call_plan",
+                "name": "update_plan",
+                "arguments": json.dumps({"plan": []}),
+            },
+        }
+        result_item = {
+            "type": "response_item",
+            "timestamp": "2026-05-26T00:00:01Z",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call_plan",
+                "output": "Plan updated",
+            },
+        }
+
+        entries = [
+            TranscriptParser.parse_line(json.dumps(use_item)),
+            TranscriptParser.parse_line(json.dumps(result_item)),
+        ]
+        result, pending = TranscriptParser.parse_entries([e for e in entries if e])
+
+        assert result == []
+        assert pending == {}
+
     def test_response_item_function_call_output_is_normalized_as_tool_result(self):
         item = {
             "type": "response_item",

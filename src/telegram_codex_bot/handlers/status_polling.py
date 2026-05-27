@@ -94,6 +94,7 @@ async def mark_window_working(
         window_id,
         status_text,
         thread_id=thread_id,
+        prefer_before_content=True,
     )
 
 
