@@ -64,6 +64,45 @@ class TestParseLine:
 
         assert TranscriptParser.parse_line(json.dumps(event)) is None
 
+    def test_response_item_encrypted_reasoning_renders_thinking_placeholder(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(config, "show_commentary_messages", True)
+        item = {
+            "type": "response_item",
+            "timestamp": "2026-05-26T00:00:00Z",
+            "payload": {
+                "type": "reasoning",
+                "summary": [],
+                "content": None,
+                "encrypted_content": "encrypted",
+            },
+        }
+
+        parsed = TranscriptParser.parse_line(json.dumps(item))
+
+        assert parsed is not None
+        assert parsed["type"] == "assistant"
+        block = parsed["message"]["content"][0]
+        assert block == {
+            "type": "thinking",
+            "thinking": "Working on it…",
+        }
+
+    def test_response_item_reasoning_respects_commentary_config(self, monkeypatch):
+        monkeypatch.setattr(config, "show_commentary_messages", False)
+        item = {
+            "type": "response_item",
+            "payload": {
+                "type": "reasoning",
+                "summary": [],
+                "content": None,
+                "encrypted_content": "encrypted",
+            },
+        }
+
+        assert TranscriptParser.parse_line(json.dumps(item)) is None
+
     def test_response_item_function_call_is_normalized_as_tool_use(self):
         item = {
             "type": "response_item",
@@ -451,6 +490,33 @@ class TestParseEntries:
         assert EXPQUOTE_START in result[0].text
         assert EXPQUOTE_END in result[0].text
         assert "reasoning here" in result[0].text
+
+    def test_response_item_encrypted_reasoning_pair_renders_thinking_entry(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(config, "show_commentary_messages", True)
+        parsed = TranscriptParser.parse_line(
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "reasoning",
+                        "summary": [],
+                        "content": None,
+                        "encrypted_content": "encrypted",
+                    },
+                }
+            )
+        )
+
+        result, pending = TranscriptParser.parse_entries([parsed])
+
+        assert not pending
+        assert len(result) == 1
+        assert result[0].content_type == "thinking"
+        assert EXPQUOTE_START in result[0].text
+        assert EXPQUOTE_END in result[0].text
+        assert "Working on it…" in result[0].text
 
     def test_bash_tool_calls_can_be_hidden_without_hiding_other_tools(
         self,
