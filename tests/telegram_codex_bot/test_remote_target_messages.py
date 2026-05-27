@@ -58,6 +58,44 @@ async def test_handle_new_message_routes_remote_target_session() -> None:
 
 
 @pytest.mark.asyncio
+async def test_handle_new_message_renders_encrypted_reasoning_as_status() -> None:
+    bot = AsyncMock()
+    msg = NewMessage(
+        session_id="local-1",
+        text="EXPQUOTE_STARTWorking on it…EXPQUOTE_END",
+        is_complete=True,
+        content_type="thinking",
+    )
+
+    with (
+        patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+        patch(
+            "telegram_codex_bot.bot.enqueue_status_update",
+            new_callable=AsyncMock,
+        ) as enqueue_status_update,
+        patch(
+            "telegram_codex_bot.bot.enqueue_content_message",
+            new_callable=AsyncMock,
+        ) as enqueue_content_message,
+    ):
+        mock_sm.find_users_for_session = AsyncMock(return_value=[(12345, "@1", 42)])
+        mock_sm.find_users_for_target_session.return_value = []
+
+        from telegram_codex_bot.bot import handle_new_message
+
+        await handle_new_message(msg, bot)
+
+    enqueue_status_update.assert_awaited_once_with(
+        bot,
+        12345,
+        "@1",
+        "💭 Thinking…\n◦ Working on it…",
+        thread_id=42,
+    )
+    enqueue_content_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_handle_new_message_reports_remote_usage_limit() -> None:
     bot = AsyncMock()
     msg = NewMessage(
