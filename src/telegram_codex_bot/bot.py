@@ -190,6 +190,7 @@ from .terminal_parser import (
     parse_status_update,
 )
 from .tmux_manager import tmux_manager
+from .transcript_parser import TranscriptParser
 from .transcribe import close_client as close_transcribe_client
 from .transcribe import transcribe_voice
 from .utils import app_dir, sanitize_forward_text
@@ -4690,6 +4691,22 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         # Any non-interactive message means the interaction is complete — delete the UI message
         if not is_remote_target and get_interactive_msg_id(user_id, thread_id):
             await clear_interactive_msg(user_id, bot, thread_id)
+
+        # Show encrypted-only reasoning as an ephemeral status bubble, not a
+        # persistent Telegram content message. It will be edited/deleted by the
+        # normal status lifecycle when real output arrives.
+        if (
+            msg.content_type == "thinking"
+            and TranscriptParser.is_encrypted_reasoning_placeholder(msg.text)
+        ):
+            await enqueue_status_update(
+                bot,
+                user_id,
+                wid,
+                "💭 Thinking…\n◦ Working on it…",
+                thread_id=thread_id,
+            )
+            continue
 
         # Skip tool call notifications when TELEGRAM_CODEX_BOT_SHOW_TOOL_CALLS=false
         if not config.show_tool_calls and msg.content_type in (

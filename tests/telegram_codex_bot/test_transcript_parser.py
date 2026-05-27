@@ -89,6 +89,13 @@ class TestParseLine:
             "thinking": "Working on it…",
         }
 
+    def test_detects_encrypted_reasoning_placeholder_with_or_without_quote(self):
+        assert TranscriptParser.is_encrypted_reasoning_placeholder("Working on it…")
+        assert TranscriptParser.is_encrypted_reasoning_placeholder(
+            f"{EXPQUOTE_START}Working on it…{EXPQUOTE_END}"
+        )
+        assert not TranscriptParser.is_encrypted_reasoning_placeholder("real reasoning")
+
     def test_response_item_reasoning_respects_commentary_config(self, monkeypatch):
         monkeypatch.setattr(config, "show_commentary_messages", False)
         item = {

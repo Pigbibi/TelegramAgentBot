@@ -87,6 +87,16 @@ class TranscriptParser:
     _ENCRYPTED_REASONING_PLACEHOLDER = "Working on it…"
 
     @classmethod
+    def is_encrypted_reasoning_placeholder(cls, text: str) -> bool:
+        """Return whether text is the synthetic encrypted-reasoning placeholder."""
+        stripped = (
+            text.replace(cls.EXPANDABLE_QUOTE_START, "")
+            .replace(cls.EXPANDABLE_QUOTE_END, "")
+            .strip()
+        )
+        return stripped == cls._ENCRYPTED_REASONING_PLACEHOLDER
+
+    @classmethod
     def _format_error_message(cls, message: str) -> str:
         """Format a Codex runtime error for Telegram."""
         formatted = f"⚠️ Codex error: {message.strip()}"
