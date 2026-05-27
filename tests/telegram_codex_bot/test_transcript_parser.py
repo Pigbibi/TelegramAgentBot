@@ -676,6 +676,37 @@ class TestParseEntries:
         assert [entry.content_type for entry in result] == ["tool_use"]
         assert result[0].text == "**Wait**(background terminal)"
 
+    def test_wait_function_call_output_keeps_tool_name_for_auto_cleanup(self):
+        lines = [
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "call_id": "call_2",
+                        "name": "write_stdin",
+                        "arguments": json.dumps({"session_id": 123, "chars": ""}),
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "call_2",
+                        "output": "Chunk ID: done\nWall time: 0.0\nOutput:\nall done",
+                    },
+                }
+            ),
+        ]
+        entries = [TranscriptParser.parse_line(line) for line in lines]
+        result, pending = TranscriptParser.parse_entries([e for e in entries if e])
+
+        assert not pending
+        assert [entry.content_type for entry in result] == ["tool_use", "tool_result"]
+        assert result[1].tool_name == "Wait"
+
     def test_local_command_with_stdout(self, make_jsonl_entry, make_text_block):
         xml = (
             "<command-name>/status</command-name>"

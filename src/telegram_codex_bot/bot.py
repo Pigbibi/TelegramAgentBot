@@ -4732,6 +4732,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 window_id=wid,
                 parts=parts,
                 tool_use_id=msg.tool_use_id,
+                tool_name=msg.tool_name,
                 content_type=msg.content_type,
                 role=msg.role,
                 text=msg.text,

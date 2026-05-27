@@ -520,6 +520,93 @@ async def test_priority_status_update_moves_ahead_of_pending_content():
 
 
 @pytest.mark.asyncio
+async def test_wait_tool_use_schedules_auto_clear(monkeypatch):
+    """Background-terminal Wait bubbles should be short-lived."""
+    message_queue._tool_msg_ids.clear()
+    scheduled: list[tuple[int, tuple[str, int, int], int]] = []
+
+    async def fake_send_with_fallback(bot, chat_id, text, **kwargs):
+        return SimpleNamespace(message_id=987)
+
+    monkeypatch.setattr(message_queue, "send_with_fallback", fake_send_with_fallback)
+    monkeypatch.setattr(
+        message_queue,
+        "_schedule_auto_clear_tool_message",
+        lambda bot, chat_id, tool_key, message_id: scheduled.append(
+            (chat_id, tool_key, message_id)
+        ),
+    )
+    monkeypatch.setattr(message_queue, "_check_and_send_status", AsyncMock())
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+
+    try:
+        await message_queue._process_content_task(
+            AsyncMock(),
+            1,
+            message_queue.MessageTask(
+                task_type="content",
+                content_type="tool_use",
+                tool_use_id="call_wait",
+                tool_name="Wait",
+                window_id="@1",
+                parts=["**Wait**(background terminal)"],
+                thread_id=42,
+            ),
+        )
+
+        tool_key = ("call_wait", 1, 42)
+        assert message_queue._tool_msg_ids[tool_key] == 987
+        assert scheduled == [(-100123, tool_key, 987)]
+    finally:
+        message_queue._tool_msg_ids.clear()
+        message_queue._ephemeral_tool_cleanup_tasks.clear()
+
+
+@pytest.mark.asyncio
+async def test_wait_tool_result_deletes_prompt_instead_of_editing(monkeypatch):
+    """Wait results clean up the prompt bubble instead of becoming permanent output."""
+    message_queue._tool_msg_ids.clear()
+    tool_key = ("call_wait", 1, 42)
+    message_queue._tool_msg_ids[tool_key] = 987
+    bot = AsyncMock()
+
+    monkeypatch.setattr(message_queue, "_check_and_send_status", AsyncMock())
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+
+    try:
+        await message_queue._process_content_task(
+            bot,
+            1,
+            message_queue.MessageTask(
+                task_type="content",
+                content_type="tool_result",
+                tool_use_id="call_wait",
+                tool_name="Wait",
+                window_id="@1",
+                parts=[
+                    "**Wait**(background terminal)\n  ⎿  Wrote data/output/results.csv"
+                ],
+                thread_id=42,
+            ),
+        )
+
+        bot.delete_message.assert_awaited_once_with(chat_id=-100123, message_id=987)
+        bot.edit_message_text.assert_not_awaited()
+        assert tool_key not in message_queue._tool_msg_ids
+    finally:
+        message_queue._tool_msg_ids.clear()
+        message_queue._ephemeral_tool_cleanup_tasks.clear()
+
+
+@pytest.mark.asyncio
 async def test_status_updates_are_coalesced_behind_content(monkeypatch):
     """Queued Working timer edits should not bury real Codex output."""
     await message_queue.shutdown_workers()
