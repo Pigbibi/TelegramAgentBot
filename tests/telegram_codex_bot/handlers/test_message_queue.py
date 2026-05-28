@@ -201,6 +201,7 @@ async def test_status_message_not_modified_keeps_existing_status(monkeypatch):
         "Message is not modified: specified new message content and reply markup "
         "are exactly the same as a current content and reply markup of the message"
     )
+    monkeypatch.setattr(message_queue.config, "status_repost_interval", 0.0)
     monkeypatch.setattr(
         message_queue.session_manager,
         "resolve_chat_id",
@@ -236,6 +237,55 @@ async def test_status_message_not_modified_keeps_existing_status(monkeypatch):
             123.0,
         )
         send_status.assert_not_awaited()
+    finally:
+        message_queue._status_msg_info.clear()
+
+
+@pytest.mark.asyncio
+async def test_long_running_status_is_reposted_as_fresh_message(monkeypatch):
+    """Long Thinking updates should bump the topic instead of only editing."""
+    message_queue._status_msg_info.clear()
+
+    bot = AsyncMock()
+    monkeypatch.setattr(message_queue.config, "status_repost_interval", 60.0)
+    monkeypatch.setattr(message_queue.time, "monotonic", lambda: 200.0)
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+
+    async def fake_send_with_fallback(bot, chat_id, text, **kwargs):
+        return SimpleNamespace(message_id=654)
+
+    monkeypatch.setattr(message_queue, "send_with_fallback", fake_send_with_fallback)
+    message_queue._status_msg_info[(1, 42)] = (
+        321,
+        "@4",
+        "💭 Thinking (59s) · esc to interrupt",
+        100.0,
+    )
+
+    try:
+        await message_queue._process_status_update_task(
+            bot,
+            1,
+            message_queue.MessageTask(
+                task_type="status_update",
+                text="💭 Thinking (1m 40s) · esc to interrupt",
+                window_id="@4",
+                thread_id=42,
+            ),
+        )
+
+        bot.delete_message.assert_awaited_once_with(chat_id=-100123, message_id=321)
+        bot.edit_message_text.assert_not_awaited()
+        assert message_queue._status_msg_info[(1, 42)] == (
+            654,
+            "@4",
+            "💭 Thinking (1m 40s) · esc to interrupt",
+            200.0,
+        )
     finally:
         message_queue._status_msg_info.clear()
 

@@ -217,6 +217,7 @@ TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES=true
 | `TELEGRAM_CODEX_BOT_MONITOR_POLL_INTERVAL` | `2.0` | 轮询间隔，单位秒 |
 | `TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION` | `false` | 遇到 `usage_limit_exceeded` 后是否自动切到下一个已保存账号 |
 | `TELEGRAM_CODEX_BOT_STATUS_POLL_INTERVAL` | `1.0` | 终端状态轮询间隔，单位秒；用于持续编辑 Telegram 里的 `Working (...)` 状态 |
+| `TELEGRAM_CODEX_BOT_STATUS_REPOST_INTERVAL` | `60.0` | 长时间 `Thinking` 每隔多少秒重发一次，以便 Telegram topic 显示为活跃；设为 `0` 则只原地编辑 |
 | `TELEGRAM_CODEX_BOT_AGENT_INPUT_QUEUE_MAX_SIZE` | `20` | Codex 显示交互提示时，每个会话最多由 bot 暂存多少条 Telegram 输入；普通 busy 状态会直接发给 Codex |
 | `TELEGRAM_CODEX_BOT_AGENT_INPUT_QUEUE_MAX_WAIT_SECONDS` | `1800` | bot 暂存输入最多等待多少秒；设为 `0` 可禁用过期 |
 | `TELEGRAM_CODEX_BOT_AUTO_UPDATE` | `false` | 启动时自动检查并 fast-forward 更新 git 源码安装 |

@@ -221,6 +221,7 @@ be committed.
 | `TELEGRAM_CODEX_BOT_MONITOR_POLL_INTERVAL` | `2.0` | Poll interval in seconds |
 | `TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION` | `false` | Automatically rotate to the next saved account after `usage_limit_exceeded` |
 | `TELEGRAM_CODEX_BOT_STATUS_POLL_INTERVAL` | `1.0` | Terminal status polling interval in seconds; active `Working (...)` status edits keep Telegram refreshed |
+| `TELEGRAM_CODEX_BOT_STATUS_REPOST_INTERVAL` | `60.0` | Re-send long-running `Thinking` status after this many seconds so Telegram topics visibly stay active; set `0` to only edit in place |
 | `TELEGRAM_CODEX_BOT_AGENT_INPUT_QUEUE_MAX_SIZE` | `20` | Maximum bot-held inputs per session while Codex shows an interactive prompt; regular busy-state inputs are sent to Codex directly |
 | `TELEGRAM_CODEX_BOT_AGENT_INPUT_QUEUE_MAX_WAIT_SECONDS` | `1800` | Drop bot-held inputs after this many seconds if Codex never becomes ready; set `0` to disable expiry |
 | `TELEGRAM_CODEX_BOT_AUTO_UPDATE` | `false` | On startup, check and fast-forward git source installs |
