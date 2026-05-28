@@ -162,6 +162,10 @@ class Config:
         self.status_poll_interval = float(
             os.getenv("TELEGRAM_CODEX_BOT_STATUS_POLL_INTERVAL", "1.0")
         )
+        self.status_repost_interval = max(
+            0.0,
+            float(os.getenv("TELEGRAM_CODEX_BOT_STATUS_REPOST_INTERVAL", "60.0")),
+        )
         self.agent_input_queue_max_size = max(
             1,
             int(os.getenv("TELEGRAM_CODEX_BOT_AGENT_INPUT_QUEUE_MAX_SIZE", "20")),

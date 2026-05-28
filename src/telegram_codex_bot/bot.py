@@ -207,6 +207,7 @@ GET_UPDATES_CONNECT_TIMEOUT_SECONDS = 10.0
 GET_UPDATES_READ_TIMEOUT_SECONDS = POLL_TIMEOUT_SECONDS + 5.0
 GET_UPDATES_WRITE_TIMEOUT_SECONDS = 10.0
 GET_UPDATES_POOL_TIMEOUT_SECONDS = 5.0
+BACKGROUND_WAIT_TOOL_STATUS_TEXT = "💭 Thinking…\n◦ Working in background terminal…"
 
 # Active backend and local session monitor reference.
 agent_backend: AgentBackend | None = None
@@ -4719,6 +4720,23 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 "💭 Thinking…\n◦ Working on it…",
                 thread_id=thread_id,
             )
+            continue
+
+        # Runtime write_stdin events are displayed as Wait(background terminal).
+        # They are progress heartbeats rather than assistant output, so keep
+        # them behind the single ephemeral Thinking status instead of sending
+        # persistent Telegram bubbles that can outlive the run.
+        if msg.tool_name == "Wait" and msg.content_type in ("tool_use", "tool_result"):
+            if msg.content_type == "tool_use":
+                await enqueue_status_update(
+                    bot,
+                    user_id,
+                    wid,
+                    BACKGROUND_WAIT_TOOL_STATUS_TEXT,
+                    thread_id=thread_id,
+                )
+            if not is_remote_target:
+                await _mark_transcript_message_delivered(user_id, wid, msg)
             continue
 
         # Skip tool call notifications when TELEGRAM_CODEX_BOT_SHOW_TOOL_CALLS=false

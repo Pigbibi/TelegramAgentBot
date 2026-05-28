@@ -112,6 +112,16 @@ _STATUS_MESSAGES_FILE = config.config_dir / "status_messages.json"
 _MIN_WORKING_STATUS_VISIBLE_SECONDS = 1.5
 
 
+def _should_repost_status(status_text: str, created_at: float) -> bool:
+    """Return whether an active status should be re-sent as a fresh message."""
+    interval = getattr(config, "status_repost_interval", 60.0)
+    return (
+        interval > 0
+        and is_active_working_status(status_text)
+        and time.monotonic() - created_at >= interval
+    )
+
+
 def _status_key_to_str(key: StatusKey) -> str:
     return f"{key[0]}:{key[1]}"
 
@@ -881,6 +891,12 @@ async def _process_status_update_task(
         elif status_text == last_text:
             # Same content, skip edit
             return
+        elif _should_repost_status(status_text, created_at):
+            # Telegram clients do not reliably surface edited messages in forum
+            # topics. For long-running Codex work, periodically send a fresh
+            # status bubble so the topic visibly stays active.
+            await _do_clear_status_message(bot, user_id, tid)
+            await _do_send_status_message(bot, user_id, tid, wid, status_text)
         else:
             # Same window, text changed - edit in place
             # Send typing indicator when Codex is working
