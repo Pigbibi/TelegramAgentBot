@@ -4739,7 +4739,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             # Enqueue content message task
             # Note: tool_result editing is handled inside _process_content_task
             # to ensure sequential processing with tool_use message sending
-            await enqueue_content_message(
+            delivered = await enqueue_content_message(
                 bot=bot,
                 user_id=user_id,
                 window_id=wid,
@@ -4755,6 +4755,18 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             )
 
             # Mark only the delivered transcript bytes as read for this user.
+            if not delivered:
+                logger.warning(
+                    "Transcript message was not delivered; leaving offset unchanged: "
+                    "session=%s user=%d thread=%s window_id=%s content_type=%s",
+                    msg.session_id,
+                    user_id,
+                    thread_id,
+                    wid,
+                    msg.content_type,
+                )
+                continue
+
             if not is_remote_target:
                 await _mark_transcript_message_delivered(user_id, wid, msg)
 
