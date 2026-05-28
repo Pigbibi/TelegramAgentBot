@@ -80,6 +80,11 @@ class MessageTask:
     role: str = "assistant"
     thread_id: int | None = None  # Telegram topic thread_id for targeted send
     image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
+    delivery_future: asyncio.Future[bool] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
 
 # Per-target message queues and worker tasks.
@@ -251,6 +256,8 @@ def _can_merge_tasks(base: MessageTask, candidate: MessageTask) -> bool:
         return False
     if candidate.task_type != "content":
         return False
+    if candidate.delivery_future is not None:
+        return False
     # tool_use/tool_result break merge chain
     # - tool_use: will be edited later by tool_result
     # - tool_result: edits previous message, merging would cause order issues
@@ -322,6 +329,7 @@ async def _merge_content_tasks(
             content_type=first.content_type,
             role=first.role,
             thread_id=first.thread_id,
+            delivery_future=first.delivery_future,
         ),
         merge_count,
     )
@@ -404,6 +412,7 @@ async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> 
         try:
             task = await queue.get()
             _active_queue_keys.add(key)
+            delivery_success: bool | None = None
             try:
                 # Flood control: drop status, wait for content
                 flood_end = _flood_until.get(user_id, 0)
@@ -434,7 +443,9 @@ async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> 
                         # Mark merged tasks as done
                         for _ in range(merge_count):
                             queue.task_done()
-                    await _process_content_task(bot, user_id, merged_task)
+                    delivery_success = await _process_content_task(
+                        bot, user_id, merged_task
+                    )
                 elif task.task_type == "status_update":
                     await _process_status_update_task(bot, user_id, task)
                 elif task.task_type == "status_clear":
@@ -463,6 +474,8 @@ async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> 
             except Exception as e:
                 logger.error(f"Error processing message task for user {user_id}: {e}")
             finally:
+                if task.delivery_future is not None and not task.delivery_future.done():
+                    task.delivery_future.set_result(bool(delivery_success))
                 _active_queue_keys.discard(key)
                 queue.task_done()
         except asyncio.CancelledError:
@@ -488,10 +501,10 @@ def _send_kwargs(thread_id: int | None) -> dict[str, int]:
     return {}
 
 
-async def _send_task_images(bot: Bot, chat_id: int, task: MessageTask) -> None:
+async def _send_task_images(bot: Bot, chat_id: int, task: MessageTask) -> bool:
     """Send images attached to a task, if any."""
     if not task.image_data:
-        return
+        return True
     logger.info(
         "Sending %d image(s) in thread %s",
         len(task.image_data),
@@ -503,6 +516,7 @@ async def _send_task_images(bot: Bot, chat_id: int, task: MessageTask) -> None:
         task.image_data,
         **_send_kwargs(task.thread_id),  # type: ignore[arg-type]
     )
+    return True
 
 
 def _is_auto_clear_tool_task(task: MessageTask) -> bool:
@@ -572,7 +586,7 @@ def _cancel_auto_clear_tool_message(tool_key: tuple[str, int, int]) -> None:
         task.cancel()
 
 
-async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> None:
+async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> bool:
     """Process a content message task."""
     wid = task.window_id or ""
     tid = task.thread_id or 0
@@ -601,7 +615,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 )
             await _send_task_images(bot, chat_id, task)
             await _check_and_send_status(bot, user_id, wid, task.thread_id)
-            return
+            return True
         if edit_msg_id is not None:
             # Clear status message first
             await _do_clear_status_message(bot, user_id, tid)
@@ -624,7 +638,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 )
                 await _send_task_images(bot, chat_id, task)
                 await _check_and_send_status(bot, user_id, wid, task.thread_id)
-                return
+                return True
             except RetryAfter:
                 raise
             except Exception:
@@ -646,7 +660,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                     )
                     await _send_task_images(bot, chat_id, task)
                     await _check_and_send_status(bot, user_id, wid, task.thread_id)
-                    return
+                    return True
                 except RetryAfter:
                     raise
                 except Exception:
@@ -656,7 +670,10 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     # 2. Send content messages, converting non-working status to first content part
     first_part = True
     last_msg_id: int | None = None
+    attempted_text_delivery = False
+    text_delivery_failed = False
     for part in task.parts:
+        attempted_text_delivery = True
         sent = None
 
         # For first part, try to convert status message to content (edit instead of delete)
@@ -701,6 +718,18 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 user_id,
                 tid,
             )
+            text_delivery_failed = True
+
+    if text_delivery_failed or (attempted_text_delivery and last_msg_id is None):
+        logger.warning(
+            "Content delivery failed; preserving status and transcript offset: "
+            "user=%d thread=%d window_id=%s content_type=%s",
+            user_id,
+            tid,
+            wid,
+            task.content_type,
+        )
+        return False
 
     # 3. Record tool_use message ID for later editing
     if last_msg_id and task.tool_use_id and task.content_type == "tool_use":
@@ -720,6 +749,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     if task.role == "assistant":
         mark_output_seen(user_id, task.thread_id, wid)
     await _check_and_send_status(bot, user_id, wid, task.thread_id)
+    return True
 
 
 async def _clear_working_status_after_min_visible(
@@ -996,7 +1026,7 @@ async def enqueue_content_message(
     thread_id: int | None = None,
     image_data: list[tuple[str, bytes]] | None = None,
     wait_until_sent: bool = False,
-) -> None:
+) -> bool:
     """Enqueue a content message task."""
     logger.debug(
         "Enqueue content: user=%d, thread=%s, window_id=%s, content_type=%s",
@@ -1006,6 +1036,9 @@ async def enqueue_content_message(
         content_type,
     )
     queue = get_or_create_queue(bot, user_id, thread_id)
+    delivery_future: asyncio.Future[bool] | None = None
+    if wait_until_sent:
+        delivery_future = asyncio.get_running_loop().create_future()
 
     task = MessageTask(
         task_type="content",
@@ -1018,10 +1051,12 @@ async def enqueue_content_message(
         role=role,
         thread_id=thread_id,
         image_data=image_data,
+        delivery_future=delivery_future,
     )
     queue.put_nowait(task)
-    if wait_until_sent:
-        await queue.join()
+    if delivery_future is not None:
+        return await delivery_future
+    return True
 
 
 async def enqueue_status_update(

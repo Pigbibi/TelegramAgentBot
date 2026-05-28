@@ -727,6 +727,7 @@ class TranscriptParser:
             if current_source_offset and entry.source_offset <= 0:
                 entry.source_offset = current_source_offset
             result.append(entry)
+
         # Pending tool_use blocks keyed by id
         _carry_over = pending_tools is not None
         if pending_tools is None:

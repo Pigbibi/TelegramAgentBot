@@ -329,6 +329,53 @@ async def test_working_status_is_not_converted_to_content(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_failed_content_send_preserves_working_status_and_reports_failure(
+    monkeypatch,
+):
+    """If Telegram does not accept content, keep Thinking and report failure."""
+    await message_queue.shutdown_workers()
+    message_queue._status_msg_info.clear()
+    bot = AsyncMock()
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+    monkeypatch.setattr(
+        message_queue, "send_with_fallback", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(message_queue, "_check_and_send_status", AsyncMock())
+    message_queue._status_msg_info[(1, 42)] = (
+        321,
+        "@4",
+        "💭 Thinking (0s) · esc to interrupt",
+        100.0,
+    )
+
+    try:
+        delivered = await message_queue.enqueue_content_message(
+            bot=bot,
+            user_id=1,
+            window_id="@4",
+            parts=["final content"],
+            thread_id=42,
+            wait_until_sent=True,
+        )
+
+        assert delivered is False
+        bot.delete_message.assert_not_awaited()
+        assert message_queue._status_msg_info[(1, 42)] == (
+            321,
+            "@4",
+            "💭 Thinking (0s) · esc to interrupt",
+            100.0,
+        )
+    finally:
+        await message_queue.shutdown_workers()
+        message_queue._status_msg_info.clear()
+
+
+@pytest.mark.asyncio
 async def test_working_status_clear_waits_for_minimum_visible_time(monkeypatch):
     """Very fast replies should leave Thinking visible briefly before deletion."""
     message_queue._status_msg_info.clear()
