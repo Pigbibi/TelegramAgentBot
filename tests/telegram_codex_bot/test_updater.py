@@ -4,10 +4,14 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+import pytest
+
 from telegram_codex_bot.updater import (
     CodexUpdateSettings,
+    CodexUpdateResult,
     CommandResult,
     UpdateSettings,
+    _report_codex_update_result,
     check_codex_update,
     check_and_apply_update,
     load_codex_update_settings,
@@ -241,3 +245,99 @@ def test_codex_update_applies_global_npm_update(tmp_path: Path) -> None:
 
     assert result.updated is True
     assert ("npm", "install", "-g", "@openai/codex@latest") in runner.calls
+
+
+def test_codex_update_supports_wrapped_npm_command(tmp_path: Path) -> None:
+    runner = FakeRunner(
+        {
+            ("codex", "--version"): "codex-cli 0.125.0\n",
+            ("sudo", "-n", "npm", "view", "@openai/codex", "version"): "0.126.0\n",
+            (
+                "sudo",
+                "-n",
+                "npm",
+                "list",
+                "-g",
+                "--depth=0",
+                "@openai/codex",
+                "--json",
+            ): '{"dependencies":{"@openai/codex":{"version":"0.125.0"}}}\n',
+            (
+                "sudo",
+                "-n",
+                "npm",
+                "install",
+                "-g",
+                "@openai/codex@latest",
+            ): "",
+        }
+    )
+
+    result = check_codex_update(
+        CodexUpdateSettings(
+            codex_executable="codex",
+            npm_executable="sudo -n npm",
+            package="@openai/codex",
+        ),
+        apply_update=True,
+        runner=runner,
+        cwd=tmp_path,
+    )
+
+    assert result.updated is True
+    assert (
+        "sudo",
+        "-n",
+        "npm",
+        "install",
+        "-g",
+        "@openai/codex@latest",
+    ) in runner.calls
+
+
+@pytest.mark.asyncio
+async def test_codex_update_notifier_called_for_manual_update() -> None:
+    result = CodexUpdateResult(
+        checked=True,
+        supported=True,
+        update_available=True,
+        current_version="0.125.0",
+        latest_version="0.126.0",
+        message="Codex CLI update available: 0.125.0 -> 0.126.0.",
+    )
+    calls: list[CodexUpdateResult] = []
+
+    async def notifier(update_result: CodexUpdateResult) -> None:
+        calls.append(update_result)
+
+    await _report_codex_update_result(
+        result,
+        CodexUpdateSettings(enabled=True, auto_update=False),
+        codex_update_notifier=notifier,
+    )
+
+    assert calls == [result]
+
+
+@pytest.mark.asyncio
+async def test_codex_update_notifier_skipped_for_auto_update() -> None:
+    result = CodexUpdateResult(
+        checked=True,
+        supported=True,
+        update_available=True,
+        current_version="0.125.0",
+        latest_version="0.126.0",
+        message="Codex CLI update available: 0.125.0 -> 0.126.0.",
+    )
+    calls: list[CodexUpdateResult] = []
+
+    async def notifier(update_result: CodexUpdateResult) -> None:
+        calls.append(update_result)
+
+    await _report_codex_update_result(
+        result,
+        CodexUpdateSettings(enabled=True, auto_update=True),
+        codex_update_notifier=notifier,
+    )
+
+    assert calls == []

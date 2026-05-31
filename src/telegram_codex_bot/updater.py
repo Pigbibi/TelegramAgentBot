@@ -17,6 +17,7 @@ import shlex
 import subprocess
 import sys
 import time
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
@@ -109,6 +110,7 @@ class CodexUpdateResult:
 
 
 CommandRunner = Callable[[Sequence[str], Path, int], CommandResult]
+CodexUpdateNotifier = Callable[[CodexUpdateResult], Awaitable[None]]
 
 
 class UpdateError(RuntimeError):
@@ -206,6 +208,17 @@ def _extract_executable(command: str) -> str | None:
                 continue
         return part
     return None
+
+
+def _split_command(command: str | None) -> list[str]:
+    """Split a configured command string into argv parts."""
+    if not command:
+        return []
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return [command]
+    return parts or [command]
 
 
 def load_codex_update_settings() -> CodexUpdateSettings:
@@ -489,11 +502,12 @@ def _npm_global_package_installed(
     runner: CommandRunner,
     cwd: Path,
 ) -> bool:
-    if not settings.npm_executable:
+    npm_command = _split_command(settings.npm_executable)
+    if not npm_command:
         return False
     result = runner(
         [
-            settings.npm_executable,
+            *npm_command,
             "list",
             "-g",
             "--depth=0",
@@ -523,6 +537,7 @@ def check_codex_update(
     """Check the installed Codex CLI against npm's latest package version."""
 
     work_dir = cwd or find_git_repo() or Path.cwd()
+    npm_command = _split_command(settings.npm_executable)
     if not settings.codex_executable:
         return CodexUpdateResult(
             checked=True,
@@ -530,7 +545,7 @@ def check_codex_update(
             skipped_reason="missing_codex",
             message="Codex CLI update check skipped: codex executable not found.",
         )
-    if not settings.npm_executable:
+    if not npm_command:
         return CodexUpdateResult(
             checked=True,
             supported=False,
@@ -559,7 +574,7 @@ def check_codex_update(
 
         latest_result = _run_checked(
             runner,
-            [settings.npm_executable, "view", settings.package, "version"],
+            [*npm_command, "view", settings.package, "version"],
             work_dir,
             settings.check_timeout_seconds,
         )
@@ -614,7 +629,7 @@ def check_codex_update(
 
         _run_checked(
             runner,
-            [settings.npm_executable, "install", "-g", f"{settings.package}@latest"],
+            [*npm_command, "install", "-g", f"{settings.package}@latest"],
             work_dir,
             settings.update_timeout_seconds,
         )
@@ -819,6 +834,33 @@ async def get_update_blockers() -> list[str]:
 async def auto_update_loop(argv: Sequence[str] | None = None) -> None:
     """Periodically check for updates while the bot is running."""
 
+    await auto_update_loop_with_notifier(argv)
+
+
+async def _report_codex_update_result(
+    codex_result: CodexUpdateResult,
+    codex_settings: CodexUpdateSettings,
+    *,
+    codex_update_notifier: CodexUpdateNotifier | None = None,
+) -> None:
+    """Log Codex update status and optionally notify for manual approval."""
+    if codex_result.skipped_reason == "error":
+        logger.warning(codex_result.message)
+    elif codex_result.update_available and not codex_result.updated:
+        logger.warning(codex_result.message)
+        if not codex_settings.auto_update and codex_update_notifier is not None:
+            await codex_update_notifier(codex_result)
+    elif codex_result.checked:
+        logger.info(codex_result.message)
+
+
+async def auto_update_loop_with_notifier(
+    argv: Sequence[str] | None = None,
+    *,
+    codex_update_notifier: CodexUpdateNotifier | None = None,
+) -> None:
+    """Periodically check for updates and notify when Codex CLI needs approval."""
+
     load_update_env()
     settings = load_update_settings()
     codex_settings = load_codex_update_settings()
@@ -865,12 +907,11 @@ async def auto_update_loop(argv: Sequence[str] | None = None) -> None:
                 codex_settings,
                 apply_update=codex_settings.auto_update,
             )
-            if codex_result.skipped_reason == "error":
-                logger.warning(codex_result.message)
-            elif codex_result.update_available and not codex_result.updated:
-                logger.warning(codex_result.message)
-            elif codex_result.checked:
-                logger.info(codex_result.message)
+            await _report_codex_update_result(
+                codex_result,
+                codex_settings,
+                codex_update_notifier=codex_update_notifier,
+            )
 
 
 def _print_update_usage() -> None:

@@ -102,6 +102,8 @@ from .handlers.callback_data import (
     CB_ASK_SPACE,
     CB_ASK_TAB,
     CB_ASK_UP,
+    CB_CODEX_UPDATE_APPLY,
+    CB_CODEX_UPDATE_DISMISS,
     CB_DIR_CANCEL,
     CB_DIR_CONFIRM,
     CB_DIR_PAGE,
@@ -193,6 +195,12 @@ from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .transcribe import close_client as close_transcribe_client
 from .transcribe import transcribe_voice
+from .updater import (
+    CodexUpdateResult,
+    check_codex_update,
+    load_codex_update_settings,
+    load_update_env,
+)
 from .utils import app_dir, sanitize_forward_text
 from .utils import atomic_write_json
 
@@ -217,6 +225,8 @@ session_monitor: Any | None = None
 _status_poll_task: asyncio.Task | None = None
 _auto_update_task: asyncio.Task | None = None
 _runtime_stopped = False
+_codex_update_prompted_versions: set[str] = set()
+_codex_update_apply_lock: asyncio.Lock | None = None
 
 
 @dataclass
@@ -3712,6 +3722,86 @@ async def _create_and_bind_window(
 # --- Callback query handler ---
 
 
+def _get_codex_update_apply_lock() -> asyncio.Lock:
+    """Return the process-local lock for manual Codex CLI updates."""
+    global _codex_update_apply_lock
+    if _codex_update_apply_lock is None:
+        _codex_update_apply_lock = asyncio.Lock()
+    return _codex_update_apply_lock
+
+
+def _codex_update_prompt_key(result: CodexUpdateResult) -> str:
+    """Return the dedupe key for a Codex update prompt."""
+    return result.latest_version or result.message or "unknown"
+
+
+async def notify_codex_update_available(
+    bot: Bot,
+    result: CodexUpdateResult,
+) -> None:
+    """Notify allowed Telegram users that a Codex CLI update needs approval."""
+    key = _codex_update_prompt_key(result)
+    if key in _codex_update_prompted_versions:
+        return
+    _codex_update_prompted_versions.add(key)
+
+    current = result.current_version or "unknown"
+    latest = result.latest_version or "unknown"
+    text = (
+        "⬆️ Codex CLI update available\n\n"
+        f"Current: `{current}`\n"
+        f"Latest: `{latest}`\n\n"
+        "Upgrade on this host now? Existing Codex sessions keep running; "
+        "new sessions will use the updated CLI."
+    )
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Upgrade Codex",
+                    callback_data=CB_CODEX_UPDATE_APPLY,
+                ),
+                InlineKeyboardButton(
+                    "Not now",
+                    callback_data=CB_CODEX_UPDATE_DISMISS,
+                ),
+            ]
+        ]
+    )
+    for user_id in sorted(config.allowed_users):
+        await safe_send(bot, user_id, text, reply_markup=keyboard)
+
+
+async def _apply_codex_update_from_callback(query: Any) -> None:
+    """Apply a Codex CLI update after an authorized Telegram button click."""
+    lock = _get_codex_update_apply_lock()
+    if lock.locked():
+        await query.answer("Codex update is already running", show_alert=True)
+        return
+
+    await query.answer("Updating Codex CLI...")
+    async with lock:
+        await safe_edit(query, "⏳ Updating Codex CLI…")
+        load_update_env()
+        settings = load_codex_update_settings()
+        result = await asyncio.to_thread(
+            check_codex_update,
+            settings,
+            apply_update=True,
+        )
+
+    if result.updated:
+        await safe_edit(
+            query,
+            f"✅ {result.message}\n\nNew Codex sessions will use the updated CLI.",
+        )
+        return
+    if result.checked and result.supported and not result.update_available:
+        await safe_edit(query, f"✅ {result.message}")
+        return
+    await safe_edit(query, f"⚠️ {result.message}")
+
+
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -3731,6 +3821,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     chat = update.effective_chat
     if chat and chat.type in ("group", "supergroup"):
         session_manager.set_group_chat_id(user.id, cb_thread_id, chat.id)
+
+    if data == CB_CODEX_UPDATE_APPLY:
+        await _apply_codex_update_from_callback(query)
+        return
+
+    if data == CB_CODEX_UPDATE_DISMISS:
+        await query.answer("Dismissed")
+        await safe_edit(query, "Codex CLI update dismissed.")
+        return
 
     # History: older/newer pagination
     # Format: hp:<page>:<window_id>:<start>:<end> or hn:<page>:<window_id>:<start>:<end>
@@ -4853,9 +4952,16 @@ async def post_init(application: Application) -> None:
     _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
     logger.info("Status polling task started")
 
-    from .updater import auto_update_loop
+    from .updater import auto_update_loop_with_notifier
 
-    _auto_update_task = asyncio.create_task(auto_update_loop())
+    _auto_update_task = asyncio.create_task(
+        auto_update_loop_with_notifier(
+            codex_update_notifier=lambda result: notify_codex_update_available(
+                application.bot,
+                result,
+            ),
+        )
+    )
     logger.info("Auto-update task initialized")
 
 
