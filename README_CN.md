@@ -228,6 +228,7 @@ TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES=true
 | `TELEGRAM_CODEX_BOT_UPDATE_BRANCH` | git branch | 可选：指定用于更新的 git branch |
 | `TELEGRAM_CODEX_BOT_UPDATE_RUN_UV_SYNC` | `true` | git 更新成功后是否执行 `uv sync` |
 | `TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK` | `false` | 在空闲更新循环里检查 Codex CLI 的 npm 新版本 |
+| `TELEGRAM_CODEX_BOT_CODEX_UPDATE_NPM` | `npm` | Codex CLI 检查/更新使用的 npm 命令；明确允许时可设为 `sudo -n npm` |
 | `TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE` | `false` | 空闲且发现新版本时，执行 `npm install -g @openai/codex@latest` |
 | `TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES` | `false` | 是否把 Codex commentary/thinking 转发到 Telegram |
 | `TELEGRAM_CODEX_BOT_SHOW_TOOL_CALLS` | `true` | 是否转发工具调用通知和输出 |
@@ -320,9 +321,10 @@ telegram-codex-bot --version
 自更新只处理 git checkout；`pipx install` 或 `uv tool install` 这类非源码安装会跳过。有本地改动的 checkout 也会跳过，避免覆盖你的修改。
 
 Codex CLI 检查和 telegram-codex-bot 自更新是分开的。示例 `.env` 会开启
-`TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK=true`，它只会报告 npm 是否有新版本；只有你确认
-运行 telegram-codex-bot 的用户有权限更新全局 npm 包时，才建议打开
-`TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=true`。否则可以用手动命令在合适权限下更新。
+`TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK=true`。发现新版本时，telegram-codex-bot 会给
+允许用户发送 Telegram 升级确认按钮。除非希望服务用户无需确认就更新 Codex CLI，否则保持
+`TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=false`。如果全局 npm 包归 root 管理，只在明确配置
+了非交互 sudo 权限后，再设置 `TELEGRAM_CODEX_BOT_CODEX_UPDATE_NPM=sudo -n npm`。
 
 ### 非交互服务器 / VPS 场景
 

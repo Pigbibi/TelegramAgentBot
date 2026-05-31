@@ -34,6 +34,10 @@ CB_WIN_CANCEL = "wb:cancel"
 # Screenshot
 CB_SCREENSHOT_REFRESH = "ss:ref:"
 
+# Codex CLI update prompt
+CB_CODEX_UPDATE_APPLY = "cu:apply"
+CB_CODEX_UPDATE_DISMISS = "cu:dismiss"
+
 # Interactive UI (aq: prefix kept for backward compatibility)
 CB_ASK_UP = "aq:up:"  # aq:up:<window>
 CB_ASK_DOWN = "aq:down:"  # aq:down:<window>
