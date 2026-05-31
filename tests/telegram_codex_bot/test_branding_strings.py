@@ -31,6 +31,7 @@ class BrandingStringTests(unittest.TestCase):
             "The Codex session is still running in tmux.",
         )
         self.assertEqual(bot.HELP_COMMAND_DESCRIPTION, "↗ Show Codex help")
+        self.assertEqual(bot.CC_COMMANDS["goal"], "↗ Set or update session goal")
         self.assertEqual(bot.CC_COMMANDS["memory"], "↗ Edit AGENTS.md")
         self.assertEqual(bot.ESC_COMMAND_DESCRIPTION, "Interrupt current Codex run")
         self.assertEqual(
