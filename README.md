@@ -451,6 +451,7 @@ uv run telegram-codex-bot
 | `/clear` | Clear conversation history |
 | `/compact` | Compact context |
 | `/cost` | Show token/cost usage |
+| `/goal` | Set or update the session goal |
 | `/help` | Show Codex help |
 | `/memory` | Edit AGENTS.md |
 | `/model` | Switch the model |

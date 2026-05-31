@@ -92,6 +92,35 @@ class TestForwardCommand:
             mock_send.assert_awaited_once_with(context.bot, 1, 42, "@5", "/cost")
 
     @pytest.mark.asyncio
+    async def test_goal_sends_command_to_tmux(self):
+        """/goal → send_to_window called with "/goal"."""
+        update = _make_update("/goal")
+        context = _make_context()
+
+        with (
+            patch("telegram_codex_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_codex_bot.bot._get_thread_id", return_value=42),
+            patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+            patch(
+                "telegram_codex_bot.bot._send_or_queue_agent_input",
+                new_callable=AsyncMock,
+            ) as mock_send,
+            patch("telegram_codex_bot.bot.safe_reply", new_callable=AsyncMock),
+        ):
+            mock_sm.resolve_window_for_thread.return_value = "@5"
+            mock_sm.resolve_target_for_thread.return_value = AgentTarget(
+                "local", "local", window_id="@5"
+            )
+            mock_sm.get_display_name.return_value = "project"
+            mock_send.return_value = (True, "ok", False)
+
+            from telegram_codex_bot.bot import forward_command_handler
+
+            await forward_command_handler(update, context)
+
+            mock_send.assert_awaited_once_with(context.bot, 1, 42, "@5", "/goal")
+
+    @pytest.mark.asyncio
     async def test_command_queues_during_interactive_ui(self):
         update = _make_update("/model")
         context = _make_context()

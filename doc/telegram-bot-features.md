@@ -150,15 +150,17 @@
 
 ### Currently Forwarded by telegram-codex-bot
 
-These 5 commands are registered in the Telegram bot menu and forwarded to Codex via tmux:
+These commands are registered in the Telegram bot menu and forwarded to Codex via tmux:
 
 | Command | Bot Menu Description | Function |
 |---------|---------------------|----------|
 | `/clear` | ↗ Clear conversation history | Wipes conversation, starts fresh. telegram-codex-bot also clears session association |
 | `/compact` | ↗ Compact conversation context | Summarize/compress context to free token budget. Supports optional instructions |
 | `/cost` | ↗ Show token/cost usage | Display token counts and API cost for current session |
+| `/goal` | ↗ Set or update session goal | Set or update the current session goal |
 | `/help` | ↗ Show Codex help | List available commands and usage help |
 | `/memory` | ↗ Edit AGENTS.md | Open AGENTS.md for editing project instructions |
+| `/model` | ↗ Switch AI model | Switch the active model |
 
 ### Other Codex Commands (Full Reference)
 

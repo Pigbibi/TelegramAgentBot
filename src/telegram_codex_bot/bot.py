@@ -275,6 +275,7 @@ CC_COMMANDS: dict[str, str] = {
     "clear": "↗ Clear conversation history",
     "compact": "↗ Compact conversation context",
     "cost": "↗ Show token/cost usage",
+    "goal": "↗ Set or update session goal",
     "help": HELP_COMMAND_DESCRIPTION,
     "memory": "↗ Edit AGENTS.md",
     "model": "↗ Switch AI model",

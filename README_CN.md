@@ -429,6 +429,7 @@ uv run telegram-codex-bot
 | `/clear` | 清上下文 |
 | `/compact` | 压缩上下文 |
 | `/cost` | 查看 token / cost |
+| `/goal` | 设置或更新当前会话目标 |
 | `/help` | 查看 Codex 帮助 |
 | `/memory` | 编辑 AGENTS.md |
 | `/model` | 切换模型 |
