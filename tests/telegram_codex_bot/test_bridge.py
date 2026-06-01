@@ -235,6 +235,7 @@ def test_dispatch_to_tmux_uses_paste_buffer(monkeypatch) -> None:
     assert calls[1][0][:4] == ["tmux", "-L", "telegram-codex-bot", "load-buffer"]
     assert calls[2][0][:4] == ["tmux", "-L", "telegram-codex-bot", "paste-buffer"]
     assert calls[3][0][:4] == ["tmux", "-L", "telegram-codex-bot", "send-keys"]
+    assert calls[3][0][-1] == "C-m"
 
 
 def test_dispatch_to_tmux_raises_when_target_missing(monkeypatch) -> None:
