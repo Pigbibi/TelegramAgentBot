@@ -623,7 +623,7 @@ def dispatch_to_tmux(
             base_delay_seconds=base_delay_seconds,
         )
         _run_subprocess_with_retry(
-            [*prefix, "send-keys", "-t", window, "Enter"],
+            [*prefix, "send-keys", "-t", window, "C-m"],
             retryable_prefixes=("tmux",),
             attempts=attempts,
             base_delay_seconds=base_delay_seconds,
