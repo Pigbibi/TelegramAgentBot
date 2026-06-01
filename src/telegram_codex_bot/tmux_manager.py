@@ -43,6 +43,7 @@ _ACTIVE_WORKING_RE = re.compile(
 _WAITING_BACKGROUND_RE = re.compile(
     r"^[•◦]\s*Waiting for background terminal\b", re.IGNORECASE
 )
+_HOOK_TRUST_BYPASS_FLAG = "--dangerously-bypass-hook-trust"
 
 
 def _resume_target_id(session_id: str) -> str:
@@ -55,6 +56,33 @@ def _resume_target_id(session_id: str) -> str:
     if match:
         return match.group(1)
     return session_id
+
+
+def _first_command_executable(parts: list[str]) -> str:
+    """Return the first executable token, skipping leading env assignments."""
+    for part in parts:
+        name, sep, _value = part.partition("=")
+        if sep and name.isidentifier() and not part.startswith("-"):
+            continue
+        return Path(part).name
+    return ""
+
+
+def _codex_command_for_launch() -> str:
+    """Return the configured Codex command with optional hook-trust bypass."""
+    cmd = config.codex_command
+    if not getattr(config, "codex_bypass_hook_trust", False):
+        return cmd
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        logger.warning("Unable to parse Codex command for hook-trust flag injection")
+        return cmd
+    if _HOOK_TRUST_BYPASS_FLAG in parts:
+        return cmd
+    if _first_command_executable(parts) != "codex":
+        return cmd
+    return f"{cmd} {_HOOK_TRUST_BYPASS_FLAG}"
 
 
 @dataclass
@@ -810,7 +838,7 @@ class TmuxManager:
                         disable_codex_update_prompt()
                     pane = window.active_pane
                     if pane:
-                        cmd = config.codex_command
+                        cmd = _codex_command_for_launch()
                         if resume_session_id:
                             resume_target = _resume_target_id(resume_session_id)
                             cmd = f"{cmd} resume {shlex.quote(resume_target)}"

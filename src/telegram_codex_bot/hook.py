@@ -32,7 +32,8 @@ _ROLLOUT_SESSION_RE = re.compile(
     r"^rollout-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9a-f-]+$"
 )
 _CONFIG_SECTION_RE = re.compile(r"^\s*\[(.+?)\]\s*$")
-_CODEX_HOOKS_FLAG_RE = re.compile(r"^\s*codex_hooks\s*=")
+_HOOKS_FLAG_RE = re.compile(r"^\s*hooks\s*=")
+_LEGACY_CODEX_HOOKS_FLAG_RE = re.compile(r"^\s*codex_hooks\s*=")
 
 _SESSION_START_MATCHER = "startup|resume"
 _HOOK_STATUS_MESSAGE = "Registering Codex session"
@@ -125,7 +126,7 @@ def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _enable_codex_hooks_feature(config_file: Path) -> None:
-    """Ensure `[features] codex_hooks = true` exists in config.toml."""
+    """Ensure `[features] hooks = true` exists in config.toml."""
     if config_file.exists():
         text = config_file.read_text()
     else:
@@ -152,17 +153,29 @@ def _enable_codex_hooks_feature(config_file: Path) -> None:
     if features_start is None:
         if lines and lines[-1].strip():
             lines.append("")
-        lines.extend(["[features]", "codex_hooks = true"])
+        lines.extend(["[features]", "hooks = true"])
         changed = True
     else:
+        hooks_idx: int | None = None
+        legacy_idx: int | None = None
         for idx in range(features_start + 1, features_end):
-            if _CODEX_HOOKS_FLAG_RE.match(lines[idx]):
-                if lines[idx].strip() != "codex_hooks = true":
-                    lines[idx] = "codex_hooks = true"
-                    changed = True
-                break
+            if hooks_idx is None and _HOOKS_FLAG_RE.match(lines[idx]):
+                hooks_idx = idx
+            elif legacy_idx is None and _LEGACY_CODEX_HOOKS_FLAG_RE.match(lines[idx]):
+                legacy_idx = idx
+
+        if hooks_idx is not None:
+            if lines[hooks_idx].strip() != "hooks = true":
+                lines[hooks_idx] = "hooks = true"
+                changed = True
+            if legacy_idx is not None:
+                del lines[legacy_idx]
+                changed = True
+        elif legacy_idx is not None:
+            lines[legacy_idx] = "hooks = true"
+            changed = True
         else:
-            lines.insert(features_end, "codex_hooks = true")
+            lines.insert(features_end, "hooks = true")
             changed = True
 
     if changed or not config_file.exists():

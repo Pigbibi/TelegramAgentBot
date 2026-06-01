@@ -8,6 +8,7 @@ from telegram_codex_bot.bridge import (
     BridgeConfig,
     BridgeTarget,
     GitHubIssue,
+    TmuxTargetNotFoundError,
     build_orchestrator_message,
     build_task_message,
     dispatch_to_tmux,
@@ -221,6 +222,7 @@ def test_dispatch_to_tmux_uses_paste_buffer(monkeypatch) -> None:
         calls.append((list(argv), input if isinstance(input, bytes) else None))
 
         class Result:
+            returncode = 0
             stdout = ""
 
         return Result()
@@ -229,9 +231,28 @@ def test_dispatch_to_tmux_uses_paste_buffer(monkeypatch) -> None:
 
     dispatch_to_tmux("@1", "hello\nworld\n", socket_name="telegram-codex-bot")
 
-    assert calls[0][0][:4] == ["tmux", "-L", "telegram-codex-bot", "load-buffer"]
-    assert calls[1][0][:4] == ["tmux", "-L", "telegram-codex-bot", "paste-buffer"]
-    assert calls[2][0][:4] == ["tmux", "-L", "telegram-codex-bot", "send-keys"]
+    assert calls[0][0][:4] == ["tmux", "-L", "telegram-codex-bot", "list-panes"]
+    assert calls[1][0][:4] == ["tmux", "-L", "telegram-codex-bot", "load-buffer"]
+    assert calls[2][0][:4] == ["tmux", "-L", "telegram-codex-bot", "paste-buffer"]
+    assert calls[3][0][:4] == ["tmux", "-L", "telegram-codex-bot", "send-keys"]
+
+
+def test_dispatch_to_tmux_raises_when_target_missing(monkeypatch) -> None:
+    def fake_run(argv, *, input=None, check=None, capture_output=None, text=None):
+        class Result:
+            stdout = ""
+            returncode = 1 if "list-panes" in argv else 0
+
+        return Result()
+
+    monkeypatch.setattr("telegram_codex_bot.bridge.subprocess.run", fake_run)
+
+    try:
+        dispatch_to_tmux("Ubuntu", "hello\n", socket_name="telegram-codex-bot")
+    except TmuxTargetNotFoundError as exc:
+        assert "Ubuntu" in str(exc)
+    else:
+        raise AssertionError("expected missing tmux target")
 
 
 def test_process_target_skips_duplicate_issue(monkeypatch, tmp_path: Path) -> None:
@@ -257,6 +278,33 @@ def test_process_target_skips_duplicate_issue(monkeypatch, tmp_path: Path) -> No
 
     dispatched = process_target(target, cfg, state)
     assert dispatched is False
+
+
+def test_process_target_skips_missing_tmux_target(monkeypatch) -> None:
+    target = BridgeTarget(name="alpha", repo="owner/repo", window="Ubuntu")
+    cfg = BridgeConfig(targets=[target])
+    issue = _make_issue(4, "dispatch me", labels=["codex-bridge"])
+    state: dict = {}
+
+    monkeypatch.setattr(
+        "telegram_codex_bot.bridge.list_open_issues",
+        lambda repo, limit, **kwargs: [issue],
+    )
+    monkeypatch.setattr(
+        "telegram_codex_bot.bridge.fetch_issue",
+        lambda repo, issue_number, **kwargs: issue,
+    )
+    monkeypatch.setattr(
+        "telegram_codex_bot.bridge.dispatch_to_tmux",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            TmuxTargetNotFoundError("tmux target not found: Ubuntu")
+        ),
+    )
+
+    dispatched = process_target(target, cfg, state)
+
+    assert dispatched is False
+    assert state["targets"]["alpha"] == {}
 
 
 def test_process_target_retries_retryable_gh_failure(monkeypatch) -> None:
@@ -359,6 +407,39 @@ def test_process_orchestrator_dispatches_monthly_issue(monkeypatch) -> None:
     assert "owner/repo-a" in sent[0][1]
     assert "@ops" in sent[0][1]
     assert state["orchestrator"]["last_issue_number"] == 88
+
+
+def test_process_orchestrator_skips_missing_tmux_target(monkeypatch) -> None:
+    cfg = BridgeConfig(
+        bridge_mode="orchestrator",
+        targets=[],
+        source_repo="owner/control-plane",
+        runner_window="Ubuntu",
+        source_label="monthly-review",
+        source_query="Monthly Audit Review",
+    )
+    issue = _make_issue(88, "Monthly Audit Review: 2026-05", labels=["monthly-review"])
+    state: dict = {}
+
+    monkeypatch.setattr(
+        "telegram_codex_bot.bridge.list_open_issues",
+        lambda repo, limit, **kwargs: [issue],
+    )
+    monkeypatch.setattr(
+        "telegram_codex_bot.bridge.fetch_issue",
+        lambda repo, issue_number, **kwargs: issue,
+    )
+    monkeypatch.setattr(
+        "telegram_codex_bot.bridge.dispatch_to_tmux",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            TmuxTargetNotFoundError("tmux target not found: Ubuntu")
+        ),
+    )
+
+    dispatched = process_orchestrator(cfg, state)
+
+    assert dispatched is False
+    assert state["orchestrator"] == {}
 
 
 def test_process_orchestrator_fetches_full_issue_payload(monkeypatch) -> None:

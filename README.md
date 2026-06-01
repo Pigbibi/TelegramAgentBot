@@ -215,6 +215,7 @@ be committed.
 | `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS` | _(none)_ | Comma-separated Python modules that register optional agent backends |
 | `TELEGRAM_CODEX_BOT_TMUX_SESSION_NAME` | `telegram-codex-bot` | tmux session name used by the bot |
 | `TELEGRAM_CODEX_BOT_CODEX_COMMAND` | `codex` | Command used when creating a new window |
+| `TELEGRAM_CODEX_BOT_CODEX_BYPASS_HOOK_TRUST` | `false` | Append Codex `--dangerously-bypass-hook-trust` for unattended hosts after you have vetted the configured hooks |
 | `TELEGRAM_CODEX_BOT_CODEX_PROJECTS_PATH` | `~/.codex` | Transcript root to scan |
 | `TELEGRAM_CODEX_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
 | `TELEGRAM_CODEX_BOT_PROJECT_ROOTS` | _(none)_ | Optional named roots shown before directory browsing |
@@ -396,7 +397,7 @@ Manual equivalent:
 
 ```toml
 [features]
-codex_hooks = true
+hooks = true
 ```
 
 `~/.codex/hooks.json`
@@ -422,6 +423,18 @@ codex_hooks = true
 ```
 
 The hook writes window/session mappings into `$TELEGRAM_CODEX_BOT_DIR/session_map.json`, which helps the bot keep tmux windows associated with Codex sessions even after clears or restarts.
+
+On unattended hosts, newer Codex versions may require hook trust before the
+first session starts. After you have verified that `$CODEX_HOME/hooks.json`
+contains only hooks you expect, set:
+
+```bash
+TELEGRAM_CODEX_BOT_CODEX_BYPASS_HOOK_TRUST=true
+```
+
+This makes new bot-managed Codex windows start with
+`--dangerously-bypass-hook-trust`, avoiding a hidden terminal prompt that would
+otherwise block the first Telegram message from reaching the transcript.
 
 ## Usage
 

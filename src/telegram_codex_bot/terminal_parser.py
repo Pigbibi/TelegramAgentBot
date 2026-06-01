@@ -135,6 +135,19 @@ UI_PATTERNS: list[UIPattern] = [
             re.compile(r"^\s*Type to filter"),
         ),
     ),
+    UIPattern(
+        # Codex hook trust review screen. This can block unattended Telegram
+        # sessions before SessionStart writes the window/session map.
+        name="HookTrust",
+        top=(
+            re.compile(r"^\s*Hooks\s*$"),
+            re.compile(r"^\s*Lifecycle hooks from config"),
+        ),
+        bottom=(
+            re.compile(r"Press t to trust all", re.IGNORECASE),
+            re.compile(r"enter to review hooks", re.IGNORECASE),
+        ),
+    ),
 ]
 
 

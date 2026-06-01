@@ -282,7 +282,7 @@ class TestInstallHook:
 
         assert (
             config_file.read_text(encoding="utf-8")
-            == "[features]\ncodex_hooks = true\n"
+            == "[features]\nhooks = true\n"
         )
         hooks_payload = json.loads(hooks_file.read_text(encoding="utf-8"))
         assert hooks_payload == {
@@ -340,7 +340,7 @@ class TestInstallHook:
 
         assert (
             config_file.read_text(encoding="utf-8")
-            == "[features]\ncodex_hooks = true\n"
+            == "[features]\nhooks = true\n"
         )
         hooks_payload = json.loads(hooks_file.read_text(encoding="utf-8"))
         assert len(hooks_payload["hooks"]["SessionStart"]) == 1

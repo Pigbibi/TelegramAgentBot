@@ -335,6 +335,24 @@ class TestExtractInteractiveContent:
         assert result.name == "Settings"
         assert "Enter to confirm" in result.content
 
+    def test_hook_trust_prompt(self):
+        pane = (
+            "  Hooks\n"
+            "  Lifecycle hooks from config and enabled plugins.\n"
+            "\n"
+            "  ⚠ 1 hook needs review before it can run.\n"
+            "\n"
+            "  Event                 Installed   Active      Review\n"
+            "  SessionStart          1           0           1\n"
+            "\n"
+            "  Press t to trust all; enter to review hooks; esc to close\n"
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "HookTrust"
+        assert "needs review" in result.content
+        assert "Press t to trust all" in result.content
+
     @pytest.mark.parametrize(
         "pane",
         [
