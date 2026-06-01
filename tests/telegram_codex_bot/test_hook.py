@@ -280,10 +280,7 @@ class TestInstallHook:
 
         assert _install_hook() == 0
 
-        assert (
-            config_file.read_text(encoding="utf-8")
-            == "[features]\nhooks = true\n"
-        )
+        assert config_file.read_text(encoding="utf-8") == "[features]\nhooks = true\n"
         hooks_payload = json.loads(hooks_file.read_text(encoding="utf-8"))
         assert hooks_payload == {
             "hooks": {
@@ -338,10 +335,7 @@ class TestInstallHook:
 
         assert _install_hook() == 0
 
-        assert (
-            config_file.read_text(encoding="utf-8")
-            == "[features]\nhooks = true\n"
-        )
+        assert config_file.read_text(encoding="utf-8") == "[features]\nhooks = true\n"
         hooks_payload = json.loads(hooks_file.read_text(encoding="utf-8"))
         assert len(hooks_payload["hooks"]["SessionStart"]) == 1
         assert "Hook already installed" in capsys.readouterr().out

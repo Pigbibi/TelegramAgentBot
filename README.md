@@ -121,11 +121,18 @@ tail -n 50 ~/.telegram-codex-bot/logs/telegram-codex-bot.err.log
 For a Linux workstation or a VPS with systemd:
 
 ```bash
-git clone https://github.com/Pigbibi/TelegramCodexBot.git
-cd TelegramCodexBot
+mkdir -p ~/.telegram-codex-bot/app
+git clone https://github.com/Pigbibi/TelegramCodexBot.git ~/.telegram-codex-bot/app/TelegramCodexBot
+cd ~/.telegram-codex-bot/app/TelegramCodexBot
 chmod +x scripts/bootstrap-linux.sh
 ./scripts/bootstrap-linux.sh
 ```
+
+Keep the bot checkout outside the project roots that Codex sessions can browse
+or clean, such as `~/Projects`. The Linux bootstrap refuses an unsafe checkout
+inside `TELEGRAM_CODEX_BOT_DEFAULT_PROJECTS_PATH` or
+`TELEGRAM_CODEX_BOT_PROJECT_ROOTS`, because the systemd launcher points back to
+that checkout and a project cleanup would break the next restart.
 
 The Linux helper:
 
