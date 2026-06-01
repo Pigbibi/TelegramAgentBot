@@ -3689,11 +3689,27 @@ async def _create_and_bind_window(
                         created_wid,
                         pending_thread_id,
                     )
-                    await _refresh_session_map_after_first_prompt(
+                    confirmed = await _refresh_session_map_after_first_prompt(
                         created_wid,
                         text=pending_text,
                         confirm_existing_session=True,
                     )
+                    if not confirmed:
+                        await safe_send(
+                            context.bot,
+                            resolved_chat,
+                            "⚠️ I sent the first message, but Codex did not "
+                            "confirm it reached the transcript after a submit "
+                            "retry. I will show any pending Codex prompt below; "
+                            "if the topic stays idle, send the message again.",
+                            message_thread_id=pending_thread_id,
+                        )
+                        await handle_interactive_ui(
+                            context.bot,
+                            query.from_user.id,
+                            created_wid,
+                            pending_thread_id,
+                        )
                 if not send_ok:
                     logger.warning("Failed to forward pending text: %s", send_msg)
                     await safe_send(

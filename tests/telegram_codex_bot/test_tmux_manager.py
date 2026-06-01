@@ -143,6 +143,51 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_create_window_can_bypass_codex_hook_trust(self) -> None:
+        pane = _DummyPane()
+        window = _DummyWindow(pane)
+        session = _DummySession(window)
+        manager = tmux_manager_module.TmuxManager(
+            session_name="telegram-codex-bot-test"
+        )
+
+        with tempfile.TemporaryDirectory(
+            prefix="telegram-codex-bot-workdir-"
+        ) as tmpdir:
+            with (
+                patch.object(
+                    manager, "find_window_by_name", AsyncMock(return_value=None)
+                ),
+                patch.object(manager, "get_or_create_session", return_value=session),
+                patch("telegram_codex_bot.tmux_manager.disable_codex_update_prompt"),
+                patch.object(
+                    tmux_manager_module.config,
+                    "codex_command",
+                    "IS_SANDBOX=1 /usr/local/bin/codex --search",
+                ),
+                patch.object(
+                    tmux_manager_module.config,
+                    "codex_bypass_hook_trust",
+                    True,
+                ),
+            ):
+                ok, _msg, _window_name, _window_id = await manager.create_window(
+                    tmpdir,
+                    window_name="Projects",
+                )
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            pane.commands,
+            [
+                (
+                    "IS_SANDBOX=1 /usr/local/bin/codex --search "
+                    "--dangerously-bypass-hook-trust",
+                    True,
+                )
+            ],
+        )
+
 
 class _SendKeysDummyPane:
     def __init__(self) -> None:

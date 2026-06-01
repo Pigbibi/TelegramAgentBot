@@ -211,6 +211,7 @@ TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES=true
 | `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS` | _(空)_ | 可选 backend 插件模块，多个用逗号分隔 |
 | `TELEGRAM_CODEX_BOT_TMUX_SESSION_NAME` | `telegram-codex-bot` | bot 使用的 tmux session 名称 |
 | `TELEGRAM_CODEX_BOT_CODEX_COMMAND` | `codex` | 创建新窗口时运行的命令 |
+| `TELEGRAM_CODEX_BOT_CODEX_BYPASS_HOOK_TRUST` | `false` | 在无人值守机器上确认 hooks 配置可信后，给 Codex 自动追加 `--dangerously-bypass-hook-trust` |
 | `TELEGRAM_CODEX_BOT_CODEX_PROJECTS_PATH` | `~/.codex` | transcript 扫描根目录 |
 | `TELEGRAM_CODEX_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | 创建新会话时默认展示的目录 |
 | `TELEGRAM_CODEX_BOT_PROJECT_ROOTS` | _(空)_ | 可选：进入目录浏览前展示的命名根目录 |
@@ -373,7 +374,7 @@ telegram-codex-bot hook --install
 
 ```toml
 [features]
-codex_hooks = true
+hooks = true
 ```
 
 `~/.codex/hooks.json`
@@ -399,6 +400,18 @@ codex_hooks = true
 ```
 
 hook 会把窗口和 session 的映射写到 `$TELEGRAM_CODEX_BOT_DIR/session_map.json`，这样清上下文或重启后，bot 仍然能更稳地把 tmux 窗口和 Codex session 对上。
+
+在 VPS 这类无人值守机器上，较新的 Codex 版本可能会在第一个 session
+启动前要求确认 hook trust。确认 `$CODEX_HOME/hooks.json` 里只有你预期的
+hook 后，可以设置：
+
+```bash
+TELEGRAM_CODEX_BOT_CODEX_BYPASS_HOOK_TRUST=true
+```
+
+这样 bot 新建 Codex 窗口时会自动加
+`--dangerously-bypass-hook-trust`，避免首条 Telegram 消息被隐藏的终端确认
+界面卡住，导致 transcript 一直没有响应。
 
 ## 使用方式
 

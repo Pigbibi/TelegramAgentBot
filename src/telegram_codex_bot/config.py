@@ -109,6 +109,10 @@ class Config:
 
         # Command to run in new windows.
         self.codex_command = os.getenv("TELEGRAM_CODEX_BOT_CODEX_COMMAND", "codex")
+        self.codex_bypass_hook_trust = (
+            os.getenv("TELEGRAM_CODEX_BOT_CODEX_BYPASS_HOOK_TRUST", "").lower()
+            == "true"
+        )
 
         # Agent backend selection. The default backend keeps the current
         # single-machine tmux behavior. Optional plugins can register additional

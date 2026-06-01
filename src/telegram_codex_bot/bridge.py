@@ -70,6 +70,10 @@ DEFAULT_SOURCE_QUERY = "Monthly Audit Review"
 DEFAULT_RUNNER_WINDOW = "Ubuntu"
 
 
+class TmuxTargetNotFoundError(RuntimeError):
+    """Raised when the configured tmux target is not present."""
+
+
 @dataclass(slots=True)
 class BridgeTarget:
     """A single GitHub repo -> tmux window bridge target."""
@@ -578,6 +582,18 @@ def _tmux_prefix(socket_name: str | None) -> list[str]:
     return cmd
 
 
+def _tmux_target_exists(window: str, *, socket_name: str | None = None) -> bool:
+    """Return whether a tmux target exists before dispatching to it."""
+    prefix = _tmux_prefix(socket_name)
+    result = subprocess.run(
+        [*prefix, "list-panes", "-t", window],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def dispatch_to_tmux(
     window: str,
     text: str,
@@ -587,6 +603,9 @@ def dispatch_to_tmux(
     base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
 ) -> None:
     """Paste text into a tmux window and press Enter."""
+    if not _tmux_target_exists(window, socket_name=socket_name):
+        raise TmuxTargetNotFoundError(f"tmux target not found: {window}")
+
     buffer_name = f"telegram-codex-bridge-{os.getpid()}-{time.time_ns()}"
     prefix = _tmux_prefix(socket_name)
     _run_subprocess_with_retry(
@@ -679,13 +698,22 @@ def process_target(
         print(message, end="")
         return True
 
-    dispatch_to_tmux(
-        candidate_target_window(target),
-        message,
-        socket_name=config.tmux_socket,
-        attempts=config.retry_attempts,
-        base_delay_seconds=config.retry_base_delay_seconds,
-    )
+    try:
+        dispatch_to_tmux(
+            candidate_target_window(target),
+            message,
+            socket_name=config.tmux_socket,
+            attempts=config.retry_attempts,
+            base_delay_seconds=config.retry_base_delay_seconds,
+        )
+    except TmuxTargetNotFoundError as exc:
+        logger.error(
+            "Skipping dispatch for target=%s issue #%d: %s",
+            target.name,
+            candidate.number,
+            exc,
+        )
+        return False
     target_state["last_fingerprint"] = fingerprint
     target_state["last_issue_number"] = candidate.number
     target_state["last_issue_url"] = candidate.url
@@ -756,13 +784,21 @@ def process_orchestrator(
         print(message, end="")
         return True
 
-    dispatch_to_tmux(
-        config.runner_window,
-        message,
-        socket_name=config.tmux_socket,
-        attempts=config.retry_attempts,
-        base_delay_seconds=config.retry_base_delay_seconds,
-    )
+    try:
+        dispatch_to_tmux(
+            config.runner_window,
+            message,
+            socket_name=config.tmux_socket,
+            attempts=config.retry_attempts,
+            base_delay_seconds=config.retry_base_delay_seconds,
+        )
+    except TmuxTargetNotFoundError as exc:
+        logger.error(
+            "Skipping orchestrator dispatch for issue #%d: %s",
+            candidate.number,
+            exc,
+        )
+        return False
     orch_state["last_fingerprint"] = fingerprint
     orch_state["last_issue_number"] = candidate.number
     orch_state["last_issue_url"] = candidate.url

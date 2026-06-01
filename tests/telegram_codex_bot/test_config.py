@@ -16,6 +16,7 @@ def _base_env(monkeypatch, tmp_path):
     monkeypatch.delenv("TELEGRAM_CODEX_BOT_PROJECT_ROOTS", raising=False)
     monkeypatch.delenv("CODEX_HOME", raising=False)
     monkeypatch.delenv("TELEGRAM_CODEX_BOT_CODEX_COMMAND", raising=False)
+    monkeypatch.delenv("TELEGRAM_CODEX_BOT_CODEX_BYPASS_HOOK_TRUST", raising=False)
     monkeypatch.delenv("TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION", raising=False)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test:token")
     monkeypatch.setenv("ALLOWED_USERS", "12345")
@@ -33,6 +34,12 @@ class TestConfigValid:
         monkeypatch.delenv("TELEGRAM_CODEX_BOT_CODEX_COMMAND", raising=False)
         cfg = Config()
         assert cfg.codex_command == "codex"
+        assert cfg.codex_bypass_hook_trust is False
+
+    def test_codex_hook_trust_bypass_can_be_enabled(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_CODEX_BOT_CODEX_BYPASS_HOOK_TRUST", "true")
+        cfg = Config()
+        assert cfg.codex_bypass_hook_trust is True
 
     def test_custom_tmux_session_name(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_CODEX_BOT_TMUX_SESSION_NAME", "mysession")
