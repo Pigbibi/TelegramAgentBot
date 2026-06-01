@@ -119,11 +119,18 @@ tail -n 50 ~/.telegram-codex-bot/logs/telegram-codex-bot.err.log
 如果目标机是 Linux 或带 systemd 的 VPS，可以直接这样装：
 
 ```bash
-git clone https://github.com/Pigbibi/TelegramCodexBot.git
-cd TelegramCodexBot
+mkdir -p ~/.telegram-codex-bot/app
+git clone https://github.com/Pigbibi/TelegramCodexBot.git ~/.telegram-codex-bot/app/TelegramCodexBot
+cd ~/.telegram-codex-bot/app/TelegramCodexBot
 chmod +x scripts/bootstrap-linux.sh
 ./scripts/bootstrap-linux.sh
 ```
+
+VPS 上不要把 bot 自己的 checkout 放在 `~/Projects` 这类可被 Codex 会话浏览或清理的
+项目目录里。Linux bootstrap 会拒绝位于
+`TELEGRAM_CODEX_BOT_DEFAULT_PROJECTS_PATH` 或 `TELEGRAM_CODEX_BOT_PROJECT_ROOTS`
+内部的 checkout，因为 systemd launcher 会指向这个 checkout；一旦项目目录被清理，
+下一次重启就会失败。
 
 这个脚本会：
 
