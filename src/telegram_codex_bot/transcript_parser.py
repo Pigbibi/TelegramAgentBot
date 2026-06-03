@@ -193,7 +193,11 @@ class TranscriptParser:
     def _is_internal_tool_name(cls, name: str | None) -> bool:
         if not isinstance(name, str):
             return False
-        return name.lower() in cls._INTERNAL_TOOL_NAMES
+        # Codex connector/app tools are exposed in transcripts with private
+        # underscore-prefixed names (for example _list_repositories). These are
+        # implementation details and should stay behind the Thinking status
+        # instead of becoming persistent Telegram bubbles.
+        return name.startswith("_") or name.lower() in cls._INTERNAL_TOOL_NAMES
 
     @staticmethod
     def _clean_runtime_tool_output(output: str) -> str:
