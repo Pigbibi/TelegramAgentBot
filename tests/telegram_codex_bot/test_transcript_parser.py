@@ -164,6 +164,49 @@ class TestParseLine:
         assert result == []
         assert pending == {}
 
+    def test_private_connector_tool_calls_are_hidden_but_thinking_stays(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(config, "show_commentary_messages", True)
+        thinking_item = {
+            "type": "response_item",
+            "timestamp": "2026-05-26T00:00:00Z",
+            "payload": {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "checking repos"}],
+            },
+        }
+        use_item = {
+            "type": "response_item",
+            "timestamp": "2026-05-26T00:00:01Z",
+            "payload": {
+                "type": "function_call",
+                "call_id": "call_repos",
+                "name": "_list_repositories",
+                "arguments": json.dumps({"owner": "QuantStrategyLab"}),
+            },
+        }
+        result_item = {
+            "type": "response_item",
+            "timestamp": "2026-05-26T00:00:02Z",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call_repos",
+                "output": '{"repositories": []}',
+            },
+        }
+
+        entries = [
+            TranscriptParser.parse_line(json.dumps(thinking_item)),
+            TranscriptParser.parse_line(json.dumps(use_item)),
+            TranscriptParser.parse_line(json.dumps(result_item)),
+        ]
+        result, pending = TranscriptParser.parse_entries([e for e in entries if e])
+
+        assert [entry.content_type for entry in result] == ["thinking"]
+        assert "checking repos" in result[0].text
+        assert pending == {}
+
     def test_response_item_function_call_output_is_normalized_as_tool_result(self):
         item = {
             "type": "response_item",
