@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -87,11 +88,21 @@ def _find_cli_path() -> str:
     return "telegram-codex-bot"
 
 
-def _is_hook_installed(settings: dict) -> bool:
-    """Check if telegram-codex-bot hook is already installed in hooks.json.
+def _is_telegram_codex_bot_hook_command(command: str) -> bool:
+    """Return True if command invokes ``telegram-codex-bot hook``."""
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return command == _HOOK_COMMAND_SUFFIX or command.endswith(
+            "/" + _HOOK_COMMAND_SUFFIX
+        )
+    if len(parts) < 2 or parts[-1] != "hook":
+        return False
+    return Path(parts[-2]).name == "telegram-codex-bot"
 
-    Detects both 'telegram-codex-bot hook' and full paths like '/path/to/telegram-codex-bot hook'.
-    """
+
+def _find_installed_hook(settings: dict) -> dict[str, Any] | None:
+    """Find the first installed telegram-codex-bot hook command, if any."""
     hooks = settings.get("hooks", {})
     session_start = hooks.get("SessionStart", [])
 
@@ -103,10 +114,26 @@ def _is_hook_installed(settings: dict) -> bool:
             if not isinstance(h, dict):
                 continue
             cmd = h.get("command", "")
-            # Match 'telegram-codex-bot hook' or paths ending with 'telegram-codex-bot hook'
-            if cmd == _HOOK_COMMAND_SUFFIX or cmd.endswith("/" + _HOOK_COMMAND_SUFFIX):
-                return True
-    return False
+            if isinstance(cmd, str) and _is_telegram_codex_bot_hook_command(cmd):
+                return h
+    return None
+
+
+def _is_hook_installed(settings: dict) -> bool:
+    """Check if telegram-codex-bot hook is already installed in hooks.json."""
+    return _find_installed_hook(settings) is not None
+
+
+def _hook_command_has_missing_absolute_executable(command: str) -> bool:
+    """Return True when an installed absolute hook path no longer exists."""
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return False
+    if len(parts) < 2 or parts[-1] != "hook":
+        return False
+    executable = Path(parts[-2]).expanduser()
+    return executable.is_absolute() and not executable.exists()
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
@@ -219,17 +246,45 @@ def _install_hook() -> int:
         print(message, file=sys.stderr)
         return 1
 
-    # Check if already installed
-    if _is_hook_installed(settings):
+    # Find the full path to telegram-codex-bot
+    cli_path = _find_cli_path()
+    hook_command = f"{cli_path} hook"
+
+    # Check if already installed. Older installs may point at a deleted venv or
+    # checkout; repair that in place so hook --install remains self-healing.
+    installed_hook = _find_installed_hook(settings)
+    if installed_hook is not None:
+        installed_command = str(installed_hook.get("command") or "")
+        if _hook_command_has_missing_absolute_executable(installed_command):
+            installed_hook["command"] = hook_command
+            installed_hook.setdefault("type", "command")
+            installed_hook.setdefault("statusMessage", _HOOK_STATUS_MESSAGE)
+            installed_hook.setdefault("timeout", _HOOK_TIMEOUT_SECONDS)
+            try:
+                hooks_file.parent.mkdir(parents=True, exist_ok=True)
+                _write_json_file(hooks_file, settings)
+            except OSError as e:
+                logger.error("Error writing %s: %s", hooks_file, e)
+                print(f"Error writing {hooks_file}: {e}", file=sys.stderr)
+                return 1
+            logger.info(
+                "Repaired stale hook command in %s: %s -> %s",
+                hooks_file,
+                installed_command,
+                hook_command,
+            )
+            print(
+                "Hook command repaired in "
+                f"{hooks_file} (Codex hooks enabled in {config_file})"
+            )
+            return 0
+
         logger.info("Hook already installed in %s", hooks_file)
         print(
             f"Hook already installed in {hooks_file} (Codex hooks enabled in {config_file})"
         )
         return 0
 
-    # Find the full path to telegram-codex-bot
-    cli_path = _find_cli_path()
-    hook_command = f"{cli_path} hook"
     hook_config = {
         "type": "command",
         "command": hook_command,

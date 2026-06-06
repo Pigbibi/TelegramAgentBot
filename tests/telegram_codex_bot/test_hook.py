@@ -340,6 +340,50 @@ class TestInstallHook:
         assert len(hooks_payload["hooks"]["SessionStart"]) == 1
         assert "Hook already installed" in capsys.readouterr().out
 
+    def test_install_repairs_stale_absolute_hook_path(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        config_file, hooks_file = self._patch_codex_paths(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            hook_module.shutil, "which", lambda _: "/opt/bin/telegram-codex-bot"
+        )
+        stale_cli = tmp_path / "deleted" / ".venv" / "bin" / "telegram-codex-bot"
+        hooks_file.parent.mkdir(parents=True, exist_ok=True)
+        hooks_file.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "matcher": "startup|resume",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": f"{stale_cli} hook",
+                                        "statusMessage": "Registering Codex session",
+                                        "timeout": 5,
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert _install_hook() == 0
+
+        assert config_file.read_text(encoding="utf-8") == "[features]\nhooks = true\n"
+        hooks_payload = json.loads(hooks_file.read_text(encoding="utf-8"))
+        installed_hooks = hooks_payload["hooks"]["SessionStart"][0]["hooks"]
+        assert len(installed_hooks) == 1
+        assert installed_hooks[0]["command"] == "/opt/bin/telegram-codex-bot hook"
+        assert "Hook command repaired" in capsys.readouterr().out
+
     def test_install_preserves_existing_hooks(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
