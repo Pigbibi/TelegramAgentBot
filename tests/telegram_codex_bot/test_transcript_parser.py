@@ -207,6 +207,48 @@ class TestParseLine:
         assert "checking repos" in result[0].text
         assert pending == {}
 
+    def test_view_image_tool_calls_are_hidden_from_messages(self):
+        use_item = {
+            "type": "response_item",
+            "timestamp": "2026-06-08T09:40:05Z",
+            "payload": {
+                "type": "function_call",
+                "call_id": "call_view_image",
+                "name": "view_image",
+                "arguments": json.dumps(
+                    {
+                        "path": "/tmp/ibkr-gateway-screen.png",
+                        "detail": "high",
+                    }
+                ),
+            },
+        }
+        result_item = {
+            "type": "response_item",
+            "timestamp": "2026-06-08T09:40:06Z",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call_view_image",
+                "output": json.dumps(
+                    [
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,abc123",
+                        }
+                    ]
+                ),
+            },
+        }
+
+        entries = [
+            TranscriptParser.parse_line(json.dumps(use_item)),
+            TranscriptParser.parse_line(json.dumps(result_item)),
+        ]
+        result, pending = TranscriptParser.parse_entries([e for e in entries if e])
+
+        assert result == []
+        assert pending == {}
+
     def test_response_item_function_call_output_is_normalized_as_tool_result(self):
         item = {
             "type": "response_item",
