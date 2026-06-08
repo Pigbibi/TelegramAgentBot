@@ -76,7 +76,7 @@ class TranscriptParser:
     # Magic string constants
     _NO_CONTENT_PLACEHOLDER = "(no content)"
     _INTERRUPTED_TEXT = "[Request interrupted by user for tool use]"
-    _INTERNAL_TOOL_NAMES = {"update_plan"}
+    _INTERNAL_TOOL_NAMES = {"update_plan", "view_image", "viewimage"}
     _MAX_SUMMARY_LENGTH = 200
     _AUTH_ERROR_HINT_MARKERS = (
         "could not be refreshed",
