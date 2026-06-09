@@ -96,9 +96,7 @@ UI_PATTERNS: list[UIPattern] = [
                 re.IGNORECASE,
             ),
         ),
-        bottom=(
-            re.compile(r"^\s*Press enter to continue", re.IGNORECASE),
-        ),
+        bottom=(re.compile(r"^\s*Press enter to continue", re.IGNORECASE),),
         min_gap=2,
     ),
     UIPattern(
