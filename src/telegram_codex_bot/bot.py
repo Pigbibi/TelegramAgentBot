@@ -187,6 +187,7 @@ from .session import CodexSession, is_shell_pane_command, session_manager
 from .session_monitor import NewMessage
 from .terminal_parser import (
     extract_bash_output,
+    extract_interactive_content,
     is_codex_input_ready,
     is_interactive_ui,
     parse_status_update,
@@ -2765,6 +2766,7 @@ async def _rotate_thread_after_usage_limit(
         thread_id,
         created_wid,
         text,
+        auto_confirm_startup_trust=True,
     )
     if send_ok:
         await mark_window_working(context.bot, user_id, created_wid, thread_id)
@@ -2793,6 +2795,22 @@ async def _rotate_thread_after_usage_limit(
     return True
 
 
+async def _maybe_confirm_startup_trust_prompt(
+    window_id: str,
+    pane_text: str,
+) -> tuple[bool, str]:
+    """Confirm safe startup-only trust prompts before the first forwarded text."""
+    content = extract_interactive_content(pane_text)
+    if content is None:
+        return False, ""
+    if content.name != "DirectoryTrust":
+        return False, f"Codex is waiting for interactive input: {content.name}"
+    logger.info("Auto-confirming Codex directory trust prompt in window %s", window_id)
+    if await tmux_manager.send_control_key(window_id, "Enter"):
+        return True, "Confirmed Codex directory trust prompt"
+    return False, "Failed to confirm Codex directory trust prompt"
+
+
 async def _send_to_window_when_codex_ready(
     user_id: int,
     thread_id: int | None,
@@ -2801,6 +2819,7 @@ async def _send_to_window_when_codex_ready(
     *,
     timeout: float = 60.0,
     interval: float = 0.5,
+    auto_confirm_startup_trust: bool = False,
 ) -> tuple[bool, str]:
     """Send text once the new Codex TUI is ready to accept input."""
     deadline = asyncio.get_event_loop().time() + timeout
@@ -2812,6 +2831,22 @@ async def _send_to_window_when_codex_ready(
         if capture.missing:
             return False, "Window not found (may have been closed)"
         pane_text = capture.text
+        interactive = extract_interactive_content(pane_text or "")
+        if interactive is not None:
+            if auto_confirm_startup_trust:
+                confirmed, trust_message = await _maybe_confirm_startup_trust_prompt(
+                    window_id,
+                    pane_text or "",
+                )
+                last_message = trust_message
+                if confirmed:
+                    await asyncio.sleep(interval)
+                    continue
+                if trust_message.startswith("Failed to confirm"):
+                    return False, trust_message
+            last_message = f"Codex is waiting for interactive input: {interactive.name}"
+            await asyncio.sleep(interval)
+            continue
         if not is_codex_input_ready(pane_text or ""):
             status = parse_status_update(pane_text or "")
             if status:
@@ -3072,6 +3107,7 @@ async def _recover_missing_bound_window(
         thread_id,
         created_wid,
         text,
+        auto_confirm_startup_trust=True,
     )
     if send_ok:
         await _refresh_session_map_after_first_prompt(
@@ -3681,6 +3717,7 @@ async def _create_and_bind_window(
                     pending_thread_id,
                     created_wid,
                     pending_text,
+                    auto_confirm_startup_trust=True,
                 )
                 if send_ok:
                     await mark_window_working(

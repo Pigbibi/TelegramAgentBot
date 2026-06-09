@@ -1040,7 +1040,13 @@ class TestExistingWindowBinding:
         assert mock_sm.user_window_offsets == {12345: {"@3": 99}}
         assert new_state.session_id == "session-1"
         assert new_state.cwd == "/tmp/project"
-        send_when_ready.assert_awaited_once_with(12345, 42, "@3", "continue")
+        send_when_ready.assert_awaited_once_with(
+            12345,
+            42,
+            "@3",
+            "continue",
+            auto_confirm_startup_trust=True,
+        )
         refresh_session_map.assert_awaited_once_with(
             "@3",
             text="continue",

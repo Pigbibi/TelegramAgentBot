@@ -353,6 +353,24 @@ class TestExtractInteractiveContent:
         assert "needs review" in result.content
         assert "Press t to trust all" in result.content
 
+    def test_directory_trust_prompt_is_not_input_ready(self):
+        pane = (
+            "  Do you trust the contents of this directory?\n"
+            "\n"
+            "› 1. Yes, continue\n"
+            "  2. No, quit\n"
+            "\n"
+            "  Press enter to continue\n"
+        )
+
+        result = extract_interactive_content(pane)
+
+        assert result is not None
+        assert result.name == "DirectoryTrust"
+        assert is_interactive_ui(pane) is True
+        assert codex_input_text(pane) is None
+        assert is_codex_input_ready(pane) is False
+
     @pytest.mark.parametrize(
         "pane",
         [

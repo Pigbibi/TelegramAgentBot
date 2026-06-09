@@ -418,6 +418,51 @@ async def test_send_to_window_when_ready_sends_with_visible_idle_prompt(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_send_to_window_when_ready_confirms_startup_directory_trust(
+    monkeypatch,
+):
+    trust_prompt = SimpleNamespace(
+        text=(
+            "  Do you trust the contents of this directory?\n"
+            "\n"
+            "› 1. Yes, continue\n"
+            "  2. No, quit\n"
+            "\n"
+            "  Press enter to continue\n"
+        ),
+        missing=False,
+    )
+    ready_prompt = SimpleNamespace(
+        text="previous output\n\n› \n\n  gpt-5.5 · ~/repo",
+        missing=False,
+    )
+    send_control = AsyncMock(return_value=True)
+    send_message = AsyncMock(return_value=(True, "Sent"))
+
+    monkeypatch.setattr(
+        bot_module,
+        "capture_agent_output",
+        AsyncMock(side_effect=[trust_prompt, ready_prompt]),
+    )
+    monkeypatch.setattr(bot_module.tmux_manager, "send_control_key", send_control)
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+    monkeypatch.setattr(bot_module.asyncio, "sleep", AsyncMock())
+
+    ok, message = await bot_module._send_to_window_when_codex_ready(
+        12345,
+        42,
+        "@1",
+        "first prompt",
+        timeout=1.0,
+        auto_confirm_startup_trust=True,
+    )
+
+    assert (ok, message) == (True, "Sent")
+    send_control.assert_awaited_once_with("@1", "Enter")
+    send_message.assert_awaited_once_with(12345, 42, "@1", "first prompt")
+
+
+@pytest.mark.asyncio
 async def test_handle_non_codex_bound_window_recovers_resumable_shell(monkeypatch):
     update_message = MagicMock()
     session_manager = MagicMock()
