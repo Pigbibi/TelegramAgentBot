@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -23,7 +24,11 @@ def _make_callback_update(data: str) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_notify_codex_update_available_sends_private_prompts(monkeypatch):
+async def test_notify_codex_update_available_sends_private_prompts(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("TELEGRAM_CODEX_BOT_DIR", str(tmp_path))
     monkeypatch.setattr(bot_module.config, "allowed_users", {222, 111})
     monkeypatch.setattr(bot_module, "_codex_update_prompted_versions", set())
     safe_send = AsyncMock()
@@ -48,6 +53,36 @@ async def test_notify_codex_update_available_sends_private_prompts(monkeypatch):
     keyboard = safe_send.await_args_list[0].kwargs["reply_markup"]
     assert keyboard.inline_keyboard[0][0].callback_data == CB_CODEX_UPDATE_APPLY
     assert keyboard.inline_keyboard[0][1].callback_data == CB_CODEX_UPDATE_DISMISS
+    state = json.loads((tmp_path / "codex_update_prompt_state.json").read_text())
+    assert state == {"prompted_versions": ["0.126.0"]}
+
+
+@pytest.mark.asyncio
+async def test_notify_codex_update_available_skips_persisted_prompted_version(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("TELEGRAM_CODEX_BOT_DIR", str(tmp_path))
+    monkeypatch.setattr(bot_module.config, "allowed_users", {222, 111})
+    (tmp_path / "codex_update_prompt_state.json").write_text(
+        json.dumps({"prompted_versions": ["0.126.0"]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bot_module, "_codex_update_prompted_versions", set())
+    safe_send = AsyncMock()
+    monkeypatch.setattr(bot_module, "safe_send", safe_send)
+
+    result = CodexUpdateResult(
+        checked=True,
+        supported=True,
+        update_available=True,
+        current_version="0.125.0",
+        latest_version="0.126.0",
+    )
+
+    await bot_module.notify_codex_update_available(MagicMock(), result)
+
+    safe_send.assert_not_awaited()
 
 
 @pytest.mark.asyncio

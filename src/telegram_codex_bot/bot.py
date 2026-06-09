@@ -228,6 +228,7 @@ _auto_update_task: asyncio.Task | None = None
 _runtime_stopped = False
 _codex_update_prompted_versions: set[str] = set()
 _codex_update_apply_lock: asyncio.Lock | None = None
+_CODEX_UPDATE_PROMPT_STATE_FILENAME = "codex_update_prompt_state.json"
 
 
 @dataclass
@@ -3788,15 +3789,67 @@ def _codex_update_prompt_key(result: CodexUpdateResult) -> str:
     return result.latest_version or result.message or "unknown"
 
 
+def _codex_update_prompt_state_file() -> Path:
+    """Return the state file tracking already prompted Codex CLI versions."""
+    return app_dir() / _CODEX_UPDATE_PROMPT_STATE_FILENAME
+
+
+def _load_codex_update_prompted_versions() -> set[str]:
+    """Load Codex CLI versions that have already shown an update prompt."""
+    path = _codex_update_prompt_state_file()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return set()
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to read Codex update prompt state %s: %s", path, exc)
+        return set()
+
+    if not isinstance(payload, dict):
+        return set()
+
+    prompted_versions = payload.get("prompted_versions")
+    if not isinstance(prompted_versions, list):
+        return set()
+    return {
+        version for version in prompted_versions if isinstance(version, str) and version
+    }
+
+
+def _save_codex_update_prompted_versions(prompted_versions: set[str]) -> None:
+    """Persist Codex CLI versions that have already shown an update prompt."""
+    path = _codex_update_prompt_state_file()
+    try:
+        atomic_write_json(
+            path,
+            {"prompted_versions": sorted(prompted_versions)},
+        )
+    except OSError as exc:
+        logger.warning("Failed to write Codex update prompt state %s: %s", path, exc)
+
+
+def _mark_codex_update_prompted(key: str) -> bool:
+    """Return True when a Codex update prompt key is newly marked."""
+    persisted_versions = _load_codex_update_prompted_versions()
+    prompted_versions = persisted_versions | _codex_update_prompted_versions
+    if key in prompted_versions:
+        _codex_update_prompted_versions.update(prompted_versions)
+        return False
+
+    prompted_versions.add(key)
+    _codex_update_prompted_versions.update(prompted_versions)
+    _save_codex_update_prompted_versions(prompted_versions)
+    return True
+
+
 async def notify_codex_update_available(
     bot: Bot,
     result: CodexUpdateResult,
 ) -> None:
     """Notify allowed Telegram users that a Codex CLI update needs approval."""
     key = _codex_update_prompt_key(result)
-    if key in _codex_update_prompted_versions:
+    if not _mark_codex_update_prompted(key):
         return
-    _codex_update_prompted_versions.add(key)
 
     current = result.current_version or "unknown"
     latest = result.latest_version or "unknown"
