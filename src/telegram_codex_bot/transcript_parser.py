@@ -368,10 +368,22 @@ class TranscriptParser:
                 return None
 
             # Codex already emits assistant output as response_item/message.
-            # task_complete repeats the same final answer, so skip it to avoid
-            # duplicate Telegram notifications and duplicate history entries.
+            # When last_agent_message is present, task_complete repeats the
+            # final answer, so skip it to avoid duplicate Telegram notifications
+            # and duplicate history entries.  A null last_agent_message means
+            # Codex ended without a final assistant message; emit a small
+            # completion notice so Telegram topics do not look silently stuck.
             if payload.get("type") == "task_complete":
-                return None
+                last_agent_message = payload.get("last_agent_message")
+                if isinstance(last_agent_message, str) and last_agent_message.strip():
+                    return None
+                return cls._build_message_entry(
+                    role="assistant",
+                    timestamp=timestamp,
+                    content=(
+                        "✅ Codex finished. No additional final message was emitted."
+                    ),
+                )
 
             if payload.get("type") == "error":
                 if payload.get("codex_error_info") == "usage_limit_exceeded":

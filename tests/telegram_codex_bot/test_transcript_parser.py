@@ -64,6 +64,35 @@ class TestParseLine:
 
         assert TranscriptParser.parse_line(json.dumps(event)) is None
 
+    def test_task_complete_without_final_message_emits_completion_notice(self):
+        event = {
+            "type": "event_msg",
+            "timestamp": "2026-06-09T07:57:37.121Z",
+            "payload": {
+                "type": "task_complete",
+                "last_agent_message": None,
+            },
+        }
+
+        parsed = TranscriptParser.parse_line(json.dumps(event))
+
+        assert parsed is not None
+        assert parsed["type"] == "assistant"
+        assert parsed["text"] == (
+            "✅ Codex finished. No additional final message was emitted."
+        )
+
+    def test_task_complete_with_final_message_is_skipped_to_avoid_duplicate(self):
+        event = {
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "last_agent_message": "Already emitted as response_item/message.",
+            },
+        }
+
+        assert TranscriptParser.parse_line(json.dumps(event)) is None
+
     def test_response_item_encrypted_reasoning_renders_thinking_placeholder(
         self, monkeypatch
     ):

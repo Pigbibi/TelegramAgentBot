@@ -88,6 +88,20 @@ UI_PATTERNS: list[UIPattern] = [
         ),
     ),
     UIPattern(
+        # Startup directory trust prompt shown before a fresh Codex TUI is ready.
+        name="DirectoryTrust",
+        top=(
+            re.compile(
+                r"^\s*Do you trust the contents of this directory\?",
+                re.IGNORECASE,
+            ),
+        ),
+        bottom=(
+            re.compile(r"^\s*Press enter to continue", re.IGNORECASE),
+        ),
+        min_gap=2,
+    ),
+    UIPattern(
         # Codex command approval prompt shown by newer CLIs.
         name="CommandApproval",
         top=(
@@ -290,6 +304,9 @@ def codex_input_text(pane_text: str) -> str | None:
         return None
 
     if parse_status_update(pane_text):
+        return None
+
+    if is_interactive_ui(pane_text):
         return None
 
     lines = pane_text.split("\n")
