@@ -45,6 +45,7 @@ target-version = ["py312"]
 target-version = "py312"
 
 [tool.pytest.ini_options]
+addopts = ["-p", "no:libtmux"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
