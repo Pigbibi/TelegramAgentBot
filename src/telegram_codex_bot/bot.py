@@ -58,7 +58,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ChatAction
-from telegram.error import BadRequest, TelegramError
+from telegram.error import BadRequest, NetworkError, TelegramError, TimedOut
 from telegram.ext import (
     AIORateLimiter,
     Application,
@@ -216,6 +216,12 @@ GET_UPDATES_CONNECT_TIMEOUT_SECONDS = 10.0
 GET_UPDATES_READ_TIMEOUT_SECONDS = POLL_TIMEOUT_SECONDS + 5.0
 GET_UPDATES_WRITE_TIMEOUT_SECONDS = 10.0
 GET_UPDATES_POOL_TIMEOUT_SECONDS = 5.0
+MEDIA_DOWNLOAD_ATTEMPTS = 3
+MEDIA_DOWNLOAD_RETRY_DELAY_SECONDS = 1.0
+MEDIA_DOWNLOAD_CONNECT_TIMEOUT_SECONDS = 15.0
+MEDIA_DOWNLOAD_READ_TIMEOUT_SECONDS = 60.0
+MEDIA_DOWNLOAD_WRITE_TIMEOUT_SECONDS = 30.0
+MEDIA_DOWNLOAD_POOL_TIMEOUT_SECONDS = 10.0
 BACKGROUND_WAIT_TOOL_STATUS_TEXT = "💭 Thinking…\n◦ Working in background terminal…"
 
 # Active backend and local session monitor reference.
@@ -2065,6 +2071,37 @@ def _safe_upload_filename(filename: str, *, fallback: str = "upload.bin") -> str
     return safe or fallback
 
 
+async def _download_telegram_media(media: Any, file_path: Path, *, label: str) -> None:
+    """Download Telegram media with media-specific timeouts and transient retries."""
+    timeout_kwargs = {
+        "connect_timeout": MEDIA_DOWNLOAD_CONNECT_TIMEOUT_SECONDS,
+        "read_timeout": MEDIA_DOWNLOAD_READ_TIMEOUT_SECONDS,
+        "write_timeout": MEDIA_DOWNLOAD_WRITE_TIMEOUT_SECONDS,
+        "pool_timeout": MEDIA_DOWNLOAD_POOL_TIMEOUT_SECONDS,
+    }
+
+    for attempt in range(1, MEDIA_DOWNLOAD_ATTEMPTS + 1):
+        try:
+            tg_file = await media.get_file(**timeout_kwargs)
+            await tg_file.download_to_drive(file_path, **timeout_kwargs)
+            return
+        except (TimedOut, NetworkError) as exc:
+            if attempt >= MEDIA_DOWNLOAD_ATTEMPTS:
+                raise
+            with contextlib.suppress(OSError):
+                file_path.unlink()
+            logger.warning(
+                "Telegram %s download failed with transient network error; "
+                "retrying: attempt=%d/%d path=%s error=%s",
+                label,
+                attempt,
+                MEDIA_DOWNLOAD_ATTEMPTS,
+                file_path,
+                exc,
+            )
+            await asyncio.sleep(MEDIA_DOWNLOAD_RETRY_DELAY_SECONDS)
+
+
 async def process_pending_topic_deletions(bot: Bot) -> None:
     """Delete queued forum topics from a previous local cleanup request."""
     if not _PENDING_TOPIC_DELETIONS_FILE.exists():
@@ -2213,8 +2250,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     filename = f"{time.time_ns()}_{photo.file_unique_id}.jpg"
     file_path = _IMAGES_DIR / filename
     try:
-        tg_file = await photo.get_file()
-        await tg_file.download_to_drive(file_path)
+        await _download_telegram_media(photo, file_path, label="photo")
     except (TelegramError, OSError) as exc:
         logger.exception("Failed to download Telegram photo")
         await safe_reply(update.message, f"❌ Failed to download image: {exc}")
@@ -2364,8 +2400,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     local_filename = f"{time.time_ns()}_{unique_id}_{document_name}"
     file_path = _FILES_DIR / local_filename
     try:
-        tg_file = await document.get_file()
-        await tg_file.download_to_drive(file_path)
+        await _download_telegram_media(document, file_path, label="document")
     except (TelegramError, OSError) as exc:
         logger.exception("Failed to download Telegram document")
         await safe_reply(update.message, f"❌ Failed to download file: {exc}")

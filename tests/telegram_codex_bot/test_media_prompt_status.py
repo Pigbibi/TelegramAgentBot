@@ -1,7 +1,8 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
+from telegram.error import TimedOut
 
 from telegram_codex_bot.backends.base import AgentTarget
 from telegram_codex_bot.backends.files import FileUploadResult
@@ -25,6 +26,36 @@ def _make_base_update(user_id: int = 12345, thread_id: int = 42):
     update.effective_chat.type = "supergroup"
     update.effective_chat.id = -1001234567890
     return update
+
+
+@pytest.mark.asyncio
+async def test_download_telegram_media_retries_transient_timeout(tmp_path):
+    from telegram_codex_bot import bot as bot_module
+
+    media = MagicMock()
+    file_path = tmp_path / "photo.jpg"
+    tg_file = MagicMock()
+    tg_file.download_to_drive = AsyncMock()
+    media.get_file = AsyncMock(side_effect=[TimedOut("Timed out"), tg_file])
+
+    expected_timeout_kwargs = {
+        "connect_timeout": bot_module.MEDIA_DOWNLOAD_CONNECT_TIMEOUT_SECONDS,
+        "read_timeout": bot_module.MEDIA_DOWNLOAD_READ_TIMEOUT_SECONDS,
+        "write_timeout": bot_module.MEDIA_DOWNLOAD_WRITE_TIMEOUT_SECONDS,
+        "pool_timeout": bot_module.MEDIA_DOWNLOAD_POOL_TIMEOUT_SECONDS,
+    }
+
+    with patch("telegram_codex_bot.bot.asyncio.sleep", new_callable=AsyncMock) as sleep:
+        await bot_module._download_telegram_media(media, file_path, label="photo")
+
+    assert media.get_file.await_args_list == [
+        call(**expected_timeout_kwargs),
+        call(**expected_timeout_kwargs),
+    ]
+    tg_file.download_to_drive.assert_awaited_once_with(
+        file_path, **expected_timeout_kwargs
+    )
+    sleep.assert_awaited_once_with(bot_module.MEDIA_DOWNLOAD_RETRY_DELAY_SECONDS)
 
 
 @pytest.mark.asyncio
