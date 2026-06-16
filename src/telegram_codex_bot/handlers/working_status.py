@@ -3,7 +3,7 @@
 import re
 import time
 
-from ..terminal_parser import is_codex_input_ready, parse_status_update
+from ..terminal_parser import codex_input_text, parse_status_update
 
 SYNTHETIC_WORKING_IDLE_GRACE = 2.0
 SYNTHETIC_WORKING_NO_OUTPUT_MAX = 10 * 60.0
@@ -129,15 +129,19 @@ def status_text_for_pane(
 
     current_time = now if now is not None else time.monotonic()
     elapsed = current_time - started_at
+    input_text = codex_input_text(pane_text)
+    if input_text is not None and elapsed >= SYNTHETIC_WORKING_IDLE_GRACE:
+        output_seen = key in _synthetic_working_output_seen
+        no_output_timed_out = elapsed >= SYNTHETIC_WORKING_NO_OUTPUT_MAX
+        if output_seen or input_text == "" or no_output_timed_out:
+            _synthetic_working_starts.pop(key, None)
+            _synthetic_working_output_seen.discard(key)
+            return status_text
+
     if (
         key not in _synthetic_working_output_seen
         and elapsed < SYNTHETIC_WORKING_NO_OUTPUT_MAX
     ):
         return format_working_status(started_at, now=current_time, detail=status_text)
-
-    if is_codex_input_ready(pane_text) and elapsed >= SYNTHETIC_WORKING_IDLE_GRACE:
-        _synthetic_working_starts.pop(key, None)
-        _synthetic_working_output_seen.discard(key)
-        return status_text
 
     return format_working_status(started_at, now=current_time, detail=status_text)
