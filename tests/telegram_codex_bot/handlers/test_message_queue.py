@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TimedOut
 
 from telegram_codex_bot.agent_io import CaptureResult
 from telegram_codex_bot.backends.base import AgentTarget
@@ -533,6 +533,69 @@ async def test_cancelled_status_clear_keeps_tracking(monkeypatch):
             "💭 Thinking (4m 28s) · esc to interrupt",
             123.0,
         )
+    finally:
+        message_queue._status_msg_info.clear()
+
+
+@pytest.mark.asyncio
+async def test_transient_status_clear_failure_keeps_tracking(monkeypatch):
+    """A Telegram delete timeout must not orphan a still-visible status bubble."""
+    message_queue._status_msg_info.clear()
+
+    bot = AsyncMock()
+    bot.delete_message.side_effect = TimedOut("Timed out")
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+
+    message_queue._status_msg_info[(1, 42)] = (
+        321,
+        "@4",
+        "💭 Thinking…\n◦ Working on it…",
+        123.0,
+    )
+
+    try:
+        await message_queue._do_clear_status_message(bot, 1, 42)
+
+        bot.delete_message.assert_awaited_once_with(chat_id=-100123, message_id=321)
+        assert message_queue._status_msg_info[(1, 42)] == (
+            321,
+            "@4",
+            "💭 Thinking…\n◦ Working on it…",
+            123.0,
+        )
+    finally:
+        message_queue._status_msg_info.clear()
+
+
+@pytest.mark.asyncio
+async def test_unrecoverable_status_clear_failure_forgets_tracking(monkeypatch):
+    """If Telegram says the message is gone, drop tracking to avoid retry loops."""
+    message_queue._status_msg_info.clear()
+
+    bot = AsyncMock()
+    bot.delete_message.side_effect = BadRequest("Message to delete not found")
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+
+    message_queue._status_msg_info[(1, 42)] = (
+        321,
+        "@4",
+        "💭 Thinking…\n◦ Working on it…",
+        123.0,
+    )
+
+    try:
+        await message_queue._do_clear_status_message(bot, 1, 42)
+
+        bot.delete_message.assert_awaited_once_with(chat_id=-100123, message_id=321)
+        assert (1, 42) not in message_queue._status_msg_info
     finally:
         message_queue._status_msg_info.clear()
 

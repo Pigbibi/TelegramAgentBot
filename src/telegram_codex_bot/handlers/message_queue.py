@@ -61,6 +61,19 @@ def _is_message_not_modified_error(exc: Exception) -> bool:
     return isinstance(exc, BadRequest) and "message is not modified" in str(exc).lower()
 
 
+def _is_unrecoverable_delete_error(exc: Exception) -> bool:
+    """Return whether Telegram says a status message can no longer be deleted."""
+    if not isinstance(exc, BadRequest):
+        return False
+    message = str(exc).lower()
+    return (
+        "message to delete not found" in message
+        or "message can't be deleted" in message
+        or "message_id_invalid" in message
+        or "message identifier is not specified" in message
+    )
+
+
 # Merge limit for content messages
 MERGE_MAX_LENGTH = 3800  # Leave room for markdown conversion overhead
 
@@ -812,8 +825,14 @@ async def _convert_status_to_content(
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except RetryAfter:
             raise
-        except Exception:
-            pass
+        except Exception as exc:
+            if not _is_unrecoverable_delete_error(exc):
+                logger.debug(
+                    "Failed to delete old status message %s; keeping tracking: %s",
+                    msg_id,
+                    exc,
+                )
+                return None
         _pop_status_info(skey)
         return None
 
@@ -855,8 +874,16 @@ async def _convert_status_to_content(
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=msg_id)
             except Exception as delete_exc:
+                if not _is_unrecoverable_delete_error(delete_exc):
+                    logger.debug(
+                        "Failed to delete unconverted status message %s; "
+                        "keeping tracking: %s",
+                        msg_id,
+                        delete_exc,
+                    )
+                    return None
                 logger.debug(
-                    "Failed to delete unconverted status message %s: %s",
+                    "Forgetting undeletable unconverted status message %s: %s",
                     msg_id,
                     delete_exc,
                 )
@@ -964,8 +991,15 @@ async def _do_send_status_message(
             await bot.delete_message(chat_id=chat_id, message_id=old[0])
         except RetryAfter:
             raise
-        except Exception:
-            pass
+        except Exception as exc:
+            if not _is_unrecoverable_delete_error(exc):
+                logger.debug(
+                    "Failed to delete old status message %s before sending a new "
+                    "one; keeping tracking: %s",
+                    old[0],
+                    exc,
+                )
+                return
         _pop_status_info(skey)
     # Send typing indicator when Codex is working
     if "esc to interrupt" in text.lower():
@@ -1001,7 +1035,14 @@ async def _do_clear_status_message(
         except RetryAfter:
             raise
         except Exception as e:
-            logger.debug(f"Failed to delete status message {msg_id}: {e}")
+            if not _is_unrecoverable_delete_error(e):
+                logger.debug(
+                    "Failed to delete status message %s; keeping tracking: %s",
+                    msg_id,
+                    e,
+                )
+                return
+            logger.debug("Forgetting undeletable status message %s: %s", msg_id, e)
         _pop_status_info(skey)
 
 
