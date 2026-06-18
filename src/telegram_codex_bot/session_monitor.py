@@ -404,6 +404,24 @@ class SessionMonitor:
         for session_id in session_ids:
             self._deferred_state_updates.pop(session_id, None)
 
+    def commit_delivered_message_offset(
+        self,
+        session_id: str,
+        source_offset: int,
+    ) -> None:
+        """Persist progress through one message after Telegram delivery is acked."""
+        if source_offset <= 0:
+            return
+        tracked = self._deferred_state_updates.get(session_id)
+        if tracked is None:
+            return
+        partial = replace(
+            tracked,
+            last_byte_offset=min(source_offset, tracked.last_byte_offset),
+        )
+        self.state.update_session(partial)
+        self.state.save_if_dirty()
+
     @staticmethod
     def _drop_backlog_before_latest_user(
         session_id: str,
@@ -659,6 +677,10 @@ class SessionMonitor:
         async def _dispatch_group(session_id: str, group: list[NewMessage]) -> str:
             for message in group:
                 await callback(message)
+                self.commit_delivered_message_offset(
+                    session_id,
+                    message.source_offset,
+                )
             return session_id
 
         tasks = {
