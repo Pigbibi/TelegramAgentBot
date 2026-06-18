@@ -164,6 +164,51 @@ class TestSessionMonitorDispatch:
         assert monitor.state.get_session("session-a").last_byte_offset == 10
         assert monitor._deferred_state_updates["session-a"].last_byte_offset == 30
 
+    @pytest.mark.asyncio
+    async def test_dispatch_batches_large_session_without_full_commit(
+        self, tmp_path, monkeypatch
+    ):
+        monitor = SessionMonitor(
+            projects_path=tmp_path / "projects",
+            state_file=tmp_path / "monitor_state.json",
+        )
+        monkeypatch.setattr(
+            "telegram_codex_bot.session_monitor._DISPATCH_GROUP_MAX_MESSAGES",
+            1,
+        )
+        monitor.state.update_session(
+            TrackedSession(
+                session_id="session-a",
+                file_path="a.jsonl",
+                last_byte_offset=0,
+            )
+        )
+        monitor._deferred_state_updates = {
+            "session-a": TrackedSession(
+                session_id="session-a",
+                file_path="a.jsonl",
+                last_byte_offset=30,
+            )
+        }
+        delivered: list[str] = []
+
+        async def callback(message: NewMessage) -> None:
+            delivered.append(message.text)
+
+        monitor.set_message_callback(callback)
+
+        dispatched_session_ids = await monitor._dispatch_new_messages(
+            [
+                NewMessage("session-a", "first", True, source_offset=10),
+                NewMessage("session-a", "second", True, source_offset=20),
+            ]
+        )
+
+        assert delivered == ["first"]
+        assert dispatched_session_ids == set()
+        assert monitor.state.get_session("session-a").last_byte_offset == 10
+        assert monitor._deferred_state_updates["session-a"].last_byte_offset == 30
+
 
 class TestReadNewLinesOffsetRecovery:
     """Tests for _read_new_lines offset corruption recovery."""
