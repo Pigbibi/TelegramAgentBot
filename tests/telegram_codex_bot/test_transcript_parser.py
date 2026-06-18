@@ -309,6 +309,45 @@ class TestParseLine:
         assert result == []
         assert pending == {}
 
+    @pytest.mark.parametrize("tool_name", ["spawn_agent", "wait_agent", "close_agent"])
+    def test_agent_orchestration_tool_call_is_hidden_from_messages(
+        self, tool_name: str
+    ):
+        use_item = {
+            "type": "response_item",
+            "timestamp": "2026-06-18T19:22:05Z",
+            "payload": {
+                "type": "function_call",
+                "call_id": f"call_{tool_name}",
+                "name": tool_name,
+                "arguments": json.dumps(
+                    {
+                        "agent_type": "worker",
+                        "message": "investigate independently",
+                        "fork_context": True,
+                    }
+                ),
+            },
+        }
+        result_item = {
+            "type": "response_item",
+            "timestamp": "2026-06-18T19:22:06Z",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": f"call_{tool_name}",
+                "output": "worker finished",
+            },
+        }
+
+        entries = [
+            TranscriptParser.parse_line(json.dumps(use_item)),
+            TranscriptParser.parse_line(json.dumps(result_item)),
+        ]
+        result, pending = TranscriptParser.parse_entries([e for e in entries if e])
+
+        assert result == []
+        assert pending == {}
+
     def test_response_item_function_call_output_is_normalized_as_tool_result(self):
         item = {
             "type": "response_item",

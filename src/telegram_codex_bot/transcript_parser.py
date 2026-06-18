@@ -77,9 +77,12 @@ class TranscriptParser:
     _NO_CONTENT_PLACEHOLDER = "(no content)"
     _INTERRUPTED_TEXT = "[Request interrupted by user for tool use]"
     _INTERNAL_TOOL_NAMES = {
+        "close_agent",
         "create_goal",
         "get_goal",
+        "spawn_agent",
         "tool_search_tool",
+        "wait_agent",
         "update_goal",
         "update_plan",
         "view_image",
