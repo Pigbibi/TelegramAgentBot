@@ -852,6 +852,25 @@ class TestParseEntries:
         assert [entry.content_type for entry in result] == ["tool_use", "tool_result"]
         assert result[1].tool_name == "Wait"
 
+    def test_unpaired_function_call_output_is_hidden_in_monitor_mode(self):
+        parsed = TranscriptParser.parse_line(
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "call_missing_tool_use",
+                        "output": 'Chunk ID: abc\nWall time: 0.0\nOutput:\n{"conclusion":"failure"}',
+                    },
+                }
+            )
+        )
+
+        result, pending = TranscriptParser.parse_entries([parsed], pending_tools={})
+
+        assert result == []
+        assert pending == {}
+
     def test_local_command_with_stdout(self, make_jsonl_entry, make_text_block):
         xml = (
             "<command-name>/status</command-name>"
