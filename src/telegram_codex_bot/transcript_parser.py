@@ -1048,21 +1048,11 @@ class TranscriptParser:
                                 )
                             )
                         elif result_text or result_images:
-                            append_result(
-                                ParsedEntry(
-                                    role="assistant",
-                                    text=cls._format_tool_result_text(
-                                        result_text, tool_name
-                                    )
-                                    if result_text
-                                    else (tool_summary or ""),
-                                    content_type="tool_result",
-                                    tool_use_id=_tuid,
-                                    timestamp=entry_timestamp,
-                                    tool_name=tool_name,
-                                    image_data=result_images,
-                                )
-                            )
+                            # If the matching tool_use was already skipped or the
+                            # monitor resumed after it, the output has no context.
+                            # Do not send anonymous raw output as a persistent
+                            # expandable quote in Telegram.
+                            continue
 
                     elif btype == "text":
                         t = block.get("text", "").strip()
