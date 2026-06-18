@@ -475,28 +475,33 @@ class SessionMonitor:
         """Return a safe resume offset for an already-bound session.
 
         When monitor_state loses or falls behind a tracked session but Telegram
-        has already advanced a bound window offset, reading older bytes replays
-        old output.  Reuse the largest per-user window offset for that bound
-        session instead.
+        has already advanced bound window offsets, reading older bytes replays
+        old output. Reuse the earliest delivered offset among currently bound
+        recipients so one recipient's later offset cannot skip another
+        recipient that still needs older transcript bytes.
         """
         try:
             file_size = file_path.stat().st_size
         except OSError:
             file_size = 0
 
+        user_window_offsets = getattr(session_manager, "user_window_offsets", {})
+        if not isinstance(user_window_offsets, dict):
+            return 0
+
         offsets: list[int] = []
-        for _user_id, _thread_id, window_id in session_manager.iter_thread_bindings():
+        for user_id, _thread_id, window_id in session_manager.iter_thread_bindings():
             state = session_manager.get_window_state(window_id)
             if not _session_ids_match(getattr(state, "session_id", ""), session_id):
                 continue
-            for user_offsets in getattr(
-                session_manager, "user_window_offsets", {}
-            ).values():
-                offset = user_offsets.get(window_id)
-                if isinstance(offset, int) and 0 < offset <= file_size:
-                    offsets.append(offset)
+            user_offsets = user_window_offsets.get(user_id, {})
+            if not isinstance(user_offsets, dict):
+                continue
+            offset = user_offsets.get(window_id)
+            if isinstance(offset, int) and 0 < offset <= file_size:
+                offsets.append(offset)
 
-        return max(offsets, default=0)
+        return min(offsets, default=0)
 
     async def check_for_updates(
         self,

@@ -495,6 +495,63 @@ class TestReadNewLinesOffsetRecovery:
         assert tracked.last_byte_offset == jsonl_file.stat().st_size
 
     @pytest.mark.asyncio
+    async def test_stale_monitor_state_uses_earliest_bound_user_offset(
+        self, monitor, tmp_path, make_jsonl_entry
+    ):
+        """A shared session should resume from the earliest bound recipient offset."""
+        jsonl_file = tmp_path / "session.jsonl"
+        first = make_jsonl_entry(msg_type="assistant", content="first answer")
+        second = make_jsonl_entry(msg_type="assistant", content="second answer")
+        third = make_jsonl_entry(msg_type="assistant", content="third answer")
+        first_line = json.dumps(first) + "\n"
+        second_line = json.dumps(second) + "\n"
+        third_line = json.dumps(third) + "\n"
+        jsonl_file.write_text(
+            first_line + second_line + third_line,
+            encoding="utf-8",
+        )
+        first_offset = len(first_line.encode("utf-8"))
+        second_offset = first_offset + len(second_line.encode("utf-8"))
+
+        monitor.scan_projects = AsyncMock(
+            return_value=[
+                SessionInfo(
+                    session_id="session-shared-state",
+                    file_path=jsonl_file,
+                )
+            ]
+        )
+        monitor.state.update_session(
+            TrackedSession(
+                session_id="session-shared-state",
+                file_path=str(jsonl_file),
+                last_byte_offset=0,
+            )
+        )
+
+        state = SimpleNamespace(session_id="session-shared-state")
+        with patch("telegram_codex_bot.session.session_manager") as mock_sm:
+            mock_sm.has_bound_thread_for_session.return_value = True
+            mock_sm.iter_thread_bindings.return_value = [
+                (11111, 41, "@1"),
+                (22222, 42, "@1"),
+            ]
+            mock_sm.get_window_state.return_value = state
+            mock_sm.user_window_offsets = {
+                11111: {"@1": second_offset},
+                22222: {"@1": first_offset},
+            }
+            messages = await monitor.check_for_updates(set())
+
+        assert [message.text for message in messages] == [
+            "second answer",
+            "third answer",
+        ]
+        tracked = monitor.state.get_session("session-shared-state")
+        assert tracked is not None
+        assert tracked.last_byte_offset == jsonl_file.stat().st_size
+
+    @pytest.mark.asyncio
     async def test_messages_carry_source_line_offsets(
         self, monitor, tmp_path, make_jsonl_entry
     ):

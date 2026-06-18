@@ -4853,6 +4853,25 @@ async def _mark_transcript_message_delivered(
             pass
 
 
+def _transcript_message_already_delivered(
+    user_id: int,
+    window_id: str,
+    msg: NewMessage,
+) -> bool:
+    """Return True when this recipient has already received this JSONL line."""
+    if not window_id or msg.source_offset <= 0:
+        return False
+
+    user_window_offsets = getattr(session_manager, "user_window_offsets", {})
+    if not isinstance(user_window_offsets, dict):
+        return False
+    user_offsets = user_window_offsets.get(user_id, {})
+    if not isinstance(user_offsets, dict):
+        return False
+    delivered_offset = user_offsets.get(window_id)
+    return isinstance(delivered_offset, int) and delivered_offset >= msg.source_offset
+
+
 async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     """Handle a new assistant message — enqueue for sequential processing.
 
@@ -4882,6 +4901,22 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     delivery_failed = False
     for user_id, wid, thread_id in active_users:
         is_remote_target = not wid
+        if not is_remote_target and _transcript_message_already_delivered(
+            user_id,
+            wid,
+            msg,
+        ):
+            logger.info(
+                "Skipping already delivered transcript message: "
+                "session=%s user=%d thread=%s window_id=%s source_offset=%d",
+                msg.session_id,
+                user_id,
+                thread_id,
+                wid,
+                msg.source_offset,
+            )
+            continue
+
         if msg.content_type == "usage_limit":
             if is_remote_target:
                 await safe_send(
