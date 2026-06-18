@@ -57,6 +57,69 @@ class TestSessionMonitorDispatch:
         assert completed.index("a1") < completed.index("a2")
         assert "b1" in completed
 
+    @pytest.mark.asyncio
+    async def test_dispatch_timeout_does_not_block_other_sessions(
+        self, tmp_path, monkeypatch
+    ):
+        monitor = SessionMonitor(
+            projects_path=tmp_path / "projects",
+            state_file=tmp_path / "monitor_state.json",
+        )
+        first_session_started = asyncio.Event()
+        completed: list[str] = []
+
+        monkeypatch.setattr(
+            "telegram_codex_bot.session_monitor._DISPATCH_GROUP_TIMEOUT_SECONDS",
+            0.05,
+        )
+
+        async def callback(message: NewMessage) -> None:
+            if message.session_id == "session-a":
+                first_session_started.set()
+                await asyncio.sleep(60)
+            completed.append(message.text)
+
+        monitor.set_message_callback(callback)
+
+        dispatched_session_ids = await monitor._dispatch_new_messages(
+            [
+                NewMessage("session-a", "a1", True),
+                NewMessage("session-b", "b1", True),
+            ]
+        )
+
+        assert first_session_started.is_set()
+        assert completed == ["b1"]
+        assert dispatched_session_ids == {"session-b"}
+
+    def test_commit_deferred_state_updates_can_commit_subset(self, tmp_path):
+        monitor = SessionMonitor(
+            projects_path=tmp_path / "projects",
+            state_file=tmp_path / "monitor_state.json",
+        )
+        monitor._deferred_state_updates = {
+            "session-a": TrackedSession(
+                session_id="session-a",
+                file_path="a.jsonl",
+                last_byte_offset=10,
+            ),
+            "session-b": TrackedSession(
+                session_id="session-b",
+                file_path="b.jsonl",
+                last_byte_offset=20,
+            ),
+        }
+
+        monitor.commit_deferred_state_updates({"session-b"})
+
+        assert monitor.state.get_session("session-a") is None
+        assert monitor.state.get_session("session-b").last_byte_offset == 20
+        assert set(monitor._deferred_state_updates) == {"session-a"}
+
+        monitor.discard_deferred_state_updates({"session-a"})
+
+        assert monitor._deferred_state_updates == {}
+
 
 class TestReadNewLinesOffsetRecovery:
     """Tests for _read_new_lines offset corruption recovery."""

@@ -120,7 +120,8 @@ async def test_handle_new_message_keeps_offset_when_delivery_fails() -> None:
 
         from telegram_codex_bot.bot import handle_new_message
 
-        await handle_new_message(msg, bot)
+        with pytest.raises(RuntimeError, match="Telegram content deliveries failed"):
+            await handle_new_message(msg, bot)
 
     enqueue_content_message.assert_awaited_once()
     mock_sm.update_user_window_offset.assert_not_called()
