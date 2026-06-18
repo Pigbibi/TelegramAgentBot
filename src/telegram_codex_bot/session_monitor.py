@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -24,7 +25,9 @@ from .utils import is_subagent_transcript, read_cwd_from_jsonl
 
 logger = logging.getLogger(__name__)
 _ENTRY_END_OFFSET_KEY = "_telegram_codex_bot_end_offset"
-_DISPATCH_GROUP_TIMEOUT_SECONDS = 30.0
+_DISPATCH_GROUP_TIMEOUT_SECONDS = 120.0
+_DISPATCH_GROUP_SOFT_TIME_SECONDS = 20.0
+_DISPATCH_GROUP_MAX_MESSAGES = 8
 
 
 @dataclass
@@ -674,14 +677,45 @@ class SessionMonitor:
         for message in messages:
             groups.setdefault(message.session_id, []).append(message)
 
-        async def _dispatch_group(session_id: str, group: list[NewMessage]) -> str:
-            for message in group:
+        async def _dispatch_group(
+            session_id: str,
+            group: list[NewMessage],
+        ) -> tuple[str, bool]:
+            started_at = time.monotonic()
+            for index, message in enumerate(group):
+                if index >= _DISPATCH_GROUP_MAX_MESSAGES:
+                    logger.info(
+                        "Pausing transcript dispatch for session %s after %d/%d "
+                        "message(s); remaining messages will retry next poll",
+                        session_id,
+                        index,
+                        len(group),
+                    )
+                    return session_id, False
+
                 await callback(message)
                 self.commit_delivered_message_offset(
                     session_id,
                     message.source_offset,
                 )
-            return session_id
+
+                delivered_count = index + 1
+                if (
+                    delivered_count < len(group)
+                    and time.monotonic() - started_at
+                    >= _DISPATCH_GROUP_SOFT_TIME_SECONDS
+                ):
+                    logger.info(
+                        "Pausing transcript dispatch for session %s after %.1fs "
+                        "and %d/%d message(s); remaining messages will retry next poll",
+                        session_id,
+                        time.monotonic() - started_at,
+                        delivered_count,
+                        len(group),
+                    )
+                    return session_id, False
+
+            return session_id, True
 
         tasks = {
             session_id: asyncio.create_task(
@@ -711,7 +745,12 @@ class SessionMonitor:
                     result,
                 )
                 continue
-            if not isinstance(result, str):
+            if (
+                not isinstance(result, tuple)
+                or len(result) != 2
+                or not isinstance(result[0], str)
+                or not isinstance(result[1], bool)
+            ):
                 logger.warning(
                     "Unexpected dispatch result for session %s: %r; "
                     "leaving monitor offset uncommitted for retry",
@@ -719,7 +758,9 @@ class SessionMonitor:
                     result,
                 )
                 continue
-            dispatched_session_ids.add(result)
+            result_session_id, group_complete = result
+            if group_complete:
+                dispatched_session_ids.add(result_session_id)
 
         return dispatched_session_ids
 
