@@ -79,7 +79,9 @@ class TranscriptParser:
     _INTERNAL_TOOL_NAMES = {
         "create_goal",
         "get_goal",
+        "spawn_agent",
         "tool_search_tool",
+        "wait_agent",
         "update_goal",
         "update_plan",
         "view_image",
