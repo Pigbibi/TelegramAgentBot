@@ -94,6 +94,60 @@ async def test_handle_new_message_uses_source_offset_for_delivered_local_message
 
 
 @pytest.mark.asyncio
+async def test_handle_new_message_skips_already_delivered_local_recipient() -> None:
+    bot = AsyncMock()
+    msg = NewMessage(
+        session_id="local-1",
+        text="local response",
+        is_complete=True,
+        source_offset=123,
+    )
+
+    with (
+        patch("telegram_codex_bot.bot.session_manager") as mock_sm,
+        patch(
+            "telegram_codex_bot.bot.enqueue_content_message",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as enqueue_content_message,
+        patch(
+            "telegram_codex_bot.bot.build_response_parts",
+            return_value=["local response"],
+        ),
+    ):
+        mock_sm.find_users_for_session = AsyncMock(
+            return_value=[(11111, "@1", 41), (22222, "@1", 42)]
+        )
+        mock_sm.find_users_for_target_session.return_value = []
+        mock_sm.user_window_offsets = {
+            11111: {"@1": 123},
+            22222: {"@1": 100},
+        }
+        mock_sm.resolve_session_for_window = AsyncMock()
+
+        from telegram_codex_bot.bot import handle_new_message
+
+        await handle_new_message(msg, bot)
+
+    enqueue_content_message.assert_awaited_once_with(
+        bot=bot,
+        user_id=22222,
+        window_id="@1",
+        parts=["local response"],
+        tool_use_id=None,
+        tool_name=None,
+        content_type="text",
+        role="assistant",
+        text="local response",
+        thread_id=42,
+        image_data=None,
+        wait_until_sent=True,
+    )
+    mock_sm.update_user_window_offset.assert_called_once_with(22222, "@1", 123)
+    mock_sm.resolve_session_for_window.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_handle_new_message_keeps_offset_when_delivery_fails() -> None:
     bot = AsyncMock()
     msg = NewMessage(
