@@ -4879,6 +4879,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         logger.info(f"No active users for session {msg.session_id}")
         return
 
+    delivery_failed = False
     for user_id, wid, thread_id in active_users:
         is_remote_target = not wid
         if msg.content_type == "usage_limit":
@@ -5024,10 +5025,14 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                     wid,
                     msg.content_type,
                 )
+                delivery_failed = True
                 continue
 
             if not is_remote_target:
                 await _mark_transcript_message_delivered(user_id, wid, msg)
+
+    if delivery_failed:
+        raise RuntimeError("One or more Telegram content deliveries failed")
 
 
 # --- App lifecycle ---

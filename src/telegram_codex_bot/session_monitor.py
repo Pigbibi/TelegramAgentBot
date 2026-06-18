@@ -24,6 +24,7 @@ from .utils import is_subagent_transcript, read_cwd_from_jsonl
 
 logger = logging.getLogger(__name__)
 _ENTRY_END_OFFSET_KEY = "_telegram_codex_bot_end_offset"
+_DISPATCH_GROUP_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass
@@ -374,18 +375,34 @@ class SessionMonitor:
             persist_session_map=True,
         )
 
-    def commit_deferred_state_updates(self) -> None:
+    def commit_deferred_state_updates(
+        self, session_ids: set[str] | None = None
+    ) -> None:
         """Persist monitor offsets after queued Telegram delivery completes."""
         if not self._deferred_state_updates:
             return
-        for tracked in self._deferred_state_updates.values():
+
+        if session_ids is None:
+            selected_session_ids = set(self._deferred_state_updates)
+        else:
+            selected_session_ids = session_ids
+
+        for session_id in selected_session_ids:
+            tracked = self._deferred_state_updates.pop(session_id, None)
+            if tracked is None:
+                continue
             self.state.update_session(tracked)
-        self._deferred_state_updates.clear()
         self.state.save_if_dirty()
 
-    def discard_deferred_state_updates(self) -> None:
+    def discard_deferred_state_updates(
+        self, session_ids: set[str] | None = None
+    ) -> None:
         """Drop uncommitted offsets so undelivered transcript lines can replay."""
-        self._deferred_state_updates.clear()
+        if session_ids is None:
+            self._deferred_state_updates.clear()
+            return
+        for session_id in session_ids:
+            self._deferred_state_updates.pop(session_id, None)
 
     @staticmethod
     def _drop_backlog_before_latest_user(
@@ -618,7 +635,7 @@ class SessionMonitor:
             self.state.save_if_dirty()
         return new_messages
 
-    async def _dispatch_new_messages(self, messages: list[NewMessage]) -> None:
+    async def _dispatch_new_messages(self, messages: list[NewMessage]) -> set[str]:
         """Dispatch transcript messages without letting one session starve others.
 
         Message queue workers already preserve Telegram ordering per topic. The
@@ -628,17 +645,61 @@ class SessionMonitor:
         """
         callback = self._message_callback
         if not messages or callback is None:
-            return
+            if messages:
+                logger.warning(
+                    "Cannot dispatch %d transcript message(s): no callback",
+                    len(messages),
+                )
+            return set()
 
         groups: dict[str, list[NewMessage]] = {}
         for message in messages:
             groups.setdefault(message.session_id, []).append(message)
 
-        async def _dispatch_group(group: list[NewMessage]) -> None:
+        async def _dispatch_group(session_id: str, group: list[NewMessage]) -> str:
             for message in group:
                 await callback(message)
+            return session_id
 
-        await asyncio.gather(*(_dispatch_group(group) for group in groups.values()))
+        tasks = {
+            session_id: asyncio.create_task(
+                asyncio.wait_for(
+                    _dispatch_group(session_id, group),
+                    timeout=_DISPATCH_GROUP_TIMEOUT_SECONDS,
+                )
+            )
+            for session_id, group in groups.items()
+        }
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+        dispatched_session_ids: set[str] = set()
+        for session_id, result in zip(tasks, results, strict=True):
+            if isinstance(result, asyncio.TimeoutError):
+                logger.warning(
+                    "Timed out dispatching transcript messages for session %s; "
+                    "leaving monitor offset uncommitted for retry",
+                    session_id,
+                )
+                continue
+            if isinstance(result, Exception):
+                logger.warning(
+                    "Failed to dispatch transcript messages for session %s: %s; "
+                    "leaving monitor offset uncommitted for retry",
+                    session_id,
+                    result,
+                )
+                continue
+            if not isinstance(result, str):
+                logger.warning(
+                    "Unexpected dispatch result for session %s: %r; "
+                    "leaving monitor offset uncommitted for retry",
+                    session_id,
+                    result,
+                )
+                continue
+            dispatched_session_ids.add(result)
+
+        return dispatched_session_ids
 
     async def _monitor_loop(self) -> None:
         """Poll recursively discovered transcripts and forward new messages."""
@@ -654,8 +715,21 @@ class SessionMonitor:
             try:
                 await session_manager.load_session_map()
                 new_messages = await self.check_for_updates(set(), save_state=False)
-                await self._dispatch_new_messages(new_messages)
-                self.commit_deferred_state_updates()
+                deferred_session_ids = set(self._deferred_state_updates)
+                message_session_ids = {message.session_id for message in new_messages}
+                if new_messages:
+                    dispatched_session_ids = await self._dispatch_new_messages(
+                        new_messages
+                    )
+                    self.commit_deferred_state_updates(
+                        (deferred_session_ids - message_session_ids)
+                        | dispatched_session_ids
+                    )
+                    self.discard_deferred_state_updates(
+                        message_session_ids - dispatched_session_ids
+                    )
+                else:
+                    self.commit_deferred_state_updates()
             except asyncio.CancelledError:
                 self.discard_deferred_state_updates()
                 raise
