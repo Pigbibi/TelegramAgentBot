@@ -309,7 +309,7 @@ class TestParseLine:
         assert result == []
         assert pending == {}
 
-    @pytest.mark.parametrize("tool_name", ["spawn_agent", "wait_agent"])
+    @pytest.mark.parametrize("tool_name", ["spawn_agent", "wait_agent", "close_agent"])
     def test_agent_orchestration_tool_call_is_hidden_from_messages(
         self, tool_name: str
     ):
