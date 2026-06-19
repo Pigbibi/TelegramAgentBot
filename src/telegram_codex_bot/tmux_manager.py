@@ -48,6 +48,8 @@ _WAITING_BACKGROUND_RE = re.compile(
     r"^[•◦]\s*Waiting for background terminal\b", re.IGNORECASE
 )
 _HOOK_TRUST_BYPASS_FLAG = "--dangerously-bypass-hook-trust"
+_SUBMIT_SETTLE_CHECKS = 8
+_SUBMIT_SETTLE_INTERVAL_SECONDS = 0.5
 
 
 def _resume_target_id(session_id: str) -> str:
@@ -697,16 +699,21 @@ class TmuxManager:
                     window_id,
                     text,
                 ):
-                    # Codex can briefly leave the submitted prompt rendered near the
-                    # footer before the working status is painted. Give the TUI one
-                    # final settle window so a successful submit is not reported as
-                    # a send failure.
-                    await asyncio.sleep(1.0)
-                    if await asyncio.to_thread(
-                        self._pane_still_has_pending_literal_input,
-                        window_id,
-                        text,
-                    ):
+                    submitted_after_settle = False
+                    for _ in range(_SUBMIT_SETTLE_CHECKS):
+                        # Codex can leave submitted /goal prompts rendered for a
+                        # few seconds before the Pursuing goal status is painted.
+                        # Poll briefly so a slow successful submit is not
+                        # reported as a send failure.
+                        await asyncio.sleep(_SUBMIT_SETTLE_INTERVAL_SECONDS)
+                        if not await asyncio.to_thread(
+                            self._pane_still_has_pending_literal_input,
+                            window_id,
+                            text,
+                        ):
+                            submitted_after_settle = True
+                            break
+                    if not submitted_after_settle:
                         logger.error(
                             "Codex prompt still appears pending in window %s after retry",
                             window_id,
