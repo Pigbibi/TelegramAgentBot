@@ -683,6 +683,39 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok)
         self.assertEqual(run_mock.call_count, 2)
 
+    async def test_send_keys_waits_for_goal_status_after_retry_settle(self) -> None:
+        pane = _SendKeysDummyPane()
+        window = _SendKeysDummyWindow(pane)
+        session = _SendKeysDummySession(window)
+        manager = tmux_manager_module.TmuxManager(
+            session_name="telegram-codex-bot-test"
+        )
+
+        with (
+            patch.object(manager, "get_session", return_value=session),
+            patch(
+                "telegram_codex_bot.tmux_manager.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    args=["tmux", "send-keys"], returncode=0
+                ),
+            ) as run_mock,
+            patch.object(
+                manager,
+                "_pane_still_has_pending_literal_input",
+                side_effect=[True, True, True, True, False],
+            ) as pending_mock,
+            patch.object(manager, "_pane_has_insert_overlay", return_value=False),
+            patch(
+                "telegram_codex_bot.tmux_manager.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+        ):
+            ok = await manager.send_keys("@9", "/goal 按照你的建议全部完善优化")
+
+        self.assertTrue(ok)
+        self.assertEqual(run_mock.call_count, 2)
+        self.assertEqual(pending_mock.call_count, 5)
+
     async def test_send_keys_returns_false_when_retry_leaves_prompt_pending(
         self,
     ) -> None:
@@ -704,9 +737,14 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 manager,
                 "_pane_still_has_pending_literal_input",
-                side_effect=[True, True, True],
+                side_effect=[True, True]
+                + [True] * tmux_manager_module._SUBMIT_SETTLE_CHECKS,
             ),
             patch.object(manager, "_pane_has_insert_overlay", return_value=False),
+            patch(
+                "telegram_codex_bot.tmux_manager.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
         ):
             ok = await manager.send_keys("@9", "hello")
 
