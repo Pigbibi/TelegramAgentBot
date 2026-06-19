@@ -366,6 +366,32 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(pending)
 
+    def test_pane_pending_literal_input_ignores_pursuing_goal_footer(self) -> None:
+        manager = tmux_manager_module.TmuxManager(
+            session_name="telegram-codex-bot-test"
+        )
+        capture = (
+            "› /goal 按照你的建议进行实现，完成后推送提交，合并 pr\n"
+            "\n"
+            "  gpt-5.5 xhigh · ~/Projects · Main [default]               "
+            "Pursuing goal (3m)\n"
+        )
+
+        with patch(
+            "telegram_codex_bot.tmux_manager.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["tmux", "capture-pane"],
+                returncode=0,
+                stdout=capture,
+            ),
+        ):
+            pending = manager._pane_still_has_pending_literal_input(
+                "@9",
+                "/goal 按照你的建议进行实现，完成后推送提交，合并 pr",
+            )
+
+        self.assertFalse(pending)
+
     def test_pane_pending_literal_input_detects_queued_prompt_after_waiting_background(
         self,
     ) -> None:

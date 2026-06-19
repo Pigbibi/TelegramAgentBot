@@ -38,7 +38,11 @@ _INSERT_OVERLAY_RE = re.compile(
     re.IGNORECASE,
 )
 _ACTIVE_WORKING_RE = re.compile(
-    r"^[•◦]\s*Working\b|esc\s+to\s+interrupt", re.IGNORECASE
+    r"^[•◦]\s*(?:Working|Pursuing goal)\b"
+    r"|^Pursuing goal\b"
+    r"|esc\s+to\s+interrupt"
+    r"|\bgpt-[\w.]+.*\bPursuing goal\b",
+    re.IGNORECASE,
 )
 _WAITING_BACKGROUND_RE = re.compile(
     r"^[•◦]\s*Waiting for background terminal\b", re.IGNORECASE
