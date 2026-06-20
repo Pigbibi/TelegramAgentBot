@@ -183,6 +183,8 @@ TELEGRAM_BOT_TOKEN=your_bot_token_here
 ALLOWED_USERS=your_telegram_user_id
 TELEGRAM_CODEX_BOT_CODEX_COMMAND=codex
 TELEGRAM_CODEX_BOT_AUTO_UPDATE=true
+TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK=true
+TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=true
 TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES=true
 ```
 
@@ -350,12 +352,12 @@ Self-update intentionally skips non-git installs such as `pipx install` or
 `uv tool install`, and it also skips a checkout with local modifications.
 
 Codex CLI checks are separate from telegram-codex-bot self-update. The example `.env` enables
-`TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK=true`, which only reports when a newer npm package is
-available. When an update is available, telegram-codex-bot sends allowed users a Telegram
-prompt with an upgrade button. Keep `TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=false` unless the
-service user should apply Codex CLI updates without confirmation. If the global npm package is
-root-owned, set `TELEGRAM_CODEX_BOT_CODEX_UPDATE_NPM=sudo -n npm` only after granting that
-non-interactive sudo path deliberately.
+`TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK=true` and
+`TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=true`, so an idle bot applies newer Codex CLI npm
+packages without waiting for Telegram confirmation. If the global npm package is root-owned,
+set `TELEGRAM_CODEX_BOT_CODEX_UPDATE_NPM=sudo -n npm` only after granting that
+non-interactive sudo path deliberately. Set `TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=false` if you
+prefer an upgrade prompt with a confirmation button.
 
 ### Non-interactive servers / VPS
 
