@@ -180,6 +180,8 @@ TELEGRAM_BOT_TOKEN=your_bot_token_here
 ALLOWED_USERS=your_telegram_user_id
 TELEGRAM_CODEX_BOT_CODEX_COMMAND=codex
 TELEGRAM_CODEX_BOT_AUTO_UPDATE=true
+TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK=true
+TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=true
 TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES=true
 ```
 
@@ -329,10 +331,11 @@ telegram-codex-bot --version
 自更新只处理 git checkout；`pipx install` 或 `uv tool install` 这类非源码安装会跳过。有本地改动的 checkout 也会跳过，避免覆盖你的修改。
 
 Codex CLI 检查和 telegram-codex-bot 自更新是分开的。示例 `.env` 会开启
-`TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK=true`。发现新版本时，telegram-codex-bot 会给
-允许用户发送 Telegram 升级确认按钮。除非希望服务用户无需确认就更新 Codex CLI，否则保持
-`TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=false`。如果全局 npm 包归 root 管理，只在明确配置
-了非交互 sudo 权限后，再设置 `TELEGRAM_CODEX_BOT_CODEX_UPDATE_NPM=sudo -n npm`。
+`TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK=true` 和
+`TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=true`，因此 bot 空闲时会自动应用新的 Codex CLI
+npm 包，不再等待 Telegram 确认。如果全局 npm 包归 root 管理，只在明确配置了非交互
+sudo 权限后，再设置 `TELEGRAM_CODEX_BOT_CODEX_UPDATE_NPM=sudo -n npm`。如果仍希望通过
+Telegram 按钮确认升级，请设为 `TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=false`。
 
 ### 非交互服务器 / VPS 场景
 
