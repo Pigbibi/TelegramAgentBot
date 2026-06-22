@@ -300,6 +300,37 @@ CC_COMMANDS: dict[str, str] = {
 }
 
 
+_FORWARDED_COMMAND_RE = re.compile(
+    r"^/(?P<name>[A-Za-z0-9_]+)(?:@[A-Za-z0-9_]+)?(?P<rest>.*)$"
+)
+_COMMAND_ARG_SEPARATORS = ".。"
+
+
+def _normalize_forward_command_text(cmd_text: str) -> str:
+    """Normalize Telegram slash commands before forwarding them to Codex."""
+    match = _FORWARDED_COMMAND_RE.match(cmd_text)
+    if not match:
+        return cmd_text
+
+    command_name = match.group("name")
+    rest = match.group("rest") or ""
+    normalized = f"/{command_name}"
+
+    # Telegram users sometimes type "/goal.继续..." from Chinese input. Codex
+    # expects a space between a known slash command and its argument; without it
+    # the TUI can leave the text pending and the bot reports a low-level send
+    # failure. Keep this limited to known Codex commands so arbitrary forwarded
+    # commands keep their original spelling.
+    if (
+        command_name.lower() in CC_COMMANDS
+        and rest
+        and rest[0] in _COMMAND_ARG_SEPARATORS
+    ):
+        rest = " " + rest[1:].lstrip()
+
+    return normalized + rest
+
+
 class _DirectoryBrowserKwargs(TypedDict, total=False):
     root_label: str
     root_path: str
@@ -1983,8 +2014,10 @@ async def forward_command_handler(
         session_manager.set_group_chat_id(user.id, thread_id, chat.id)
 
     cmd_text = update.message.text or ""
-    # The full text is already a slash command like "/clear" or "/compact foo"
-    cc_slash = cmd_text.split("@")[0]  # strip bot mention
+    # The full text is already a slash command like "/clear" or "/compact foo".
+    # Strip only a Telegram bot mention in the command token; keep @mentions
+    # in command arguments intact.
+    cc_slash = _normalize_forward_command_text(cmd_text)
     wid = session_manager.resolve_window_for_thread(user.id, thread_id)
     target = session_manager.resolve_target_for_thread(user.id, thread_id)
     if not wid and not target:
