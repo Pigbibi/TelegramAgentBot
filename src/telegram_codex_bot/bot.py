@@ -1048,8 +1048,11 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update.message, f"```\n{trimmed}\n```")
 
 
-def _codex_login_executable() -> str:
-    """Return the Codex executable to use for device login."""
+def _agent_login_executable() -> str:
+    """Return the agent executable to use for device login.
+
+    Supports both Codex (``codex login``) and Claude Code (``claude login``).
+    """
     try:
         command_parts = shlex.split(config.codex_command)
     except ValueError:
@@ -1060,7 +1063,8 @@ def _codex_login_executable() -> str:
         if sep and name.isidentifier():
             continue
         return shutil.which(part) or part
-    return shutil.which("codex") or "codex"
+    default = "claude" if config.agent_type == "claude" else "codex"
+    return shutil.which(default) or default
 
 
 def _extract_device_login_details(output: str) -> tuple[str | None, str | None]:
@@ -1075,19 +1079,21 @@ def _extract_device_login_details(output: str) -> tuple[str | None, str | None]:
 
 
 def _login_display_name(account_name: str | None) -> str:
+    agent_label = config.agent_type_display
     if account_name:
         return f"account `{account_name}`"
-    return "the service user's default Codex account"
+    return f"the service user's default {agent_label} account"
 
 
 def _account_command_usage() -> str:
+    agent_label = config.agent_type_display
     return (
         "Usage:\n"
         "/codexaccount list\n"
         "/codexaccount use <name>\n"
         "/codexaccount clear\n"
         "/codexaccount save <name>\n"
-        "/codexlogin [name]"
+        f"/codexlogin [name] — login to {agent_label}"
     )
 
 
@@ -1095,13 +1101,15 @@ def _format_account_status() -> str:
     names = list_account_names()
     current = get_current_account_name()
     rotation = "enabled" if config.enable_account_rotation else "disabled"
+    agent_label = config.agent_type_display
+    env_var = "CLAUDE_HOME" if config.agent_type == "claude" else "CODEX_HOME"
     lines = [
-        "🔐 Codex account status",
+        f"🔐 {agent_label} account status",
         f"Automatic quota rotation: {rotation}",
         (
             f"New sessions: saved account `{current}`"
             if current
-            else "New sessions: service user's default CODEX_HOME"
+            else f"New sessions: service user's default {env_var}"
         ),
     ]
     if names:
@@ -1111,7 +1119,7 @@ def _format_account_status() -> str:
             lines.append(f"- `{name}`{suffix}")
     else:
         lines.append("Saved accounts: none")
-    lines.append("Use /codexlogin [name] to refresh login from Telegram.")
+    lines.append(f"Use /codexlogin [name] to refresh login from Telegram.")
     return "\n".join(lines)
 
 
@@ -1147,19 +1155,28 @@ async def _codex_login_worker(
     account_name: str | None,
     login_key: str,
 ) -> None:
-    """Run `codex login --device-auth` and report status back to Telegram."""
+    """Run agent login and report status back to Telegram.
+
+    For Codex: runs ``codex login --device-auth``.
+    For Claude Code: runs ``claude login``.
+    """
     account_home = None
     process: asyncio.subprocess.Process | None = None
     try:
         env = os.environ.copy()
         if account_name:
             account_home = prepare_account_home(account_name)
-            env["CODEX_HOME"] = str(account_home)
+            if config.agent_type == "claude":
+                env["CLAUDE_HOME"] = str(account_home)
+            else:
+                env["CODEX_HOME"] = str(account_home)
+
+        login_args = [_agent_login_executable(), "login"]
+        if config.agent_type == "codex":
+            login_args.append("--device-auth")
 
         process = await asyncio.create_subprocess_exec(
-            _codex_login_executable(),
-            "login",
-            "--device-auth",
+            *login_args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,

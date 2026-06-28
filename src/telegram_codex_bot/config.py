@@ -19,8 +19,13 @@ from .utils import app_dir
 
 logger = logging.getLogger(__name__)
 
-# Env vars that must not leak to child processes (e.g. Codex via tmux)
-SENSITIVE_ENV_VARS = {"TELEGRAM_BOT_TOKEN", "ALLOWED_USERS", "OPENAI_API_KEY"}
+# Env vars that must not leak to child processes (e.g. Codex/Claude via tmux)
+SENSITIVE_ENV_VARS = {
+    "TELEGRAM_BOT_TOKEN",
+    "ALLOWED_USERS",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+}
 
 
 @dataclass(frozen=True)
@@ -100,6 +105,19 @@ class Config:
                 "Expected comma-separated Telegram user IDs."
             ) from e
 
+        # Agent type: "codex" (default) or "claude". Controls which CLI is launched,
+        # where transcripts are stored, and which update mechanism is used.
+        self.agent_type = (
+            os.getenv("TELEGRAM_CODEX_BOT_AGENT_TYPE", "codex").strip().lower() or "codex"
+        )
+        if self.agent_type not in ("codex", "claude"):
+            logger.warning(
+                "Unknown agent_type %r, falling back to 'codex'",
+                self.agent_type,
+            )
+            self.agent_type = "codex"
+        self.agent_type_display = "Codex" if self.agent_type == "codex" else "Claude Code"
+
         # Tmux session name/socket and window naming
         self.tmux_socket_name = os.getenv("TELEGRAM_CODEX_BOT_TMUX_SOCKET_NAME") or None
         self.tmux_session_name = os.getenv(
@@ -107,8 +125,14 @@ class Config:
         )
         self.tmux_main_window_name = "__main__"
 
-        # Command to run in new windows.
-        self.codex_command = os.getenv("TELEGRAM_CODEX_BOT_CODEX_COMMAND", "codex")
+        # Command to run in new windows. Default depends on agent_type:
+        #   codex  → "codex"
+        #   claude → "claude"
+        # Can always be overridden via TELEGRAM_CODEX_BOT_CODEX_COMMAND.
+        _default_command = "claude" if self.agent_type == "claude" else "codex"
+        self.codex_command = os.getenv(
+            "TELEGRAM_CODEX_BOT_CODEX_COMMAND", _default_command
+        )
         self.codex_bypass_hook_trust = (
             os.getenv("TELEGRAM_CODEX_BOT_CODEX_BYPASS_HOOK_TRUST", "").lower()
             == "true"
@@ -136,14 +160,24 @@ class Config:
         self.monitor_state_file = self.config_dir / "monitor_state.json"
 
         # Transcript/session monitoring configuration.
-        # Priority: explicit TELEGRAM_CODEX_BOT path > CODEX_HOME > default ~/.codex
+        # Priority: explicit TELEGRAM_CODEX_BOT path > CODEX_HOME >
+        #   CLAUDE_HOME (claude) > default per agent_type.
+        #
+        # Default: ~/.codex for codex, ~/.claude/projects for claude.
         custom_projects_path = os.getenv("TELEGRAM_CODEX_BOT_CODEX_PROJECTS_PATH")
         codex_home = os.getenv("CODEX_HOME")
+        claude_home = os.getenv("CLAUDE_HOME")
 
         if custom_projects_path:
             self.codex_projects_path = Path(custom_projects_path)
         elif codex_home:
             self.codex_projects_path = Path(codex_home)
+        elif self.agent_type == "claude":
+            self.codex_projects_path = (
+                Path(claude_home).expanduser() / "projects"
+                if claude_home
+                else Path.home() / ".claude" / "projects"
+            )
         else:
             self.codex_projects_path = Path.home() / ".codex"
 
@@ -243,13 +277,16 @@ class Config:
 
         logger.debug(
             "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
-            "tmux_socket=%s, tmux_session=%s, codex_projects_path=%s, "
+            "tmux_socket=%s, tmux_session=%s, agent_type=%s, "
+            "codex_command=%s, codex_projects_path=%s, "
             "default_projects_path=%s, project_roots=%d, backend=%s",
             self.config_dir,
             self.telegram_bot_token[:8],
             len(self.allowed_users),
             self.tmux_socket_name,
             self.tmux_session_name,
+            self.agent_type,
+            self.codex_command,
             self.codex_projects_path,
             self.default_projects_path,
             len(self.project_roots),

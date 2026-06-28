@@ -33,6 +33,7 @@ DEFAULT_BUSY_RETRY_SECONDS = 5 * 60
 DEFAULT_CHECK_TIMEOUT_SECONDS = 30
 DEFAULT_UPDATE_TIMEOUT_SECONDS = 180
 DEFAULT_CODEX_PACKAGE = "@openai/codex"
+DEFAULT_CLAUDE_PACKAGE = "@anthropic/claude-code"
 TRUTHY_VALUES = {"1", "true", "yes", "on", "y"}
 FALSY_VALUES = {"0", "false", "no", "off", "n", ""}
 _SEMVER_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?")
@@ -57,13 +58,21 @@ class UpdateSettings:
 
 @dataclass(frozen=True)
 class CodexUpdateSettings:
-    """Runtime settings for Codex CLI update checks."""
+    """Runtime settings for agent CLI update checks.
+
+    Supports both Codex CLI and Claude Code CLI.
+    The ``package`` field determines which npm package to check:
+
+    - codex:  @openai/codex
+    - claude: @anthropic/claude-code
+    """
 
     enabled: bool = False
     auto_update: bool = False
     package: str = DEFAULT_CODEX_PACKAGE
     codex_executable: str | None = None
     npm_executable: str | None = None
+    agent_type: str = "codex"
     check_timeout_seconds: int = DEFAULT_CHECK_TIMEOUT_SECONDS
     update_timeout_seconds: int = DEFAULT_UPDATE_TIMEOUT_SECONDS
 
@@ -222,10 +231,24 @@ def _split_command(command: str | None) -> list[str]:
 
 
 def load_codex_update_settings() -> CodexUpdateSettings:
-    """Build Codex CLI updater settings from environment variables."""
+    """Build agent CLI updater settings from environment variables.
 
-    codex_command = os.getenv("TELEGRAM_CODEX_BOT_CODEX_COMMAND", "codex")
-    codex_executable = _extract_executable(codex_command) or "codex"
+    Agent type is read from config to determine:
+    - codex:  @openai/codex (default)
+    - claude: @anthropic/claude-code
+    """
+    from .config import config
+
+    agent_type = getattr(config, "agent_type", "codex")
+    default_package = (
+        DEFAULT_CLAUDE_PACKAGE if agent_type == "claude" else DEFAULT_CODEX_PACKAGE
+    )
+    default_executable = "claude" if agent_type == "claude" else "codex"
+
+    codex_command = os.getenv(
+        "TELEGRAM_CODEX_BOT_CODEX_COMMAND", default_executable
+    )
+    codex_executable = _extract_executable(codex_command) or default_executable
     return CodexUpdateSettings(
         enabled=_parse_bool(
             os.getenv("TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK"), default=False
@@ -235,11 +258,12 @@ def load_codex_update_settings() -> CodexUpdateSettings:
         ),
         package=(
             os.getenv("TELEGRAM_CODEX_BOT_CODEX_UPDATE_PACKAGE")
-            or DEFAULT_CODEX_PACKAGE
+            or default_package
         ),
         codex_executable=shutil.which(codex_executable) or codex_executable,
         npm_executable=os.getenv("TELEGRAM_CODEX_BOT_CODEX_UPDATE_NPM")
         or shutil.which("npm"),
+        agent_type=agent_type,
     )
 
 
@@ -527,6 +551,11 @@ def _npm_global_package_installed(
     return isinstance(dependencies, dict) and settings.package in dependencies
 
 
+def _agent_display_name(settings: CodexUpdateSettings) -> str:
+    """Return the human-readable agent name for log messages."""
+    return "Claude Code" if settings.agent_type == "claude" else "Codex CLI"
+
+
 def check_codex_update(
     settings: CodexUpdateSettings,
     *,
@@ -534,8 +563,13 @@ def check_codex_update(
     runner: CommandRunner = run_command,
     cwd: Path | None = None,
 ) -> CodexUpdateResult:
-    """Check the installed Codex CLI against npm's latest package version."""
+    """Check the installed agent CLI against npm's latest package version.
 
+    Supports both Codex CLI (``@openai/codex``) and Claude Code
+    (``@anthropic/claude-code``) via ``settings.agent_type``.
+    """
+
+    agent_name = _agent_display_name(settings)
     work_dir = cwd or find_git_repo() or Path.cwd()
     npm_command = _split_command(settings.npm_executable)
     if not settings.codex_executable:
@@ -543,14 +577,14 @@ def check_codex_update(
             checked=True,
             supported=False,
             skipped_reason="missing_codex",
-            message="Codex CLI update check skipped: codex executable not found.",
+            message=f"{agent_name} update check skipped: executable not found.",
         )
     if not npm_command:
         return CodexUpdateResult(
             checked=True,
             supported=False,
             skipped_reason="missing_npm",
-            message="Codex CLI update check skipped: npm executable not found.",
+            message=f"{agent_name} update check skipped: npm executable not found.",
         )
 
     try:
@@ -567,7 +601,7 @@ def check_codex_update(
                 supported=False,
                 skipped_reason="unknown_current_version",
                 message=(
-                    "Codex CLI update check skipped: unable to parse "
+                    f"{agent_name} update check skipped: unable to parse "
                     f"version output {current_result.stdout.strip()!r}."
                 ),
             )
@@ -586,7 +620,7 @@ def check_codex_update(
                 skipped_reason="unknown_latest_version",
                 current_version=current_version,
                 message=(
-                    "Codex CLI update check skipped: unable to parse npm "
+                    f"{agent_name} update check skipped: unable to parse npm "
                     f"version output {latest_result.stdout.strip()!r}."
                 ),
             )
@@ -597,7 +631,7 @@ def check_codex_update(
                 supported=True,
                 current_version=current_version,
                 latest_version=latest_version,
-                message=f"Codex CLI is up to date ({current_version}).",
+                message=f"{agent_name} is up to date ({current_version}).",
             )
 
         if not apply_update:
@@ -608,7 +642,7 @@ def check_codex_update(
                 current_version=current_version,
                 latest_version=latest_version,
                 message=(
-                    "Codex CLI update available: "
+                    f"{agent_name} update available: "
                     f"{current_version} -> {latest_version}."
                 ),
             )
@@ -622,7 +656,8 @@ def check_codex_update(
                 current_version=current_version,
                 latest_version=latest_version,
                 message=(
-                    "Codex CLI update skipped: installed codex is not detected "
+                    f"{agent_name} update skipped: installed "
+                    f"{settings.codex_executable} is not detected "
                     f"as a global npm package ({settings.package})."
                 ),
             )
@@ -647,14 +682,14 @@ def check_codex_update(
             update_available=True,
             current_version=new_version,
             latest_version=latest_version,
-            message=f"Updated Codex CLI from {current_version} to {new_version}.",
+            message=f"Updated {agent_name} from {current_version} to {new_version}.",
         )
     except (OSError, subprocess.SubprocessError, UpdateError) as exc:
         return CodexUpdateResult(
             checked=True,
             supported=True,
             skipped_reason="error",
-            message=f"Codex CLI update check failed: {exc}",
+            message=f"{agent_name} update check failed: {exc}",
         )
 
 
@@ -843,7 +878,7 @@ async def _report_codex_update_result(
     *,
     codex_update_notifier: CodexUpdateNotifier | None = None,
 ) -> None:
-    """Log Codex update status and optionally notify for manual approval."""
+    """Log agent CLI update status and optionally notify for manual approval."""
     if codex_result.skipped_reason == "error":
         logger.warning(codex_result.message)
     elif codex_result.update_available and not codex_result.updated:
@@ -859,7 +894,10 @@ async def auto_update_loop_with_notifier(
     *,
     codex_update_notifier: CodexUpdateNotifier | None = None,
 ) -> None:
-    """Periodically check for updates and notify when Codex CLI needs approval."""
+    """Periodically check for updates and notify when the agent CLI needs approval.
+
+    Supports both Codex CLI and Claude Code CLI via the configured agent_type.
+    """
 
     load_update_env()
     settings = load_update_settings()
@@ -923,12 +961,22 @@ def _print_update_usage() -> None:
     )
 
 
+def _agent_update_display_name() -> str:
+    """Return the display name for the configured agent's update command."""
+    try:
+        from .config import config
+        return "Claude Code" if config.agent_type == "claude" else "Codex CLI"
+    except Exception:
+        return "agent CLI"
+
+
 def _print_codex_update_usage() -> None:
+    agent_display = _agent_update_display_name()
     print(
-        "Usage:\n"
-        "  telegram-codex-bot codex-update           Update global npm Codex CLI if needed\n"
-        "  telegram-codex-bot codex-update --check   Check only; do not change files\n"
-        "  telegram-codex-bot codex-update --help    Show this help message"
+        f"Usage:\n"
+        f"  telegram-codex-bot codex-update           Update global npm {agent_display} if needed\n"
+        f"  telegram-codex-bot codex-update --check   Check only; do not change files\n"
+        f"  telegram-codex-bot codex-update --help    Show this help message"
     )
 
 
@@ -959,7 +1007,10 @@ def update_main(argv: Sequence[str]) -> int:
 
 
 def codex_update_main(argv: Sequence[str]) -> int:
-    """CLI entry point for manual Codex CLI update checks."""
+    """CLI entry point for manual agent CLI update checks.
+
+    Supports both Codex CLI and Claude Code CLI via the configured agent_type.
+    """
 
     if any(arg in {"-h", "--help", "help"} for arg in argv):
         _print_codex_update_usage()

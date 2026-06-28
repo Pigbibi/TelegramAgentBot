@@ -74,19 +74,24 @@ def _first_command_executable(parts: list[str]) -> str:
     return ""
 
 
-def _codex_command_for_launch() -> str:
-    """Return the configured Codex command with optional hook-trust bypass."""
+def _agent_command_for_launch() -> str:
+    """Return the configured agent command with optional hook-trust bypass.
+
+    Supports both Codex and Claude Code CLIs.
+    """
     cmd = config.codex_command
     if not getattr(config, "codex_bypass_hook_trust", False):
         return cmd
     try:
         parts = shlex.split(cmd)
     except ValueError:
-        logger.warning("Unable to parse Codex command for hook-trust flag injection")
+        logger.warning("Unable to parse command for hook-trust flag injection")
         return cmd
     if _HOOK_TRUST_BYPASS_FLAG in parts:
         return cmd
-    if _first_command_executable(parts) != "codex":
+    first_exe = _first_command_executable(parts)
+    # Only inject hook-trust bypass for codex and claude commands
+    if first_exe not in ("codex", "claude"):
         return cmd
     return f"{cmd} {_HOOK_TRUST_BYPASS_FLAG}"
 
@@ -843,22 +848,29 @@ class TmuxManager:
                 # Prevent Codex from overriding the window name
                 window.set_window_option("allow-rename", "off")
 
-                # Start Codex if requested
+                # Start the agent (Codex or Claude) if requested
                 if start_codex:
                     if not account_name:
                         disable_codex_update_prompt()
                     pane = window.active_pane
                     if pane:
-                        cmd = _codex_command_for_launch()
+                        cmd = _agent_command_for_launch()
                         if resume_session_id:
                             resume_target = _resume_target_id(resume_session_id)
                             cmd = f"{cmd} resume {shlex.quote(resume_target)}"
                         if account_name:
-                            account_home = ensure_account_home(account_name)
-                            cmd = (
-                                f"export CODEX_HOME={shlex.quote(str(account_home))}; "
-                                f"{cmd}"
-                            )
+                            if config.agent_type == "claude":
+                                account_home = ensure_account_home(account_name)
+                                cmd = (
+                                    f"export CLAUDE_HOME={shlex.quote(str(account_home))}; "
+                                    f"{cmd}"
+                                )
+                            else:
+                                account_home = ensure_account_home(account_name)
+                                cmd = (
+                                    f"export CODEX_HOME={shlex.quote(str(account_home))}; "
+                                    f"{cmd}"
+                                )
                         pane.send_keys(cmd, enter=True)
 
                 logger.info(
