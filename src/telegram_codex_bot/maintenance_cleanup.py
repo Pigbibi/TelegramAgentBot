@@ -1,7 +1,7 @@
-"""Conservative VPS cleanup helper for TelegramCodexBot hosts.
+"""Conservative VPS cleanup helper for TelegramAgentBot hosts.
 
 The cleanup policy is intentionally narrow: remove rebuildable caches and
-GitHub Actions runner work products while protecting TelegramCodexBot runtime
+GitHub Actions runner work products while protecting TelegramAgentBot runtime
 state and skipping runner workspaces when a job worker is active.
 """
 
@@ -106,8 +106,8 @@ def build_protected_paths(home: Path) -> tuple[Path, ...]:
     )
     explicit_paths = [
         runtime_dir,
-        runtime_dir / "app" / "TelegramCodexBot",
-        home / "Projects" / "TelegramCodexBot",
+        runtime_dir / "app" / "TelegramAgentBot",
+        home / "Projects" / "TelegramAgentBot",
     ]
     extra = os.getenv("TELEGRAM_CODEX_CLEANUP_PROTECTED_PATHS", "")
     for raw_path in extra.split(","):

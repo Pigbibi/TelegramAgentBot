@@ -1,7 +1,7 @@
 [project]
 name = "telegram-codex-bot-socket-backend"
 version = "0.1.0"
-description = "Socket backend plugin for TelegramCodexBot center-bot / agent-node deployments"
+description = "Socket backend plugin for TelegramAgentBot center-bot / agent-node deployments"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

@@ -1,4 +1,4 @@
-"""Shared utility functions used across TelegramCodexBot modules.
+"""Shared utility functions used across TelegramAgentBot modules.
 
 Provides:
   - app_dir(): resolve config directory from TELEGRAM_CODEX_BOT_DIR env var.

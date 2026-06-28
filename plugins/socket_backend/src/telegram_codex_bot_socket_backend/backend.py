@@ -1,4 +1,4 @@
-"""Center-side socket backend for TelegramCodexBot."""
+"""Center-side socket backend for TelegramAgentBot."""
 
 from __future__ import annotations
 

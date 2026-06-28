@@ -1,9 +1,9 @@
-# TelegramCodexBot Socket Backend
+# TelegramAgentBot Socket Backend
 
-Optional backend plugin for running TelegramCodexBot as a center bot with one or
+Optional backend plugin for running TelegramAgentBot as a center bot with one or
 more remote agent nodes.
 
-The default TelegramCodexBot install still uses local tmux. Install this plugin
+The default TelegramAgentBot install still uses local tmux. Install this plugin
 only on machines that need the socket cluster mode.
 
 ## Install

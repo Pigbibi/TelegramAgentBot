@@ -56,7 +56,7 @@ def test_linux_bootstrap_rejects_checkout_inside_default_projects(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
-    repo = home / "Projects" / "TelegramCodexBot"
+    repo = home / "Projects" / "TelegramAgentBot"
     script = _prepare_repo(repo)
     env = _prepare_env(tmp_path, home)
 
@@ -70,7 +70,7 @@ def test_linux_bootstrap_rejects_checkout_inside_default_projects(
     )
 
     assert result.returncode == 1
-    assert "Unsafe TelegramCodexBot checkout location" in result.stderr
+    assert "Unsafe TelegramAgentBot checkout location" in result.stderr
     assert str(home / "Projects") in result.stderr
 
 
@@ -78,7 +78,7 @@ def test_linux_bootstrap_allows_checkout_outside_project_roots(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
-    repo = home / ".telegram-codex-bot" / "app" / "TelegramCodexBot"
+    repo = home / ".telegram-codex-bot" / "app" / "TelegramAgentBot"
     script = _prepare_repo(repo)
     env = _prepare_env(tmp_path, home)
 

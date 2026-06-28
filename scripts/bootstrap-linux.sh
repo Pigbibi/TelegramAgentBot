@@ -142,17 +142,17 @@ check_runtime_checkout_location() {
 
   if [[ -n "$unsafe_root" ]]; then
     cat >&2 <<EOF
-Unsafe TelegramCodexBot checkout location:
+Unsafe TelegramAgentBot checkout location:
   checkout:     $repo_path
   project root: $unsafe_root
 
 The systemd launcher points to this checkout. If a Codex session cleans the
 project root, the bot can keep running from deleted files and fail on restart.
 
-Clone TelegramCodexBot into a durable runtime path outside project roots, for example:
+Clone TelegramAgentBot into a durable runtime path outside project roots, for example:
   mkdir -p "$TELEGRAM_CODEX_BOT_DIR/app"
-  git clone https://github.com/Pigbibi/TelegramCodexBot.git "$TELEGRAM_CODEX_BOT_DIR/app/TelegramCodexBot"
-  cd "$TELEGRAM_CODEX_BOT_DIR/app/TelegramCodexBot"
+  git clone https://github.com/Pigbibi/TelegramAgentBot.git "$TELEGRAM_CODEX_BOT_DIR/app/TelegramAgentBot"
+  cd "$TELEGRAM_CODEX_BOT_DIR/app/TelegramAgentBot"
   ./scripts/bootstrap-linux.sh
 
 To intentionally allow this unsafe layout, set:
@@ -175,7 +175,7 @@ chmod +x "$LAUNCHER_PATH"
 
 cat >"$SERVICE_PATH" <<EOF
 [Unit]
-Description=TelegramCodexBot
+Description=TelegramAgentBot
 After=network-online.target
 Wants=network-online.target
 

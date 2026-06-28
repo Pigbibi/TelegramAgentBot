@@ -1,6 +1,6 @@
 # Agent Backend Plugins
 
-TelegramCodexBot keeps the default single-machine path on the built-in `local`
+TelegramAgentBot keeps the default single-machine path on the built-in `local`
 backend. A real multi-node setup should live in a separate installable backend
 plugin so normal tmux usage stays simple and rollback-safe.
 
@@ -135,7 +135,7 @@ Example service files are included in the plugin package:
 
 Use systemd user services for a Linux/VPS center bot or Linux agent node. Use
 LaunchAgent plists for a macOS agent node. The plist files contain placeholder
-paths like `/Users/YOUR_USER/Projects/TelegramCodexBot`; replace them before
+paths like `/Users/YOUR_USER/Projects/TelegramAgentBot`; replace them before
 loading with `launchctl`.
 
 ## Implementation Order

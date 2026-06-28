@@ -58,8 +58,8 @@ chmod +x "$LAUNCHER_PATH"
 
 cat >"$SERVICE_PATH" <<EOF
 [Unit]
-Description=TelegramCodexBot VPS cleanup
-Documentation=https://github.com/Pigbibi/TelegramCodexBot
+Description=TelegramAgentBot VPS cleanup
+Documentation=https://github.com/Pigbibi/TelegramAgentBot
 
 [Service]
 Type=oneshot
@@ -76,7 +76,7 @@ EOF
 
 cat >"$TIMER_PATH" <<EOF
 [Unit]
-Description=Run TelegramCodexBot VPS cleanup
+Description=Run TelegramAgentBot VPS cleanup
 
 [Timer]
 OnCalendar=$CLEANUP_ON_CALENDAR

@@ -1,4 +1,4 @@
-"""Telegram bot handlers for TelegramCodexBot.
+"""Telegram bot handlers for TelegramAgentBot.
 
 Registers all command/callback/message handlers and manages the bot lifecycle.
 Each Telegram topic maps 1:1 to a tmux window (Codex session).
@@ -4986,7 +4986,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             note += f"\nThe window is {status_text}."
             if config.enable_account_rotation and next_account:
                 note += (
-                    " On your next message, TelegramCodexBot will open a new "
+                    " On your next message, TelegramAgentBot will open a new "
                     f"`{next_account}` session automatically."
                 )
             elif config.enable_account_rotation:

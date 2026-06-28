@@ -409,7 +409,7 @@ async def test_handle_new_message_reports_auto_rotation_when_enabled() -> None:
         (
             "⚠️ This session has hit its usage limit."
             "\nThe window is now marked as exhausted."
-            " On your next message, TelegramCodexBot will open a new "
+            " On your next message, TelegramAgentBot will open a new "
             "`backup` session automatically."
         ),
         message_thread_id=42,

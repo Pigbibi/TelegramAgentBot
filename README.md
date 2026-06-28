@@ -1,15 +1,15 @@
-# TelegramCodexBot
+# TelegramAgentBot
 
 [中文文档](README_CN.md)
 
-> TelegramCodexBot controls live Codex CLI / Claude Code sessions over Telegram.
+> TelegramAgentBot controls live Codex CLI / Claude Code sessions over Telegram.
 > The CLI/package name is `telegram-codex-bot`.
 
 Control Codex sessions remotely through Telegram while keeping tmux as the source of truth. This lets you monitor, answer, interrupt, resume, and clean up real terminal sessions from your phone without switching to a separate SDK session.
 
 ## What it does
 
-TelegramCodexBot is a Telegram controller for live Codex CLI / Claude Code sessions (`TELEGRAM_CODEX_BOT_AGENT_TYPE`):
+TelegramAgentBot is a Telegram controller for live Codex CLI / Claude Code sessions (`TELEGRAM_CODEX_BOT_AGENT_TYPE`):
 
 - `codex` is the default command for new tmux windows
 - transcript parsing and monitoring target modern Codex JSONL output under `~/.codex`
@@ -44,17 +44,17 @@ TelegramCodexBot is a Telegram controller for live Codex CLI / Claude Code sessi
 
 ```bash
 # with uv
-uv tool install git+https://github.com/Pigbibi/TelegramCodexBot.git
+uv tool install git+https://github.com/Pigbibi/TelegramAgentBot.git
 
 # or with pipx
-pipx install git+https://github.com/Pigbibi/TelegramCodexBot.git
+pipx install git+https://github.com/Pigbibi/TelegramAgentBot.git
 ```
 
 ### Option 2: install from source
 
 ```bash
-git clone https://github.com/Pigbibi/TelegramCodexBot.git
-cd TelegramCodexBot
+git clone https://github.com/Pigbibi/TelegramAgentBot.git
+cd TelegramAgentBot
 uv sync
 ```
 
@@ -63,8 +63,8 @@ uv sync
 For a new Mac or a fresh local setup:
 
 ```bash
-git clone https://github.com/Pigbibi/TelegramCodexBot.git
-cd TelegramCodexBot
+git clone https://github.com/Pigbibi/TelegramAgentBot.git
+cd TelegramAgentBot
 chmod +x scripts/bootstrap-macos.sh
 ./scripts/bootstrap-macos.sh
 ```
@@ -122,8 +122,8 @@ For a Linux workstation or a VPS with systemd:
 
 ```bash
 mkdir -p ~/.telegram-codex-bot/app
-git clone https://github.com/Pigbibi/TelegramCodexBot.git ~/.telegram-codex-bot/app/TelegramCodexBot
-cd ~/.telegram-codex-bot/app/TelegramCodexBot
+git clone https://github.com/Pigbibi/TelegramAgentBot.git ~/.telegram-codex-bot/app/TelegramAgentBot
+cd ~/.telegram-codex-bot/app/TelegramAgentBot
 chmod +x scripts/bootstrap-linux.sh
 ./scripts/bootstrap-linux.sh
 ```
@@ -271,7 +271,7 @@ running telegram-codex-bot, for example through SSHFS or NFS mounts.
 
 ### Agent Backends
 
-TelegramCodexBot starts with the `local` backend by default. This is the
+TelegramAgentBot starts with the `local` backend by default. This is the
 existing single-machine mode: Telegram talks to a local tmux session, and the
 bot monitors local Codex transcript files.
 
@@ -384,7 +384,7 @@ Telegram commands:
 
 Named accounts are stored under `~/.telegram-codex-bot/accounts/`. Switching affects newly created topics only; existing topics keep their current tmux window. Use `/unbind` when you want the current topic to start a fresh session with the selected account.
 
-If you want usage-limit failover, set `TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION=true`. When a live session emits `usage_limit_exceeded`, TelegramCodexBot marks that window as exhausted; on the next message it can create a fresh tmux window on the next saved account and forward the message there. This is **session rotation**, not seamless continuation of the exact same Codex session.
+If you want usage-limit failover, set `TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION=true`. When a live session emits `usage_limit_exceeded`, TelegramAgentBot marks that window as exhausted; on the next message it can create a fresh tmux window on the next saved account and forward the message there. This is **session rotation**, not seamless continuation of the exact same Codex session.
 
 ## Session tracking
 
@@ -494,7 +494,7 @@ Other unknown slash commands are forwarded to Codex as-is.
 2. Send any message
 3. Pick a directory from the browser
 4. Resume an existing session or create a new one
-5. TelegramCodexBot creates a tmux window and forwards your pending message
+5. TelegramAgentBot creates a tmux window and forwards your pending message
 
 If the bot finds an existing **tracked** tmux window for that directory, it can
 offer that window for binding. Untracked windows are ignored on purpose so a

@@ -10,7 +10,7 @@ from telegram_codex_bot import maintenance_cleanup as cleanup
 def _config(tmp_path: Path, *, dry_run: bool = False) -> cleanup.CleanupConfig:
     home = tmp_path / "home"
     home.mkdir()
-    protected = (home / ".telegram-codex-bot", home / "Projects" / "TelegramCodexBot")
+    protected = (home / ".telegram-codex-bot", home / "Projects" / "TelegramAgentBot")
     for path in protected:
         path.mkdir(parents=True)
     return cleanup.CleanupConfig(

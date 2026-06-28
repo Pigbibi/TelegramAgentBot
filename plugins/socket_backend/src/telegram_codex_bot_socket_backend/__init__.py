@@ -1,4 +1,4 @@
-"""Socket backend plugin for TelegramCodexBot."""
+"""Socket backend plugin for TelegramAgentBot."""
 
 from .backend import SocketClusterBackend
 

@@ -1,6 +1,6 @@
 # VPS Cleanup Timer
 
-TelegramCodexBot hosts often accumulate GitHub Actions runner workspaces,
+TelegramAgentBot hosts often accumulate GitHub Actions runner workspaces,
 language package caches, browser test artifacts, and old temporary files. This
 cleanup helper keeps the bot runtime intact while reclaiming rebuildable files.
 
@@ -12,8 +12,8 @@ The cleanup command refuses destructive work unless `--yes` is passed. Use
 Protected paths are never removed:
 
 - `$TELEGRAM_CODEX_BOT_DIR` or `~/.telegram-codex-bot`
-- `$TELEGRAM_CODEX_BOT_DIR/app/TelegramCodexBot`
-- `~/Projects/TelegramCodexBot`
+- `$TELEGRAM_CODEX_BOT_DIR/app/TelegramAgentBot`
+- `~/Projects/TelegramAgentBot`
 - comma-separated paths in `TELEGRAM_CODEX_CLEANUP_PROTECTED_PATHS`
 
 GitHub Actions runner directories are discovered from `~/actions-runner-*` or
@@ -58,7 +58,7 @@ The command can be forced manually:
 
 ## Install
 
-From the TelegramCodexBot checkout:
+From the TelegramAgentBot checkout:
 
 ```bash
 ./scripts/install-vps-cleanup.sh

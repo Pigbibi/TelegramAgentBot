@@ -284,7 +284,7 @@ class AgentNodeServer:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run a TelegramCodexBot agent node")
+    parser = argparse.ArgumentParser(description="Run a TelegramAgentBot agent node")
     parser.add_argument(
         "--node-id",
         default=os.getenv("TELEGRAM_CODEX_AGENT_NODE_ID", "local"),

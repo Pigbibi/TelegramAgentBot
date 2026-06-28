@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository contains TelegramCodexBot, a Telegram controller for live Codex
+This repository contains TelegramAgentBot, a Telegram controller for live Codex
 CLI and Claude Code sessions running in tmux (`TELEGRAM_CODEX_BOT_AGENT_TYPE`).
 The CLI/package name is `telegram-codex-bot`.
 
