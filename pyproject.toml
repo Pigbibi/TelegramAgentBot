@@ -1,7 +1,7 @@
 [project]
 name = "telegram-codex-bot"
 version = "0.2.0"
-description = "Telegram bot for monitoring Codex sessions via tmux"
+description = "Telegram bot for monitoring Codex CLI / Claude Code sessions via tmux"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

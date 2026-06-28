@@ -2,14 +2,14 @@
 
 [English README](README.md)
 
-> TelegramCodexBot 通过 Telegram 远程控制 Codex 会话。
+> TelegramCodexBot 通过 Telegram 远程控制 Codex CLI / Claude Code 会话（`TELEGRAM_CODEX_BOT_AGENT_TYPE`）。
 > CLI / 包名是 `telegram-codex-bot`。
 
 这个版本的目标很直接：通过 Telegram 远程控制真实运行在 tmux 里的 Codex 会话，让手机端和桌面端可以围绕同一个终端会话来回切换，而不是再起一个独立 SDK 会话。
 
 ## 功能概览
 
-TelegramCodexBot 是一个通过 Telegram 远程控制 Codex 会话的工具：
+TelegramCodexBot 是一个通过 Telegram 远程控制 Codex CLI / Claude Code 会话的工具：
 
 - 新建窗口默认直接跑 `codex`
 - 会话监控默认面向 `~/.codex` 下的现代 Codex transcript
@@ -216,6 +216,7 @@ TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES=true
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `TELEGRAM_CODEX_BOT_DIR` | `~/.telegram-codex-bot` | 配置和状态目录 |
+| `TELEGRAM_CODEX_BOT_AGENT_TYPE` | `codex` | 管理的 AI CLI 类型：`codex`（Codex CLI）或 `claude`（Claude Code） |
 | `TELEGRAM_CODEX_BOT_BACKEND` | `local` | agent backend ID。默认 `local` 保持单机 tmux 行为 |
 | `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS` | _(空)_ | 可选 backend 插件模块，多个用逗号分隔 |
 | `TELEGRAM_CODEX_BOT_TMUX_SESSION_NAME` | `telegram-codex-bot` | bot 使用的 tmux session 名称 |

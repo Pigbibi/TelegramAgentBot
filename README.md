@@ -2,14 +2,14 @@
 
 [中文文档](README_CN.md)
 
-> TelegramCodexBot controls live Codex sessions over Telegram.
+> TelegramCodexBot controls live Codex CLI / Claude Code sessions over Telegram.
 > The CLI/package name is `telegram-codex-bot`.
 
 Control Codex sessions remotely through Telegram while keeping tmux as the source of truth. This lets you monitor, answer, interrupt, resume, and clean up real terminal sessions from your phone without switching to a separate SDK session.
 
 ## What it does
 
-TelegramCodexBot is a Telegram controller for live Codex sessions:
+TelegramCodexBot is a Telegram controller for live Codex CLI / Claude Code sessions (`TELEGRAM_CODEX_BOT_AGENT_TYPE`):
 
 - `codex` is the default command for new tmux windows
 - transcript parsing and monitoring target modern Codex JSONL output under `~/.codex`
@@ -220,6 +220,7 @@ be committed.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `TELEGRAM_CODEX_BOT_DIR` | `~/.telegram-codex-bot` | Config and state directory |
+| `TELEGRAM_CODEX_BOT_AGENT_TYPE` | `codex` | AI CLI to manage: `codex` (Codex CLI) or `claude` (Claude Code) |
 | `TELEGRAM_CODEX_BOT_BACKEND` | `local` | Agent backend ID. `local` keeps the single-machine tmux behavior |
 | `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS` | _(none)_ | Comma-separated Python modules that register optional agent backends |
 | `TELEGRAM_CODEX_BOT_TMUX_SESSION_NAME` | `telegram-codex-bot` | tmux session name used by the bot |
