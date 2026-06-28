@@ -23,7 +23,7 @@ TelegramAgentBot is a Telegram controller for live Codex CLI / Claude Code sessi
 - **Topic-based sessions** — each Telegram topic maps 1:1 to a tmux window and Codex session
 - **Real-time notifications** — assistant replies, thinking, tool calls, tool results, and local command output can be forwarded to Telegram
 - **Interactive UI support** — navigate AskUserQuestion, ExitPlanMode, and permission prompts from inline keyboards
-- **Voice message transcription** — voice messages can be transcribed with OpenAI and forwarded as text
+- **Voice message transcription** — voice messages are transcribed (OpenAI, Google Gemini, or multi-provider failover) and forwarded as text
 - **Resume existing sessions** — choose an existing Codex session in a directory and continue from there
 - **Closed-session hiding** — sessions closed through topic deletion or cleanup are hidden from the resume picker by default, without deleting their transcripts
 - **Topic cleanup** — stale topics, stale tmux windows, and dead bindings are cleaned up more safely
@@ -81,7 +81,7 @@ Required local setup after the script runs:
 
 1. `TELEGRAM_BOT_TOKEN`
 2. `ALLOWED_USERS`
-3. optional `OPENAI_API_KEY` if you want voice transcription
+3. optional `AI_TRANSCRIPTION_OPENAI_API_KEY` if you want voice transcription
 4. run `codex login`
 
 This project does not use a separate `GPT_SUBSCRIPTION=` env var.
@@ -249,8 +249,12 @@ be committed.
 | `TELEGRAM_AGENT_BOT_SHOW_TOOL_CALLS` | `true` | Forward tool call notifications and outputs |
 | `TELEGRAM_AGENT_BOT_SHOW_BASH_TOOL_CALLS` | `true` | Forward Bash command and output notifications; set `false` to hide Bash only |
 | `TELEGRAM_AGENT_BOT_SHOW_HIDDEN_DIRS` | `false` | Show dot-directories in the directory picker |
-| `OPENAI_API_KEY` | _(none)_ | Used for voice transcription |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Custom OpenAI-compatible endpoint |
+| `AI_TRANSCRIPTION_PROVIDERS` | `openai` | Comma-separated provider IDs tried in order (`openai`, `google`) |
+| `AI_TRANSCRIPTION_OPENAI_API_KEY` | _(none)_ | API key for OpenAI-compatible transcription |
+| `AI_TRANSCRIPTION_OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL for OpenAI-compatible endpoint |
+| `AI_TRANSCRIPTION_OPENAI_MODEL` | `gpt-4o-transcribe` | Model for OpenAI-compatible provider |
+| `AI_TRANSCRIPTION_GOOGLE_API_KEY` | _(none)_ | API key for Google Gemini transcription |
+| `AI_TRANSCRIPTION_GOOGLE_MODEL` | `gemini-2.0-flash-lite` | Model for Google Gemini provider |
 
 Telegram formatting uses MarkdownV2 with plain-text fallback when needed.
 

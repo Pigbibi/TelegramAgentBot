@@ -12,7 +12,7 @@ Core responsibilities:
     Unbound topics trigger the directory browser to create a new session.
   - Photo/file handling: attachments sent by user are downloaded and forwarded
     to Codex as file paths (photo_handler/document_handler).
-  - Voice handling: voice messages are transcribed via OpenAI API and
+  - Voice handling: voice messages are transcribed (OpenAI / Google Gemini) and
     forwarded as text (voice_handler).
   - Automatic cleanup: closing a topic kills the associated window
     (topic_closed_handler). Unsupported content (stickers, etc.)
@@ -194,7 +194,7 @@ from .terminal_parser import (
 )
 from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
-from .transcribe import close_client as close_transcribe_client
+from .transcribe import TranscriptionError, close_client as close_transcribe_client
 from .transcribe import transcribe_voice
 from .updater import (
     CodexUpdateResult,
@@ -2544,7 +2544,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle voice messages: transcribe via OpenAI and forward text to Codex."""
+    """Handle voice messages: transcribe and forward text to Codex/Claude."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         if update.message:
@@ -2554,11 +2554,12 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not update.message or not update.message.voice:
         return
 
-    if not config.openai_api_key:
+    if not config.transcription_openai_api_key and not config.transcription_google_api_key:
         await safe_reply(
             update.message,
-            "⚠ Voice transcription requires an OpenAI API key.\n"
-            "Set `OPENAI_API_KEY` in your `.env` file and restart the bot.",
+            "⚠ Voice transcription requires an API key.\n"
+            "Set `AI_TRANSCRIPTION_OPENAI_API_KEY` or `AI_TRANSCRIPTION_GOOGLE_API_KEY` "
+            "in your `.env` file and restart the bot.",
         )
         return
 
@@ -2605,7 +2606,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Transcribe
     try:
         text = await transcribe_voice(ogg_data)
-    except ValueError as e:
+    except TranscriptionError as e:
         await safe_reply(update.message, f"⚠ {e}")
         return
     except Exception as e:

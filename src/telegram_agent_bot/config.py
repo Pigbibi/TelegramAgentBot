@@ -23,8 +23,9 @@ logger = logging.getLogger(__name__)
 SENSITIVE_ENV_VARS = {
     "TELEGRAM_BOT_TOKEN",
     "ALLOWED_USERS",
-    "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    "AI_TRANSCRIPTION_OPENAI_API_KEY",
+    "AI_TRANSCRIPTION_GOOGLE_API_KEY",
 }
 
 
@@ -264,10 +265,34 @@ class Config:
             os.getenv("TELEGRAM_AGENT_BOT_SHOW_HIDDEN_DIRS", "").lower() == "true"
         )
 
-        # OpenAI API for voice message transcription (optional)
-        self.openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-        self.openai_base_url: str = os.getenv(
-            "OPENAI_BASE_URL", "https://api.openai.com/v1"
+        # ── Voice transcription providers ──────────────────────────────────
+        # Comma-separated provider IDs tried in order. First successful
+        # transcription wins; on failure the next provider is attempted.
+        # Supported providers: openai, google
+        transcription_providers_raw = os.getenv("AI_TRANSCRIPTION_PROVIDERS", "openai")
+        self.transcription_providers = tuple(
+            p.strip().lower()
+            for p in transcription_providers_raw.split(",")
+            if p.strip()
+        ) or ("openai",)
+
+        # OpenAI-compatible provider (OpenAI, Groq, Azure, etc.)
+        self.transcription_openai_api_key: str = os.getenv(
+            "AI_TRANSCRIPTION_OPENAI_API_KEY", ""
+        )
+        self.transcription_openai_base_url: str = os.getenv(
+            "AI_TRANSCRIPTION_OPENAI_BASE_URL", "https://api.openai.com/v1"
+        )
+        self.transcription_openai_model: str = os.getenv(
+            "AI_TRANSCRIPTION_OPENAI_MODEL", "gpt-4o-transcribe"
+        )
+
+        # Google Gemini provider
+        self.transcription_google_api_key: str = os.getenv(
+            "AI_TRANSCRIPTION_GOOGLE_API_KEY", ""
+        )
+        self.transcription_google_model: str = os.getenv(
+            "AI_TRANSCRIPTION_GOOGLE_MODEL", "gemini-2.0-flash-lite"
         )
 
         # Scrub sensitive vars from os.environ so child processes never inherit them.

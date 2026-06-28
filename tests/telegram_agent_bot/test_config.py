@@ -210,27 +210,50 @@ class TestConfigDefaultProjectsPath:
 
 
 @pytest.mark.usefixtures("_base_env")
-class TestConfigOpenAI:
-    def test_openai_defaults(self, monkeypatch):
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+class TestConfigTranscription:
+    def test_transcription_defaults(self, monkeypatch):
+        monkeypatch.delenv("AI_TRANSCRIPTION_PROVIDERS", raising=False)
+        monkeypatch.delenv("AI_TRANSCRIPTION_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("AI_TRANSCRIPTION_OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("AI_TRANSCRIPTION_OPENAI_MODEL", raising=False)
+        monkeypatch.delenv("AI_TRANSCRIPTION_GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("AI_TRANSCRIPTION_GOOGLE_MODEL", raising=False)
         cfg = Config()
-        assert cfg.openai_api_key == ""
-        assert cfg.openai_base_url == "https://api.openai.com/v1"
+        assert cfg.transcription_providers == ("openai",)
+        assert cfg.transcription_openai_api_key == ""
+        assert cfg.transcription_openai_base_url == "https://api.openai.com/v1"
+        assert cfg.transcription_openai_model == "gpt-4o-transcribe"
+        assert cfg.transcription_google_api_key == ""
+        assert cfg.transcription_google_model == "gemini-2.0-flash-lite"
 
-    def test_openai_api_key(self, monkeypatch):
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-123")
+    def test_transcription_providers(self, monkeypatch):
+        monkeypatch.setenv("AI_TRANSCRIPTION_PROVIDERS", "openai,google")
         cfg = Config()
-        assert cfg.openai_api_key == "sk-test-123"
+        assert cfg.transcription_providers == ("openai", "google")
 
-    def test_openai_base_url(self, monkeypatch):
-        monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example.com/v1")
+    def test_transcription_openai_api_key(self, monkeypatch):
+        monkeypatch.setenv("AI_TRANSCRIPTION_OPENAI_API_KEY", "sk-test-123")
         cfg = Config()
-        assert cfg.openai_base_url == "https://proxy.example.com/v1"
+        assert cfg.transcription_openai_api_key == "sk-test-123"
 
-    def test_openai_api_key_scrubbed_from_env(self, monkeypatch):
+    def test_transcription_google_api_key(self, monkeypatch):
+        monkeypatch.setenv("AI_TRANSCRIPTION_GOOGLE_API_KEY", "google-test-key")
+        cfg = Config()
+        assert cfg.transcription_google_api_key == "google-test-key"
+
+    def test_transcription_openai_model(self, monkeypatch):
+        monkeypatch.setenv("AI_TRANSCRIPTION_OPENAI_MODEL", "whisper-1")
+        cfg = Config()
+        assert cfg.transcription_openai_model == "whisper-1"
+
+    def test_transcription_google_model(self, monkeypatch):
+        monkeypatch.setenv("AI_TRANSCRIPTION_GOOGLE_MODEL", "gemini-2.0-flash-001")
+        cfg = Config()
+        assert cfg.transcription_google_model == "gemini-2.0-flash-001"
+
+    def test_transcription_openai_api_key_scrubbed_from_env(self, monkeypatch):
         import os
 
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+        monkeypatch.setenv("AI_TRANSCRIPTION_OPENAI_API_KEY", "sk-secret")
         Config()
-        assert os.environ.get("OPENAI_API_KEY") is None
+        assert os.environ.get("AI_TRANSCRIPTION_OPENAI_API_KEY") is None

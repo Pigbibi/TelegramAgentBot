@@ -1,4 +1,4 @@
-"""Unit tests for transcribe — voice-to-text via OpenAI API."""
+"""Unit tests for transcribe — multi-provider voice-to-text with failover."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -18,10 +18,14 @@ def _reset_client():
 
 @pytest.fixture
 def mock_config():
-    """Patch config with test values."""
+    """Patch config with test values (openai provider by default)."""
     with patch.object(transcribe, "config") as cfg:
-        cfg.openai_api_key = "sk-test-key"
-        cfg.openai_base_url = "https://api.openai.com/v1"
+        cfg.transcription_providers = ("openai",)
+        cfg.transcription_openai_api_key = "sk-test-key"
+        cfg.transcription_openai_base_url = "https://api.openai.com/v1"
+        cfg.transcription_openai_model = "gpt-4o-transcribe"
+        cfg.transcription_google_api_key = ""
+        cfg.transcription_google_model = "gemini-2.0-flash-lite"
         yield cfg
 
 
@@ -32,7 +36,7 @@ def _mock_response(*, json_data: dict, status_code: int = 200) -> httpx.Response
     return resp
 
 
-class TestTranscribeVoice:
+class TestTranscribeOpenAI:
     @pytest.mark.asyncio
     async def test_success(self, mock_config):
         resp = _mock_response(json_data={"text": "Hello world"})
@@ -52,7 +56,7 @@ class TestTranscribeVoice:
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ):
-            with pytest.raises(ValueError, match="Empty transcription"):
+            with pytest.raises(transcribe.TranscriptionError, match="empty transcription"):
                 await transcribe.transcribe_voice(b"fake-ogg-data")
 
     @pytest.mark.asyncio
@@ -61,7 +65,7 @@ class TestTranscribeVoice:
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ):
-            with pytest.raises(ValueError, match="Empty transcription"):
+            with pytest.raises(transcribe.TranscriptionError, match="empty transcription"):
                 await transcribe.transcribe_voice(b"fake-ogg-data")
 
     @pytest.mark.asyncio
@@ -70,7 +74,7 @@ class TestTranscribeVoice:
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ):
-            with pytest.raises(ValueError, match="Empty transcription"):
+            with pytest.raises(transcribe.TranscriptionError, match="empty transcription"):
                 await transcribe.transcribe_voice(b"fake-ogg-data")
 
     @pytest.mark.asyncio
@@ -79,12 +83,12 @@ class TestTranscribeVoice:
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ):
-            with pytest.raises(httpx.HTTPStatusError):
+            with pytest.raises(transcribe.TranscriptionError):
                 await transcribe.transcribe_voice(b"fake-ogg-data")
 
     @pytest.mark.asyncio
     async def test_custom_base_url(self, mock_config):
-        mock_config.openai_base_url = "https://proxy.example.com/v1"
+        mock_config.transcription_openai_base_url = "https://proxy.example.com/v1"
         resp = _mock_response(json_data={"text": "Transcribed"})
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
@@ -97,7 +101,7 @@ class TestTranscribeVoice:
 
     @pytest.mark.asyncio
     async def test_base_url_trailing_slash_stripped(self, mock_config):
-        mock_config.openai_base_url = "https://proxy.example.com/v1/"
+        mock_config.transcription_openai_base_url = "https://proxy.example.com/v1/"
         resp = _mock_response(json_data={"text": "OK"})
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
@@ -106,6 +110,51 @@ class TestTranscribeVoice:
 
         url_arg = mock_post.call_args[0][0]
         assert url_arg == "https://proxy.example.com/v1/audio/transcriptions"
+
+
+class TestTranscribeMultiProvider:
+    @pytest.mark.asyncio
+    async def test_skips_provider_without_api_key(self, mock_config):
+        """When openai has no api key and no other providers, raises error."""
+        mock_config.transcription_openai_api_key = ""
+        with pytest.raises(transcribe.TranscriptionError, match="All transcription providers failed"):
+            await transcribe.transcribe_voice(b"fake-ogg-data")
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_second_provider(self, mock_config):
+        """When the first provider fails, falls through to the second."""
+        mock_config.transcription_providers = ("openai", "openai")
+        mock_config.transcription_openai_api_key = "sk-valid"
+
+        fail_resp = _mock_response(json_data={"error": "Over quota"}, status_code=429)
+        ok_resp = _mock_response(json_data={"text": "Fallback worked"})
+
+        with patch.object(
+            httpx.AsyncClient, "post", new_callable=AsyncMock
+        ) as mock_post_method:
+            mock_post_method.side_effect = [fail_resp, ok_resp]
+            result = await transcribe.transcribe_voice(b"fake-ogg-data")
+
+        assert result == "Fallback worked"
+        assert mock_post_method.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_all_providers_fail_raises(self, mock_config):
+        """When every provider fails, a TranscriptionError is raised."""
+        mock_config.transcription_providers = ("openai",)
+        fail_resp = _mock_response(json_data={"error": "Server error"}, status_code=500)
+        with patch.object(
+            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=fail_resp
+        ):
+            with pytest.raises(transcribe.TranscriptionError):
+                await transcribe.transcribe_voice(b"fake-ogg-data")
+
+    @pytest.mark.asyncio
+    async def test_unknown_provider_skipped(self, mock_config):
+        """Unknown provider IDs are logged and skipped."""
+        mock_config.transcription_providers = ("nonexistent",)
+        with pytest.raises(transcribe.TranscriptionError, match="All transcription providers failed"):
+            await transcribe.transcribe_voice(b"fake-ogg-data")
 
 
 class TestCloseClient:
