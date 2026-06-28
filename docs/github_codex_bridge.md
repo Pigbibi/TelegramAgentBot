@@ -6,20 +6,20 @@ window where Codex is already running.
 The intended flow is:
 
 1. Monthly review / optimization issues are created in GitHub.
-2. `telegram-codex-bridge` polls those issues with `gh`.
+2. `telegram-agent-bridge` polls those issues with `gh`.
 3. Matching issues are converted into a Codex task prompt.
 4. The prompt is pasted into a configured tmux window.
-5. telegram-codex-bot keeps listening to the Codex transcript and streams the result back
+5. telegram-agent-bot keeps listening to the Codex transcript and streams the result back
    to Telegram as usual.
 
-The bridge does not replace telegram-codex-bot. It is only the task injector.
+The bridge does not replace telegram-agent-bot. It is only the task injector.
 It only touches the repositories listed in its config file, so it will not
 affect other repositories unless you add them explicitly.
 
 ## Configuration
 
 Commit only the template file in the repo. Keep your real config local at
-`~/.telegram-codex-bot/github_codex_bridge.json` and never add it to Git.
+`~/.telegram-agent-bot/github_codex_bridge.json` and never add it to Git.
 
 Any repository list, including any targets that you want to auto-merge, must
 stay only in the local config. Do not add those repository names or target
@@ -29,7 +29,7 @@ Template file:
 
 - `docs/github_codex_bridge.sample.json`
 
-Create `~/.telegram-codex-bot/github_codex_bridge.json`:
+Create `~/.telegram-agent-bot/github_codex_bridge.json`:
 
 ```json
 {
@@ -157,7 +157,7 @@ If you want the GitHub Actions control plane to drive a single Codex runner,
 switch to `orchestrator` mode and point `source_repo` at that control plane
 repository.
 
-Do not use this bridge to self-update `telegram-codex-bot`; keep the bridge focused on the
+Do not use this bridge to self-update `telegram-agent-bot`; keep the bridge focused on the
 external repositories listed in your local config file.
 
 ## Usage
@@ -165,25 +165,25 @@ external repositories listed in your local config file.
 Run once:
 
 ```bash
-telegram-codex-bridge --config ~/.telegram-codex-bot/github_codex_bridge.json --once
+telegram-agent-bridge --config ~/.telegram-agent-bot/github_codex_bridge.json --once
 ```
 
 Watch continuously:
 
 ```bash
-telegram-codex-bridge --config ~/.telegram-codex-bot/github_codex_bridge.json --watch --interval 300
+telegram-agent-bridge --config ~/.telegram-agent-bot/github_codex_bridge.json --watch --interval 300
 ```
 
 Dispatch a specific issue:
 
 ```bash
-telegram-codex-bridge --config ~/.telegram-codex-bot/github_codex_bridge.json --issue-number 123
+telegram-agent-bridge --config ~/.telegram-agent-bot/github_codex_bridge.json --issue-number 123
 ```
 
 Dry run:
 
 ```bash
-telegram-codex-bridge --config ~/.telegram-codex-bot/github_codex_bridge.json --dry-run
+telegram-agent-bridge --config ~/.telegram-agent-bot/github_codex_bridge.json --dry-run
 ```
 
 ## Operational notes
@@ -191,7 +191,7 @@ telegram-codex-bridge --config ~/.telegram-codex-bot/github_codex_bridge.json --
 - `gh` must already be authenticated on the VPS.
 - The tmux window must be running a Codex session.
 - The bridge tracks the last dispatched issue fingerprint in
-  `~/.telegram-codex-bot/github_codex_bridge_state.json` so it does not resend the same
+  `~/.telegram-agent-bot/github_codex_bridge_state.json` so it does not resend the same
   issue repeatedly.
 - `gh` and `tmux` calls are retried only for transient subprocess failures.
   Logical failures still fail fast.

@@ -1,6 +1,6 @@
 [project]
-name = "telegram-codex-bot"
-version = "0.2.0"
+name = "telegram-agent-bot"
+version = "1.0.0"
 description = "Telegram bot for monitoring Codex CLI / Claude Code sessions via tmux"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -15,11 +15,11 @@ dependencies = [
 ]
 
 [project.scripts]
-telegram-codex-bot = "telegram_codex_bot.main:main"
-telegram-codex-bridge = "telegram_codex_bot.bridge:main"
+telegram-agent-bot = "telegram_agent_bot.main:main"
+telegram-agent-bridge = "telegram_agent_bot.bridge:main"
 
-[project.entry-points."telegram_codex_bot.backends"]
-local = "telegram_codex_bot.backends.local:LocalTmuxBackend"
+[project.entry-points."telegram_agent_bot.backends"]
+local = "telegram_agent_bot.backends.local:LocalTmuxBackend"
 
 [project.optional-dependencies]
 dev = [
@@ -35,7 +35,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/telegram_codex_bot"]
+packages = ["src/telegram_agent_bot"]
 
 # Target Python 3.12
 [tool.black]
@@ -53,7 +53,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["telegram_codex_bot"]
+source = ["telegram_agent_bot"]
 branch = true
 
 [tool.coverage.report]

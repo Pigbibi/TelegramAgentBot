@@ -8,9 +8,9 @@ plugin so normal tmux usage stays simple and rollback-safe.
 
 The core already provides the plugin loading surface:
 
-- `TELEGRAM_CODEX_BOT_BACKEND=<backend-id>`
-- `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=<python.module[,python.module...]>`
-- Python entry point group: `telegram_codex_bot.backends`
+- `TELEGRAM_AGENT_BOT_BACKEND=<backend-id>`
+- `TELEGRAM_AGENT_BOT_BACKEND_PLUGINS=<python.module[,python.module...]>`
+- Python entry point group: `telegram_agent_bot.backends`
 
 A backend plugin implements `AgentBackend`:
 
@@ -43,7 +43,7 @@ plugins/socket_backend
 It provides:
 
 - a center-side backend registered as `socket-cluster`;
-- an agent-node CLI: `telegram-codex-agent-node`;
+- an agent-node CLI: `telegram-agent-node`;
 - a tiny newline-delimited JSON protocol over TCP;
 - remote root browsing, directory browsing, resume-session lookup, session
   creation, text send, control key send, pane capture, and transcript event
@@ -56,7 +56,7 @@ local agent node to the VPS through a reverse SSH tunnel.
 
 ```bash
 # On the agent node machine:
-telegram-codex-agent-node --node-id macbook --host 127.0.0.1 --port 8765
+telegram-agent-node --node-id macbook --host 127.0.0.1 --port 8765
 
 # Also on the agent node machine, tunnel that local port to the VPS:
 ssh -N -R 127.0.0.1:8765:127.0.0.1:8765 ubuntu@your-vps
@@ -65,10 +65,10 @@ ssh -N -R 127.0.0.1:8765:127.0.0.1:8765 ubuntu@your-vps
 Center bot `.env`:
 
 ```ini
-TELEGRAM_CODEX_BOT_BACKEND=socket-cluster
-TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=telegram_codex_bot_socket_backend
-TELEGRAM_CODEX_BOT_SOCKET_NODES=macbook=127.0.0.1:8765
-TELEGRAM_CODEX_BOT_SOCKET_MAX_MESSAGE_BYTES=26214400
+TELEGRAM_AGENT_BOT_BACKEND=socket-cluster
+TELEGRAM_AGENT_BOT_BACKEND_PLUGINS=telegram_agent_bot_socket_backend
+TELEGRAM_AGENT_BOT_SOCKET_NODES=macbook=127.0.0.1:8765
+TELEGRAM_AGENT_BOT_SOCKET_MAX_MESSAGE_BYTES=26214400
 ```
 
 Install the plugin on machines that use socket mode:
@@ -120,18 +120,18 @@ state;
 - screenshots and binary attachments need a separate storage path.
 
 GitHub remains useful for async task orchestration, which is what
-`telegram-codex-bridge` already covers. For live center-bot / agent-node chat,
+`telegram-agent-bridge` already covers. For live center-bot / agent-node chat,
 a socket plugin over reverse SSH is simpler and faster.
 
 ## Service Examples
 
 Example service files are included in the plugin package:
 
-- `plugins/socket_backend/examples/systemd/telegram-codex-bot.socket-center.service`
-- `plugins/socket_backend/examples/systemd/telegram-codex-agent-node.service`
+- `plugins/socket_backend/examples/systemd/telegram-agent-bot.socket-center.service`
+- `plugins/socket_backend/examples/systemd/telegram-agent-node.service`
 - `plugins/socket_backend/examples/systemd/socket-center.env.example`
-- `plugins/socket_backend/examples/launchd/io.github.telegramcodexbot.agent-node.plist`
-- `plugins/socket_backend/examples/launchd/io.github.telegramcodexbot.center-bot.plist`
+- `plugins/socket_backend/examples/launchd/io.github.telegramagentbot.agent-node.plist`
+- `plugins/socket_backend/examples/launchd/io.github.telegramagentbot.center-bot.plist`
 
 Use systemd user services for a Linux/VPS center bot or Linux agent node. Use
 LaunchAgent plists for a macOS agent node. The plist files contain placeholder

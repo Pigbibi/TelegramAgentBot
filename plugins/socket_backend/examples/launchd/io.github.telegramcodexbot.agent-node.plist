@@ -4,14 +4,14 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>io.github.telegramcodexbot.agent-node</string>
+  <string>io.github.telegramagentbot.agent-node</string>
 
   <key>WorkingDirectory</key>
   <string>/Users/YOUR_USER/Projects/TelegramCodexBot</string>
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/YOUR_USER/Projects/TelegramCodexBot/.venv/bin/telegram-codex-agent-node</string>
+    <string>/Users/YOUR_USER/Projects/TelegramCodexBot/.venv/bin/telegram-agent-node</string>
     <string>--node-id</string>
     <string>macbook</string>
     <string>--host</string>
@@ -34,8 +34,8 @@
   <true/>
 
   <key>StandardOutPath</key>
-  <string>/Users/YOUR_USER/Library/Logs/telegram-codex-agent-node.out.log</string>
+  <string>/Users/YOUR_USER/Library/Logs/telegram-agent-node.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/YOUR_USER/Library/Logs/telegram-codex-agent-node.err.log</string>
+  <string>/Users/YOUR_USER/Library/Logs/telegram-agent-node.err.log</string>
 </dict>
 </plist>

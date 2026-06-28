@@ -19,14 +19,14 @@ pip install -e plugins/socket_backend
 Run this on the machine that should host Codex/tmux sessions:
 
 ```bash
-telegram-codex-agent-node --node-id macbook --host 127.0.0.1 --port 8765
+telegram-agent-node --node-id macbook --host 127.0.0.1 --port 8765
 ```
 
 For image/file uploads, both sides default to a 25 MiB JSON line limit. You can
 raise or lower it with:
 
 ```bash
-telegram-codex-agent-node --node-id macbook --max-message-bytes 26214400
+telegram-agent-node --node-id macbook --max-message-bytes 26214400
 ```
 
 If the node is behind NAT, expose it to the VPS center bot with reverse SSH:
@@ -40,29 +40,29 @@ ssh -N -R 127.0.0.1:8765:127.0.0.1:8765 ubuntu@your-vps
 Configure the VPS bot:
 
 ```ini
-TELEGRAM_CODEX_BOT_BACKEND=socket-cluster
-TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=telegram_codex_bot_socket_backend
-TELEGRAM_CODEX_BOT_SOCKET_NODES=macbook=127.0.0.1:8765
-TELEGRAM_CODEX_BOT_SOCKET_MAX_MESSAGE_BYTES=26214400
+TELEGRAM_AGENT_BOT_BACKEND=socket-cluster
+TELEGRAM_AGENT_BOT_BACKEND_PLUGINS=telegram_agent_bot_socket_backend
+TELEGRAM_AGENT_BOT_SOCKET_NODES=macbook=127.0.0.1:8765
+TELEGRAM_AGENT_BOT_SOCKET_MAX_MESSAGE_BYTES=26214400
 ```
 
-Then restart `telegram-codex-bot`.
+Then restart `telegram-agent-bot`.
 
 ## Service Examples
 
 Example service files live under `examples/`:
 
-- `examples/systemd/telegram-codex-bot.socket-center.service`
-- `examples/systemd/telegram-codex-agent-node.service`
+- `examples/systemd/telegram-agent-bot.socket-center.service`
+- `examples/systemd/telegram-agent-node.service`
 - `examples/systemd/socket-center.env.example`
-- `examples/launchd/io.github.telegramcodexbot.agent-node.plist`
-- `examples/launchd/io.github.telegramcodexbot.center-bot.plist`
+- `examples/launchd/io.github.telegramagentbot.agent-node.plist`
+- `examples/launchd/io.github.telegramagentbot.center-bot.plist`
 
 ## Notes
 
 - The plugin proxies directory browsing, session creation, text sends, control
   keys, capture, photo/file upload, and transcript events.
 - Uploaded files are written on the agent node under
-  `~/.telegram-codex-bot/uploads/` and Codex receives the node-local file path.
+  `~/.telegram-agent-bot/uploads/` and Codex receives the node-local file path.
 - The node id should stay stable. Current routing uses `node_id:tmux_window_id`
   as the center-visible session key.

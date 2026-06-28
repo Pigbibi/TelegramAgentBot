@@ -6,8 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/Projects/TelegramCodexBot
-EnvironmentFile=%h/.telegram-codex-bot/socket-center.env
-ExecStart=%h/Projects/TelegramCodexBot/.venv/bin/telegram-codex-bot
+EnvironmentFile=%h/.telegram-agent-bot/socket-center.env
+ExecStart=%h/Projects/TelegramCodexBot/.venv/bin/telegram-agent-bot
 Restart=on-failure
 RestartSec=5
 

@@ -7,14 +7,14 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TELEGRAM_CODEX_BOT_DIR="${TELEGRAM_CODEX_BOT_DIR:-$HOME/.telegram-codex-bot}"
-ENV_PATH="${TELEGRAM_CODEX_BOT_DIR}/.env"
-BIN_DIR="${TELEGRAM_CODEX_BOT_DIR}/bin"
-LOG_DIR="${TELEGRAM_CODEX_BOT_DIR}/logs"
+TELEGRAM_AGENT_BOT_DIR="${TELEGRAM_AGENT_BOT_DIR:-$HOME/.telegram-agent-bot}"
+ENV_PATH="${TELEGRAM_AGENT_BOT_DIR}/.env"
+BIN_DIR="${TELEGRAM_AGENT_BOT_DIR}/bin"
+LOG_DIR="${TELEGRAM_AGENT_BOT_DIR}/logs"
 SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-SERVICE_NAME="${TELEGRAM_CODEX_BOT_SYSTEMD_SERVICE_NAME:-io.github.telegramcodexbot.service}"
+SERVICE_NAME="${TELEGRAM_AGENT_BOT_SYSTEMD_SERVICE_NAME:-io.github.telegramagentbot.service}"
 SERVICE_PATH="${SYSTEMD_DIR}/${SERVICE_NAME}"
-LAUNCHER_PATH="${BIN_DIR}/telegram-codex-bot-launch"
+LAUNCHER_PATH="${BIN_DIR}/telegram-agent-bot-launch"
 PATH_VALUE="/usr/local/bin:/usr/bin:/bin:${HOME}/.local/bin"
 
 require_cmd() {
@@ -29,7 +29,7 @@ require_cmd tmux
 # Detect agent type from existing .env, default to codex
 _agent_type=""
 if [[ -f "$ENV_PATH" ]]; then
-  _agent_type="$(grep -E '^TELEGRAM_CODEX_BOT_AGENT_TYPE=' "$ENV_PATH" | tail -1 | sed 's/.*=//')"
+  _agent_type="$(grep -E '^TELEGRAM_AGENT_BOT_AGENT_TYPE=' "$ENV_PATH" | tail -1 | sed 's/.*=//')"
 fi
 if [[ "$_agent_type" == "claude" ]]; then
   require_cmd claude
@@ -113,14 +113,14 @@ check_runtime_checkout_location() {
   local unsafe_root=""
   local -a root_entries=()
 
-  allow="${TELEGRAM_CODEX_BOT_ALLOW_PROJECTS_CHECKOUT:-$(read_env_value TELEGRAM_CODEX_BOT_ALLOW_PROJECTS_CHECKOUT false)}"
+  allow="${TELEGRAM_AGENT_BOT_ALLOW_PROJECTS_CHECKOUT:-$(read_env_value TELEGRAM_AGENT_BOT_ALLOW_PROJECTS_CHECKOUT false)}"
   if truthy "$allow"; then
     return
   fi
 
   repo_path="$(normalize_path "$REPO_DIR")"
-  default_root="$(read_env_value TELEGRAM_CODEX_BOT_DEFAULT_PROJECTS_PATH "$HOME/Projects")"
-  project_roots="$(read_env_value TELEGRAM_CODEX_BOT_PROJECT_ROOTS "")"
+  default_root="$(read_env_value TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH "$HOME/Projects")"
+  project_roots="$(read_env_value TELEGRAM_AGENT_BOT_PROJECT_ROOTS "")"
 
   root_path="$(normalize_path "$default_root")"
   if is_under_or_same "$repo_path" "$root_path"; then
@@ -150,13 +150,13 @@ The systemd launcher points to this checkout. If a Codex session cleans the
 project root, the bot can keep running from deleted files and fail on restart.
 
 Clone TelegramAgentBot into a durable runtime path outside project roots, for example:
-  mkdir -p "$TELEGRAM_CODEX_BOT_DIR/app"
-  git clone https://github.com/Pigbibi/TelegramAgentBot.git "$TELEGRAM_CODEX_BOT_DIR/app/TelegramAgentBot"
-  cd "$TELEGRAM_CODEX_BOT_DIR/app/TelegramAgentBot"
+  mkdir -p "$TELEGRAM_AGENT_BOT_DIR/app"
+  git clone https://github.com/Pigbibi/TelegramAgentBot.git "$TELEGRAM_AGENT_BOT_DIR/app/TelegramAgentBot"
+  cd "$TELEGRAM_AGENT_BOT_DIR/app/TelegramAgentBot"
   ./scripts/bootstrap-linux.sh
 
 To intentionally allow this unsafe layout, set:
-  TELEGRAM_CODEX_BOT_ALLOW_PROJECTS_CHECKOUT=true
+  TELEGRAM_AGENT_BOT_ALLOW_PROJECTS_CHECKOUT=true
 EOF
     exit 1
   fi
@@ -169,7 +169,7 @@ cat >"$LAUNCHER_PATH" <<EOF
 export PATH="$PATH_VALUE"
 export HOME="$HOME"
 cd "$REPO_DIR"
-exec /usr/bin/env uv run telegram-codex-bot "\$@"
+exec /usr/bin/env uv run telegram-agent-bot "\$@"
 EOF
 chmod +x "$LAUNCHER_PATH"
 
@@ -181,15 +181,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=$TELEGRAM_CODEX_BOT_DIR
+WorkingDirectory=$TELEGRAM_AGENT_BOT_DIR
 ExecStart=$LAUNCHER_PATH
 Restart=always
 RestartSec=3
 KillMode=process
 Environment=PATH=$PATH_VALUE
 Environment=HOME=$HOME
-StandardOutput=append:$LOG_DIR/telegram-codex-bot.out.log
-StandardError=append:$LOG_DIR/telegram-codex-bot.err.log
+StandardOutput=append:$LOG_DIR/telegram-agent-bot.out.log
+StandardError=append:$LOG_DIR/telegram-agent-bot.err.log
 
 [Install]
 WantedBy=default.target
@@ -197,7 +197,7 @@ EOF
 
 cd "$REPO_DIR"
 uv sync
-uv run telegram-codex-bot hook --install
+uv run telegram-agent-bot hook --install
 
 token_line="$(grep -E '^TELEGRAM_BOT_TOKEN=' "$ENV_PATH" || true)"
 user_line="$(grep -E '^ALLOWED_USERS=' "$ENV_PATH" || true)"

@@ -1,18 +1,18 @@
 # AGENTS.md
 
 This repository contains TelegramAgentBot, a Telegram controller for live Codex
-CLI and Claude Code sessions running in tmux (`TELEGRAM_CODEX_BOT_AGENT_TYPE`).
-The CLI/package name is `telegram-codex-bot`.
+CLI and Claude Code sessions running in tmux (`TELEGRAM_AGENT_BOT_AGENT_TYPE`).
+The CLI/package name is `telegram-agent-bot`.
 
 ## Common Commands
 
 ```bash
 uv run ruff check src/ tests/
 uv run ruff format src/ tests/
-uv run pyright src/telegram_codex_bot/
+uv run pyright src/telegram_agent_bot/
 uv run pytest
 ./scripts/restart.sh
-telegram-codex-bot hook --install
+telegram-agent-bot hook --install
 ```
 
 ## Working Notes

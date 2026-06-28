@@ -11,13 +11,13 @@ The cleanup command refuses destructive work unless `--yes` is passed. Use
 
 Protected paths are never removed:
 
-- `$TELEGRAM_CODEX_BOT_DIR` or `~/.telegram-codex-bot`
-- `$TELEGRAM_CODEX_BOT_DIR/app/TelegramAgentBot`
+- `$TELEGRAM_AGENT_BOT_DIR` or `~/.telegram-agent-bot`
+- `$TELEGRAM_AGENT_BOT_DIR/app/TelegramAgentBot`
 - `~/Projects/TelegramAgentBot`
-- comma-separated paths in `TELEGRAM_CODEX_CLEANUP_PROTECTED_PATHS`
+- comma-separated paths in `TELEGRAM_AGENT_BOT_CLEANUP_PROTECTED_PATHS`
 
 GitHub Actions runner directories are discovered from `~/actions-runner-*` or
-from `TELEGRAM_CODEX_CLEANUP_RUNNER_ROOTS`. Runner service binaries are kept.
+from `TELEGRAM_AGENT_BOT_CLEANUP_RUNNER_ROOTS`. Runner service binaries are kept.
 The helper only removes:
 
 - `_work/*`, but only when no `Runner.Worker` process is active
@@ -46,14 +46,14 @@ If passwordless sudo is unavailable, those steps are skipped.
 
 By default the timer runs cleanup only when disk pressure is high:
 
-- `TELEGRAM_CODEX_CLEANUP_MAX_USED_PERCENT=80`
-- `TELEGRAM_CODEX_CLEANUP_MIN_FREE_GB=6`
+- `TELEGRAM_AGENT_BOT_CLEANUP_MAX_USED_PERCENT=80`
+- `TELEGRAM_AGENT_BOT_CLEANUP_MIN_FREE_GB=6`
 
 The command can be forced manually:
 
 ```bash
-~/.telegram-codex-bot/bin/telegram-codex-cleanup --dry-run --force
-~/.telegram-codex-bot/bin/telegram-codex-cleanup --force
+~/.telegram-agent-bot/bin/telegram-agent-cleanup --dry-run --force
+~/.telegram-agent-bot/bin/telegram-agent-cleanup --force
 ```
 
 ## Install
@@ -66,16 +66,16 @@ From the TelegramAgentBot checkout:
 
 This writes a user systemd service and timer:
 
-- `~/.config/systemd/user/io.github.telegramcodexbot.cleanup.service`
-- `~/.config/systemd/user/io.github.telegramcodexbot.cleanup.timer`
-- `~/.telegram-codex-bot/bin/telegram-codex-cleanup`
+- `~/.config/systemd/user/io.github.telegramagentbot.cleanup.service`
+- `~/.config/systemd/user/io.github.telegramagentbot.cleanup.timer`
+- `~/.telegram-agent-bot/bin/telegram-agent-cleanup`
 
 The default schedule is daily at `04:20` with up to `30m` randomized delay.
 
 Useful commands:
 
 ```bash
-systemctl --user list-timers io.github.telegramcodexbot.cleanup.timer
-systemctl --user start io.github.telegramcodexbot.cleanup.service
-journalctl --user -u io.github.telegramcodexbot.cleanup.service -n 100
+systemctl --user list-timers io.github.telegramagentbot.cleanup.timer
+systemctl --user start io.github.telegramagentbot.cleanup.service
+journalctl --user -u io.github.telegramagentbot.cleanup.service -n 100
 ```

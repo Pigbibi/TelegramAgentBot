@@ -24,6 +24,6 @@ jobs:
           uv run ruff check src/ tests/
           uv run ruff format --check src/ tests/
       - name: Lint
-        run: uv run pyright src/telegram_codex_bot/
+        run: uv run pyright src/telegram_agent_bot/
       - name: Test
         run: uv run pytest --tb=short -q

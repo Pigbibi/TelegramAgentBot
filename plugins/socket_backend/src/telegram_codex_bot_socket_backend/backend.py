@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from telegram_codex_bot.backends.base import (
+from telegram_agent_bot.backends.base import (
     AgentTarget,
     BackendInfo,
     CreateSessionRequest,
@@ -20,9 +20,9 @@ from telegram_codex_bot.backends.base import (
     MessageCallback,
     SendResult,
 )
-from telegram_codex_bot.backends.browser import BrowserRoot, DirectoryListing
-from telegram_codex_bot.backends.files import FileUploadResult
-from telegram_codex_bot.session import CodexSession
+from telegram_agent_bot.backends.browser import BrowserRoot, DirectoryListing
+from telegram_agent_bot.backends.files import FileUploadResult
+from telegram_agent_bot.session import CodexSession
 
 from .protocol import (
     listing_from_dict,
@@ -74,17 +74,17 @@ class SocketClusterBackend:
         timeout: float | None = None,
         reconnect_delay: float | None = None,
     ) -> None:
-        raw_nodes = os.getenv("TELEGRAM_CODEX_BOT_SOCKET_NODES", "")
+        raw_nodes = os.getenv("TELEGRAM_AGENT_BOT_SOCKET_NODES", "")
         self.nodes = nodes if nodes is not None else _parse_nodes(raw_nodes)
         self.timeout = timeout or float(
-            os.getenv("TELEGRAM_CODEX_BOT_SOCKET_TIMEOUT", "20")
+            os.getenv("TELEGRAM_AGENT_BOT_SOCKET_TIMEOUT", "20")
         )
         self.reconnect_delay = reconnect_delay or float(
-            os.getenv("TELEGRAM_CODEX_BOT_SOCKET_RECONNECT_DELAY", "5")
+            os.getenv("TELEGRAM_AGENT_BOT_SOCKET_RECONNECT_DELAY", "5")
         )
         self.max_message_bytes = int(
             os.getenv(
-                "TELEGRAM_CODEX_BOT_SOCKET_MAX_MESSAGE_BYTES", str(25 * 1024 * 1024)
+                "TELEGRAM_AGENT_BOT_SOCKET_MAX_MESSAGE_BYTES", str(25 * 1024 * 1024)
             )
         )
         self._message_callback: MessageCallback | None = None
@@ -102,7 +102,7 @@ class SocketClusterBackend:
         """Validate node configuration before polling starts."""
         if not self.nodes:
             raise ValueError(
-                "TELEGRAM_CODEX_BOT_SOCKET_NODES is required for socket-cluster"
+                "TELEGRAM_AGENT_BOT_SOCKET_NODES is required for socket-cluster"
             )
 
     async def start(self, message_callback: MessageCallback) -> None:

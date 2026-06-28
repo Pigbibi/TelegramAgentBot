@@ -7,13 +7,13 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TELEGRAM_CODEX_BOT_DIR="${TELEGRAM_CODEX_BOT_DIR:-$HOME/.telegram-codex-bot}"
-ENV_PATH="${TELEGRAM_CODEX_BOT_DIR}/.env"
-BIN_DIR="${TELEGRAM_CODEX_BOT_DIR}/bin"
-LOG_DIR="${TELEGRAM_CODEX_BOT_DIR}/logs"
-LAUNCH_AGENT_LABEL="${TELEGRAM_CODEX_BOT_LAUNCH_AGENT_LABEL:-io.github.telegramcodexbot}"
+TELEGRAM_AGENT_BOT_DIR="${TELEGRAM_AGENT_BOT_DIR:-$HOME/.telegram-agent-bot}"
+ENV_PATH="${TELEGRAM_AGENT_BOT_DIR}/.env"
+BIN_DIR="${TELEGRAM_AGENT_BOT_DIR}/bin"
+LOG_DIR="${TELEGRAM_AGENT_BOT_DIR}/logs"
+LAUNCH_AGENT_LABEL="${TELEGRAM_AGENT_BOT_LAUNCH_AGENT_LABEL:-io.github.telegramagentbot}"
 PLIST_PATH="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
-LAUNCHER_PATH="${BIN_DIR}/telegram-codex-bot-launch"
+LAUNCHER_PATH="${BIN_DIR}/telegram-agent-bot-launch"
 PATH_VALUE="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${HOME}/.local/bin"
 
 require_cmd() {
@@ -43,7 +43,7 @@ cat >"$LAUNCHER_PATH" <<EOF
 export PATH="$PATH_VALUE"
 export HOME="$HOME"
 cd "$REPO_DIR"
-exec /usr/bin/env uv run telegram-codex-bot "\$@"
+exec /usr/bin/env uv run telegram-agent-bot "\$@"
 EOF
 chmod +x "$LAUNCHER_PATH"
 
@@ -70,15 +70,15 @@ cat >"$PLIST_PATH" <<EOF
   <true/>
 
   <key>WorkingDirectory</key>
-  <string>$TELEGRAM_CODEX_BOT_DIR</string>
+  <string>$TELEGRAM_AGENT_BOT_DIR</string>
 
   <key>ProcessType</key>
   <string>Background</string>
 
   <key>StandardOutPath</key>
-  <string>$LOG_DIR/telegram-codex-bot.out.log</string>
+  <string>$LOG_DIR/telegram-agent-bot.out.log</string>
   <key>StandardErrorPath</key>
-  <string>$LOG_DIR/telegram-codex-bot.err.log</string>
+  <string>$LOG_DIR/telegram-agent-bot.err.log</string>
 
   <key>EnvironmentVariables</key>
   <dict>
@@ -95,7 +95,7 @@ plutil -lint "$PLIST_PATH" >/dev/null
 
 cd "$REPO_DIR"
 uv sync
-uv run telegram-codex-bot hook --install
+uv run telegram-agent-bot hook --install
 
 token_line="$(grep -E '^TELEGRAM_BOT_TOKEN=' "$ENV_PATH" || true)"
 user_line="$(grep -E '^ALLOWED_USERS=' "$ENV_PATH" || true)"

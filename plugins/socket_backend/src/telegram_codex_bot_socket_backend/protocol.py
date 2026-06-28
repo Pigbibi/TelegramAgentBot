@@ -5,10 +5,10 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from telegram_codex_bot.backends.base import AgentTarget
-from telegram_codex_bot.backends.browser import BrowserRoot, DirectoryListing
-from telegram_codex_bot.session import CodexSession
-from telegram_codex_bot.session_monitor import NewMessage
+from telegram_agent_bot.backends.base import AgentTarget
+from telegram_agent_bot.backends.browser import BrowserRoot, DirectoryListing
+from telegram_agent_bot.session import CodexSession
+from telegram_agent_bot.session_monitor import NewMessage
 
 
 def target_session_id(node_id: str, window_id: str) -> str:

@@ -14,11 +14,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from telegram_codex_bot.backends.base import AgentTarget, CreateSessionRequest
-from telegram_codex_bot.backends.local import LocalTmuxBackend
-from telegram_codex_bot.config import config
-from telegram_codex_bot.session import _session_ids_match, session_manager
-from telegram_codex_bot.session_monitor import NewMessage
+from telegram_agent_bot.backends.base import AgentTarget, CreateSessionRequest
+from telegram_agent_bot.backends.local import LocalTmuxBackend
+from telegram_agent_bot.config import config
+from telegram_agent_bot.session import _session_ids_match, session_manager
+from telegram_agent_bot.session_monitor import NewMessage
 
 from .protocol import (
     listing_to_dict,
@@ -50,7 +50,7 @@ class AgentNodeServer:
         self.port = port
         self.max_message_bytes = max_message_bytes or int(
             os.getenv(
-                "TELEGRAM_CODEX_AGENT_NODE_MAX_MESSAGE_BYTES",
+                "TELEGRAM_AGENT_NODE_MAX_MESSAGE_BYTES",
                 str(25 * 1024 * 1024),
             )
         )
@@ -287,23 +287,23 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a TelegramAgentBot agent node")
     parser.add_argument(
         "--node-id",
-        default=os.getenv("TELEGRAM_CODEX_AGENT_NODE_ID", "local"),
+        default=os.getenv("TELEGRAM_AGENT_NODE_ID", "local"),
         help="Stable node id shown by the center bot",
     )
     parser.add_argument(
         "--host",
-        default=os.getenv("TELEGRAM_CODEX_AGENT_NODE_HOST", "127.0.0.1"),
+        default=os.getenv("TELEGRAM_AGENT_NODE_HOST", "127.0.0.1"),
         help="Host/IP to bind",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("TELEGRAM_CODEX_AGENT_NODE_PORT", "8765")),
+        default=int(os.getenv("TELEGRAM_AGENT_NODE_PORT", "8765")),
         help="TCP port to bind",
     )
     parser.add_argument(
         "--log-level",
-        default=os.getenv("TELEGRAM_CODEX_AGENT_NODE_LOG_LEVEL", "INFO"),
+        default=os.getenv("TELEGRAM_AGENT_NODE_LOG_LEVEL", "INFO"),
         help="Python logging level",
     )
     parser.add_argument(
@@ -311,7 +311,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=int(
             os.getenv(
-                "TELEGRAM_CODEX_AGENT_NODE_MAX_MESSAGE_BYTES",
+                "TELEGRAM_AGENT_NODE_MAX_MESSAGE_BYTES",
                 str(25 * 1024 * 1024),
             )
         ),

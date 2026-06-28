@@ -2,7 +2,7 @@
 
 import pytest
 
-from telegram_codex_bot.monitor_state import MonitorState, TrackedSession
+from telegram_agent_bot.monitor_state import MonitorState, TrackedSession
 
 pytestmark = pytest.mark.integration
 

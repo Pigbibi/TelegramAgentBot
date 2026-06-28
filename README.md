@@ -3,13 +3,13 @@
 [中文文档](README_CN.md)
 
 > TelegramAgentBot controls live Codex CLI / Claude Code sessions over Telegram.
-> The CLI/package name is `telegram-codex-bot`.
+> The CLI/package name is `telegram-agent-bot`.
 
 Control Codex sessions remotely through Telegram while keeping tmux as the source of truth. This lets you monitor, answer, interrupt, resume, and clean up real terminal sessions from your phone without switching to a separate SDK session.
 
 ## What it does
 
-TelegramAgentBot is a Telegram controller for live Codex CLI / Claude Code sessions (`TELEGRAM_CODEX_BOT_AGENT_TYPE`):
+TelegramAgentBot is a Telegram controller for live Codex CLI / Claude Code sessions (`TELEGRAM_AGENT_BOT_AGENT_TYPE`):
 
 - `codex` is the default command for new tmux windows
 - transcript parsing and monitoring target modern Codex JSONL output under `~/.codex`
@@ -30,7 +30,7 @@ TelegramAgentBot is a Telegram controller for live Codex CLI / Claude Code sessi
 - **Usage/auth recovery** — usage-limit and login failures are reported in Telegram; optional account failover can be enabled when you have saved backup accounts
 - **Persistent state** — thread bindings, display names, offsets, and monitor state survive restarts
 - **Pluggable agent backend** — local tmux is the default, while advanced users can load a backend plugin for distributed center-bot / agent-node setups
-- **GitHub bridge** — optional `telegram-codex-bridge` CLI can poll GitHub issues and inject structured tasks into Codex tmux sessions
+- **GitHub bridge** — optional `telegram-agent-bridge` CLI can poll GitHub issues and inject structured tasks into Codex tmux sessions
 
 ## Prerequisites
 
@@ -72,9 +72,9 @@ chmod +x scripts/bootstrap-macos.sh
 The script does the following:
 
 - run `uv sync`
-- create `~/.telegram-codex-bot/.env` from `.env.example` if missing
-- install `telegram-codex-bot hook --install` into the active Codex home
-- generate a reusable `~/.telegram-codex-bot/bin/telegram-codex-bot-launch`
+- create `~/.telegram-agent-bot/.env` from `.env.example` if missing
+- install `telegram-agent-bot hook --install` into the active Codex home
+- generate a reusable `~/.telegram-agent-bot/bin/telegram-agent-bot-launch`
 - generate a LaunchAgent plist for macOS
 
 Required local setup after the script runs:
@@ -100,20 +100,20 @@ If you use multiple Codex accounts or need to refresh login while away from the 
 /codexaccount use backup
 ```
 
-If `~/.telegram-codex-bot/.env` still contains placeholder values, the script will write the
+If `~/.telegram-agent-bot/.env` still contains placeholder values, the script will write the
 launchd files but will not start the service. After editing `.env`, start it
 manually:
 
 ```bash
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.github.telegramcodexbot.plist
-launchctl kickstart -k "gui/$(id -u)/io.github.telegramcodexbot"
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.github.telegramagentbot.plist
+launchctl kickstart -k "gui/$(id -u)/io.github.telegramagentbot"
 ```
 
 Check status:
 
 ```bash
-launchctl print "gui/$(id -u)/io.github.telegramcodexbot" | sed -n '1,40p'
-tail -n 50 ~/.telegram-codex-bot/logs/telegram-codex-bot.err.log
+launchctl print "gui/$(id -u)/io.github.telegramagentbot" | sed -n '1,40p'
+tail -n 50 ~/.telegram-agent-bot/logs/telegram-agent-bot.err.log
 ```
 
 ## Quick deploy on Linux / VPS
@@ -121,36 +121,36 @@ tail -n 50 ~/.telegram-codex-bot/logs/telegram-codex-bot.err.log
 For a Linux workstation or a VPS with systemd:
 
 ```bash
-mkdir -p ~/.telegram-codex-bot/app
-git clone https://github.com/Pigbibi/TelegramAgentBot.git ~/.telegram-codex-bot/app/TelegramAgentBot
-cd ~/.telegram-codex-bot/app/TelegramAgentBot
+mkdir -p ~/.telegram-agent-bot/app
+git clone https://github.com/Pigbibi/TelegramAgentBot.git ~/.telegram-agent-bot/app/TelegramAgentBot
+cd ~/.telegram-agent-bot/app/TelegramAgentBot
 chmod +x scripts/bootstrap-linux.sh
 ./scripts/bootstrap-linux.sh
 ```
 
 Keep the bot checkout outside the project roots that Codex sessions can browse
 or clean, such as `~/Projects`. The Linux bootstrap refuses an unsafe checkout
-inside `TELEGRAM_CODEX_BOT_DEFAULT_PROJECTS_PATH` or
-`TELEGRAM_CODEX_BOT_PROJECT_ROOTS`, because the systemd launcher points back to
+inside `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` or
+`TELEGRAM_AGENT_BOT_PROJECT_ROOTS`, because the systemd launcher points back to
 that checkout and a project cleanup would break the next restart.
 
 The Linux helper:
 
 - runs `uv sync`
-- creates `~/.telegram-codex-bot/.env` from `.env.example` if needed
-- installs `telegram-codex-bot hook --install`
-- writes `~/.telegram-codex-bot/bin/telegram-codex-bot-launch`
-- writes a user service at `~/.config/systemd/user/io.github.telegramcodexbot.service`
+- creates `~/.telegram-agent-bot/.env` from `.env.example` if needed
+- installs `telegram-agent-bot hook --install`
+- writes `~/.telegram-agent-bot/bin/telegram-agent-bot-launch`
+- writes a user service at `~/.config/systemd/user/io.github.telegramagentbot.service`
 
 After that:
 
-1. edit `~/.telegram-codex-bot/.env`
+1. edit `~/.telegram-agent-bot/.env`
 2. run `codex login`
 3. start the service if it was not auto-started:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now io.github.telegramcodexbot.service
+systemctl --user enable --now io.github.telegramagentbot.service
 ```
 
 On a VPS, if you want the service to keep running after reboot without an
@@ -163,8 +163,8 @@ sudo loginctl enable-linger "$USER"
 Check status:
 
 ```bash
-systemctl --user status io.github.telegramcodexbot.service --no-pager
-tail -n 50 ~/.telegram-codex-bot/logs/telegram-codex-bot.err.log
+systemctl --user status io.github.telegramagentbot.service --no-pager
+tail -n 50 ~/.telegram-agent-bot/logs/telegram-agent-bot.err.log
 ```
 
 ## Configuration
@@ -176,16 +176,16 @@ tail -n 50 ~/.telegram-codex-bot/logs/telegram-codex-bot.err.log
 3. Open the bot settings mini app
 4. Enable **Threaded Mode**
 
-### 2. Create `~/.telegram-codex-bot/.env`
+### 2. Create `~/.telegram-agent-bot/.env`
 
 ```ini
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 ALLOWED_USERS=your_telegram_user_id
-TELEGRAM_CODEX_BOT_CODEX_COMMAND=codex
-TELEGRAM_CODEX_BOT_AUTO_UPDATE=true
-TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK=true
-TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=true
-TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES=true
+TELEGRAM_AGENT_BOT_CODEX_COMMAND=codex
+TELEGRAM_AGENT_BOT_AUTO_UPDATE=true
+TELEGRAM_AGENT_BOT_CODEX_UPDATE_CHECK=true
+TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE=true
+TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES=true
 ```
 
 For most setups, this is the only file you need to edit.
@@ -205,7 +205,7 @@ The bridge supports two local modes:
 - `orchestrator`: consume the monthly issue from a control-plane repository and
   relay it to a single runner window
 
-The real config belongs at `~/.telegram-codex-bot/github_codex_bridge.json` and should not
+The real config belongs at `~/.telegram-agent-bot/github_codex_bridge.json` and should not
 be committed.
 
 ### Required variables
@@ -219,36 +219,36 @@ be committed.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `TELEGRAM_CODEX_BOT_DIR` | `~/.telegram-codex-bot` | Config and state directory |
-| `TELEGRAM_CODEX_BOT_AGENT_TYPE` | `codex` | AI CLI to manage: `codex` (Codex CLI) or `claude` (Claude Code) |
-| `TELEGRAM_CODEX_BOT_BACKEND` | `local` | Agent backend ID. `local` keeps the single-machine tmux behavior |
-| `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS` | _(none)_ | Comma-separated Python modules that register optional agent backends |
-| `TELEGRAM_CODEX_BOT_TMUX_SESSION_NAME` | `telegram-codex-bot` | tmux session name used by the bot |
-| `TELEGRAM_CODEX_BOT_CODEX_COMMAND` | `codex` | Command used when creating a new window |
-| `TELEGRAM_CODEX_BOT_CODEX_BYPASS_HOOK_TRUST` | `false` | Append Codex `--dangerously-bypass-hook-trust` for unattended hosts after you have vetted the configured hooks |
-| `TELEGRAM_CODEX_BOT_CODEX_PROJECTS_PATH` | `~/.codex` | Transcript root to scan |
-| `TELEGRAM_CODEX_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
-| `TELEGRAM_CODEX_BOT_PROJECT_ROOTS` | _(none)_ | Optional named roots shown before directory browsing |
-| `TELEGRAM_CODEX_BOT_MONITOR_POLL_INTERVAL` | `2.0` | Poll interval in seconds |
-| `TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION` | `false` | Automatically rotate to the next saved account after `usage_limit_exceeded` |
-| `TELEGRAM_CODEX_BOT_STATUS_POLL_INTERVAL` | `1.0` | Terminal status polling interval in seconds; active `Working (...)` status edits keep Telegram refreshed |
-| `TELEGRAM_CODEX_BOT_STATUS_REPOST_INTERVAL` | `60.0` | Re-send long-running `Thinking` status after this many seconds so Telegram topics visibly stay active; set `0` to only edit in place |
-| `TELEGRAM_CODEX_BOT_AGENT_INPUT_QUEUE_MAX_SIZE` | `20` | Maximum bot-held inputs per session while Codex shows an interactive prompt; regular busy-state inputs are sent to Codex directly |
-| `TELEGRAM_CODEX_BOT_AGENT_INPUT_QUEUE_MAX_WAIT_SECONDS` | `1800` | Drop bot-held inputs after this many seconds if Codex never becomes ready; set `0` to disable expiry |
-| `TELEGRAM_CODEX_BOT_AUTO_UPDATE` | `false` | On startup, check and fast-forward git source installs |
-| `TELEGRAM_CODEX_BOT_UPDATE_INTERVAL_SECONDS` | `86400` | Minimum seconds between automatic update checks |
-| `TELEGRAM_CODEX_BOT_UPDATE_REQUIRE_IDLE` | `true` | Apply automatic updates only when no Codex pane is active |
-| `TELEGRAM_CODEX_BOT_UPDATE_BUSY_RETRY_SECONDS` | `300` | Retry delay when automatic update is deferred by active work |
-| `TELEGRAM_CODEX_BOT_UPDATE_REMOTE` | git remote | Optional git remote override for updates |
-| `TELEGRAM_CODEX_BOT_UPDATE_BRANCH` | git branch | Optional git branch override for updates |
-| `TELEGRAM_CODEX_BOT_UPDATE_RUN_UV_SYNC` | `true` | Run `uv sync` after a successful git update |
-| `TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK` | `false` | Check npm for Codex CLI updates during the idle update loop |
-| `TELEGRAM_CODEX_BOT_CODEX_UPDATE_NPM` | `npm` | npm command used for Codex CLI checks/updates; can be `sudo -n npm` if explicitly allowed |
-| `TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE` | `false` | Run `npm install -g @openai/codex@latest` when an idle Codex update exists |
-| `TELEGRAM_CODEX_BOT_SHOW_COMMENTARY_MESSAGES` | `false` | Forward Codex commentary/thinking messages |
-| `TELEGRAM_CODEX_BOT_SHOW_TOOL_CALLS` | `true` | Forward tool call notifications and outputs |
-| `TELEGRAM_CODEX_BOT_SHOW_BASH_TOOL_CALLS` | `true` | Forward Bash command and output notifications; set `false` to hide Bash only |
-| `TELEGRAM_CODEX_BOT_SHOW_HIDDEN_DIRS` | `false` | Show dot-directories in the directory picker |
+| `TELEGRAM_AGENT_BOT_DIR` | `~/.telegram-agent-bot` | Config and state directory |
+| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex` | AI CLI to manage: `codex` (Codex CLI) or `claude` (Claude Code) |
+| `TELEGRAM_AGENT_BOT_BACKEND` | `local` | Agent backend ID. `local` keeps the single-machine tmux behavior |
+| `TELEGRAM_AGENT_BOT_BACKEND_PLUGINS` | _(none)_ | Comma-separated Python modules that register optional agent backends |
+| `TELEGRAM_AGENT_BOT_TMUX_SESSION_NAME` | `telegram-agent-bot` | tmux session name used by the bot |
+| `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | `codex` | Command used when creating a new window |
+| `TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST` | `false` | Append Codex `--dangerously-bypass-hook-trust` for unattended hosts after you have vetted the configured hooks |
+| `TELEGRAM_AGENT_BOT_CODEX_PROJECTS_PATH` | `~/.codex` | Transcript root to scan |
+| `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
+| `TELEGRAM_AGENT_BOT_PROJECT_ROOTS` | _(none)_ | Optional named roots shown before directory browsing |
+| `TELEGRAM_AGENT_BOT_MONITOR_POLL_INTERVAL` | `2.0` | Poll interval in seconds |
+| `TELEGRAM_AGENT_BOT_ENABLE_ACCOUNT_ROTATION` | `false` | Automatically rotate to the next saved account after `usage_limit_exceeded` |
+| `TELEGRAM_AGENT_BOT_STATUS_POLL_INTERVAL` | `1.0` | Terminal status polling interval in seconds; active `Working (...)` status edits keep Telegram refreshed |
+| `TELEGRAM_AGENT_BOT_STATUS_REPOST_INTERVAL` | `60.0` | Re-send long-running `Thinking` status after this many seconds so Telegram topics visibly stay active; set `0` to only edit in place |
+| `TELEGRAM_AGENT_BOT_AGENT_INPUT_QUEUE_MAX_SIZE` | `20` | Maximum bot-held inputs per session while Codex shows an interactive prompt; regular busy-state inputs are sent to Codex directly |
+| `TELEGRAM_AGENT_BOT_AGENT_INPUT_QUEUE_MAX_WAIT_SECONDS` | `1800` | Drop bot-held inputs after this many seconds if Codex never becomes ready; set `0` to disable expiry |
+| `TELEGRAM_AGENT_BOT_AUTO_UPDATE` | `false` | On startup, check and fast-forward git source installs |
+| `TELEGRAM_AGENT_BOT_UPDATE_INTERVAL_SECONDS` | `86400` | Minimum seconds between automatic update checks |
+| `TELEGRAM_AGENT_BOT_UPDATE_REQUIRE_IDLE` | `true` | Apply automatic updates only when no Codex pane is active |
+| `TELEGRAM_AGENT_BOT_UPDATE_BUSY_RETRY_SECONDS` | `300` | Retry delay when automatic update is deferred by active work |
+| `TELEGRAM_AGENT_BOT_UPDATE_REMOTE` | git remote | Optional git remote override for updates |
+| `TELEGRAM_AGENT_BOT_UPDATE_BRANCH` | git branch | Optional git branch override for updates |
+| `TELEGRAM_AGENT_BOT_UPDATE_RUN_UV_SYNC` | `true` | Run `uv sync` after a successful git update |
+| `TELEGRAM_AGENT_BOT_CODEX_UPDATE_CHECK` | `false` | Check npm for Codex CLI updates during the idle update loop |
+| `TELEGRAM_AGENT_BOT_CODEX_UPDATE_NPM` | `npm` | npm command used for Codex CLI checks/updates; can be `sudo -n npm` if explicitly allowed |
+| `TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE` | `false` | Run `npm install -g @openai/codex@latest` when an idle Codex update exists |
+| `TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES` | `false` | Forward Codex commentary/thinking messages |
+| `TELEGRAM_AGENT_BOT_SHOW_TOOL_CALLS` | `true` | Forward tool call notifications and outputs |
+| `TELEGRAM_AGENT_BOT_SHOW_BASH_TOOL_CALLS` | `true` | Forward Bash command and output notifications; set `false` to hide Bash only |
+| `TELEGRAM_AGENT_BOT_SHOW_HIDDEN_DIRS` | `false` | Show dot-directories in the directory picker |
 | `OPENAI_API_KEY` | _(none)_ | Used for voice transcription |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Custom OpenAI-compatible endpoint |
 
@@ -260,14 +260,14 @@ To choose a computer, VPS, or mounted workspace before browsing directories,
 configure named roots:
 
 ```ini
-TELEGRAM_CODEX_BOT_PROJECT_ROOTS=Local=~/Projects,Remote=/mnt/remote-projects
+TELEGRAM_AGENT_BOT_PROJECT_ROOTS=Local=~/Projects,Remote=/mnt/remote-projects
 ```
 
-When `TELEGRAM_CODEX_BOT_PROJECT_ROOTS` is set, a new Telegram topic first shows a
+When `TELEGRAM_AGENT_BOT_PROJECT_ROOTS` is set, a new Telegram topic first shows a
 computer/VPS picker, even if only one root is configured. After selecting one,
 the normal directory browser starts at that root and does not navigate above it.
 Other computers or VPSes must be reachable as local paths from the machine
-running telegram-codex-bot, for example through SSHFS or NFS mounts.
+running telegram-agent-bot, for example through SSHFS or NFS mounts.
 
 ### Agent Backends
 
@@ -279,29 +279,29 @@ Single-machine mode is the supported default. The backend interface exists so
 center-bot / remote agent-node deployments can be added without changing the
 normal local workflow.
 
-If you are not running remote agent nodes, leave `TELEGRAM_CODEX_BOT_BACKEND`
+If you are not running remote agent nodes, leave `TELEGRAM_AGENT_BOT_BACKEND`
 unset or set it to `local`. You do not need to install `plugins/socket_backend`,
-run `telegram-codex-agent-node`, or configure socket node addresses.
+run `telegram-agent-node`, or configure socket node addresses.
 
 Optional backends can be loaded as plugins. A plugin can expose a backend
-through the `telegram_codex_bot.backends` entry point group, or through a module
-listed in `TELEGRAM_CODEX_BOT_BACKEND_PLUGINS`.
+through the `telegram_agent_bot.backends` entry point group, or through a module
+listed in `TELEGRAM_AGENT_BOT_BACKEND_PLUGINS`.
 
 The repository includes an optional socket backend package under
 `plugins/socket_backend/`. It provides a `socket-cluster` center backend and a
-`telegram-codex-agent-node` CLI for remote machines. Design notes and operating
+`telegram-agent-node` CLI for remote machines. Design notes and operating
 details live in `docs/agent_backend_plugins.md`.
 
 ```ini
-TELEGRAM_CODEX_BOT_BACKEND=local
+TELEGRAM_AGENT_BOT_BACKEND=local
 ```
 
 Plugin module example:
 
 ```ini
-TELEGRAM_CODEX_BOT_BACKEND=socket-cluster
-TELEGRAM_CODEX_BOT_BACKEND_PLUGINS=telegram_codex_bot_socket_backend
-TELEGRAM_CODEX_BOT_SOCKET_NODES=macbook=127.0.0.1:8765
+TELEGRAM_AGENT_BOT_BACKEND=socket-cluster
+TELEGRAM_AGENT_BOT_BACKEND_PLUGINS=telegram_agent_bot_socket_backend
+TELEGRAM_AGENT_BOT_SOCKET_NODES=macbook=127.0.0.1:8765
 ```
 
 The core bot loads the configured backend through a backend interface covering
@@ -325,39 +325,39 @@ README intentionally avoids embedding old project media.
 For source-checkout installs created by the bootstrap scripts, set:
 
 ```ini
-TELEGRAM_CODEX_BOT_AUTO_UPDATE=true
+TELEGRAM_AGENT_BOT_AUTO_UPDATE=true
 ```
 
 While the bot keeps running, it checks the configured git remote at most once
-per `TELEGRAM_CODEX_BOT_UPDATE_INTERVAL_SECONDS`. With the default
-`TELEGRAM_CODEX_BOT_UPDATE_REQUIRE_IDLE=true`, it first verifies that Telegram delivery queues
+per `TELEGRAM_AGENT_BOT_UPDATE_INTERVAL_SECONDS`. With the default
+`TELEGRAM_AGENT_BOT_UPDATE_REQUIRE_IDLE=true`, it first verifies that Telegram delivery queues
 are empty and that no Codex tmux pane is working or waiting for interactive
-input. If work is active, it waits `TELEGRAM_CODEX_BOT_UPDATE_BUSY_RETRY_SECONDS` and tries
+input. If work is active, it waits `TELEGRAM_AGENT_BOT_UPDATE_BUSY_RETRY_SECONDS` and tries
 again.
 
-If the checkout is clean and the update can be applied as a fast-forward, telegram-codex-bot
+If the checkout is clean and the update can be applied as a fast-forward, telegram-agent-bot
 runs `git pull --ff-only`, runs `uv sync`, and restarts itself so the new code is
 loaded. Existing Codex tmux windows and conversations are not killed.
 
 Manual commands:
 
 ```bash
-telegram-codex-bot update --check
-telegram-codex-bot update
-telegram-codex-bot codex-update --check
-telegram-codex-bot codex-update
-telegram-codex-bot --version
+telegram-agent-bot update --check
+telegram-agent-bot update
+telegram-agent-bot codex-update --check
+telegram-agent-bot codex-update
+telegram-agent-bot --version
 ```
 
 Self-update intentionally skips non-git installs such as `pipx install` or
 `uv tool install`, and it also skips a checkout with local modifications.
 
-Codex CLI checks are separate from telegram-codex-bot self-update. The example `.env` enables
-`TELEGRAM_CODEX_BOT_CODEX_UPDATE_CHECK=true` and
-`TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=true`, so an idle bot applies newer Codex CLI npm
+Codex CLI checks are separate from telegram-agent-bot self-update. The example `.env` enables
+`TELEGRAM_AGENT_BOT_CODEX_UPDATE_CHECK=true` and
+`TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE=true`, so an idle bot applies newer Codex CLI npm
 packages without waiting for Telegram confirmation. If the global npm package is root-owned,
-set `TELEGRAM_CODEX_BOT_CODEX_UPDATE_NPM=sudo -n npm` only after granting that
-non-interactive sudo path deliberately. Set `TELEGRAM_CODEX_BOT_CODEX_AUTO_UPDATE=false` if you
+set `TELEGRAM_AGENT_BOT_CODEX_UPDATE_NPM=sudo -n npm` only after granting that
+non-interactive sudo path deliberately. Set `TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE=false` if you
 prefer an upgrade prompt with a confirmation button.
 
 ### Non-interactive servers / VPS
@@ -365,7 +365,7 @@ prefer an upgrade prompt with a confirmation button.
 If Codex runs on a server where you do not want approval prompts in the terminal UI:
 
 ```ini
-TELEGRAM_CODEX_BOT_CODEX_COMMAND=IS_SANDBOX=1 codex --dangerously-bypass-approvals-and-sandbox
+TELEGRAM_AGENT_BOT_CODEX_COMMAND=IS_SANDBOX=1 codex --dangerously-bypass-approvals-and-sandbox
 ```
 
 ## Multi-account login, switching, and failover
@@ -382,9 +382,9 @@ Telegram commands:
 /codexaccount clear  # go back to the service user's default CODEX_HOME
 ```
 
-Named accounts are stored under `~/.telegram-codex-bot/accounts/`. Switching affects newly created topics only; existing topics keep their current tmux window. Use `/unbind` when you want the current topic to start a fresh session with the selected account.
+Named accounts are stored under `~/.telegram-agent-bot/accounts/`. Switching affects newly created topics only; existing topics keep their current tmux window. Use `/unbind` when you want the current topic to start a fresh session with the selected account.
 
-If you want usage-limit failover, set `TELEGRAM_CODEX_BOT_ENABLE_ACCOUNT_ROTATION=true`. When a live session emits `usage_limit_exceeded`, TelegramAgentBot marks that window as exhausted; on the next message it can create a fresh tmux window on the next saved account and forward the message there. This is **session rotation**, not seamless continuation of the exact same Codex session.
+If you want usage-limit failover, set `TELEGRAM_AGENT_BOT_ENABLE_ACCOUNT_ROTATION=true`. When a live session emits `usage_limit_exceeded`, TelegramAgentBot marks that window as exhausted; on the next message it can create a fresh tmux window on the next saved account and forward the message there. This is **session rotation**, not seamless continuation of the exact same Codex session.
 
 ## Session tracking
 
@@ -393,7 +393,7 @@ By default, this project scans Codex transcript files under `~/.codex`.
 If you want automatic session-to-window tracking via the CLI hook, install it with:
 
 ```bash
-telegram-codex-bot hook --install
+telegram-agent-bot hook --install
 ```
 
 This command enables Codex hooks in the active Codex home:
@@ -421,7 +421,7 @@ hooks = true
         "hooks": [
           {
             "type": "command",
-            "command": "telegram-codex-bot hook",
+            "command": "telegram-agent-bot hook",
             "statusMessage": "Registering Codex session",
             "timeout": 5
           }
@@ -432,14 +432,14 @@ hooks = true
 }
 ```
 
-The hook writes window/session mappings into `$TELEGRAM_CODEX_BOT_DIR/session_map.json`, which helps the bot keep tmux windows associated with Codex sessions even after clears or restarts.
+The hook writes window/session mappings into `$TELEGRAM_AGENT_BOT_DIR/session_map.json`, which helps the bot keep tmux windows associated with Codex sessions even after clears or restarts.
 
 On unattended hosts, newer Codex versions may require hook trust before the
 first session starts. After you have verified that `$CODEX_HOME/hooks.json`
 contains only hooks you expect, set:
 
 ```bash
-TELEGRAM_CODEX_BOT_CODEX_BYPASS_HOOK_TRUST=true
+TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST=true
 ```
 
 This makes new bot-managed Codex windows start with
@@ -450,10 +450,10 @@ otherwise block the first Telegram message from reaching the transcript.
 
 ```bash
 # installed tool
-telegram-codex-bot
+telegram-agent-bot
 
 # from source
-uv run telegram-codex-bot
+uv run telegram-agent-bot
 ```
 
 ### Bot commands
@@ -531,28 +531,28 @@ are not hidden model reasoning dumps.
 ## Running Codex manually in tmux
 
 ```bash
-tmux attach -t telegram-codex-bot
+tmux attach -t telegram-agent-bot
 tmux new-window -n myproject -c ~/Code/myproject
 codex
 ```
 
-The window must live inside the configured `telegram-codex-bot` tmux session.
+The window must live inside the configured `telegram-agent-bot` tmux session.
 
 ## Data storage
 
 | Path | Description |
 | --- | --- |
-| `$TELEGRAM_CODEX_BOT_DIR/state.json` | Thread bindings/targets, window state, display names, offsets, and hidden closed-session IDs |
-| `$TELEGRAM_CODEX_BOT_DIR/session_map.json` | Hook-generated tmux window ↔ session mappings |
-| `$TELEGRAM_CODEX_BOT_DIR/monitor_state.json` | Monitor byte offsets per session |
-| `$TELEGRAM_CODEX_BOT_DIR/pending_topic_deletions.json` | Deferred topic deletions after local cleanup |
+| `$TELEGRAM_AGENT_BOT_DIR/state.json` | Thread bindings/targets, window state, display names, offsets, and hidden closed-session IDs |
+| `$TELEGRAM_AGENT_BOT_DIR/session_map.json` | Hook-generated tmux window ↔ session mappings |
+| `$TELEGRAM_AGENT_BOT_DIR/monitor_state.json` | Monitor byte offsets per session |
+| `$TELEGRAM_AGENT_BOT_DIR/pending_topic_deletions.json` | Deferred topic deletions after local cleanup |
 | `~/.codex/` | Codex transcript root (read-only) |
-| `~/.telegram-codex-bot/accounts/` | Optional saved account homes and snapshots |
+| `~/.telegram-agent-bot/accounts/` | Optional saved account homes and snapshots |
 
 ## File structure
 
 ```text
-src/telegram_codex_bot/
+src/telegram_agent_bot/
 ├── __init__.py
 ├── account_manager.py
 ├── agent_io.py
@@ -579,4 +579,4 @@ src/telegram_codex_bot/
 
 This project is distributed under the MIT License.
 Copyright and license notices are kept in `LICENSE`.
-Bundled fonts keep their own license files under `src/telegram_codex_bot/fonts/`.
+Bundled fonts keep their own license files under `src/telegram_agent_bot/fonts/`.

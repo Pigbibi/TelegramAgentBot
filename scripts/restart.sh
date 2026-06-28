@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TMUX_SESSION="telegram-codex-bot"
+TMUX_SESSION="telegram-agent-bot"
 TMUX_WINDOW="__main__"
 TARGET="${TMUX_SESSION}:${TMUX_WINDOW}"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,16 +18,16 @@ if ! tmux list-windows -t "$TMUX_SESSION" -F '#{window_name}' 2>/dev/null | grep
     exit 1
 fi
 
-# Get the pane PID and check if uv run telegram-codex-bot is running
+# Get the pane PID and check if uv run telegram-agent-bot is running
 PANE_PID=$(tmux list-panes -t "$TARGET" -F '#{pane_pid}')
 
 is_bot_running() {
-    pstree -a "$PANE_PID" 2>/dev/null | grep -q 'uv.*run telegram-codex-bot\|telegram-codex-bot.*\.venv/bin/telegram-codex-bot'
+    pstree -a "$PANE_PID" 2>/dev/null | grep -q 'uv.*run telegram-agent-bot\|telegram-agent-bot.*\.venv/bin/telegram-agent-bot'
 }
 
 # Stop existing process if running
 if is_bot_running; then
-    echo "Found running telegram-codex-bot process, sending Ctrl-C..."
+    echo "Found running telegram-agent-bot process, sending Ctrl-C..."
     tmux send-keys -t "$TARGET" C-c
 
     # Wait for process to exit
@@ -55,25 +55,25 @@ if is_bot_running; then
 
     echo "Process stopped."
 else
-    echo "No telegram-codex-bot process running in $TARGET"
+    echo "No telegram-agent-bot process running in $TARGET"
 fi
 
 # Brief pause to let the shell settle
 sleep 1
 
-# Start telegram-codex-bot
-echo "Starting telegram-codex-bot in $TARGET..."
-tmux send-keys -t "$TARGET" "cd ${PROJECT_DIR} && uv run telegram-codex-bot" Enter
+# Start telegram-agent-bot
+echo "Starting telegram-agent-bot in $TARGET..."
+tmux send-keys -t "$TARGET" "cd ${PROJECT_DIR} && uv run telegram-agent-bot" Enter
 
 # Verify startup and show logs
 sleep 3
 if is_bot_running; then
-    echo "telegram-codex-bot restarted successfully. Recent logs:"
+    echo "telegram-agent-bot restarted successfully. Recent logs:"
     echo "----------------------------------------"
     tmux capture-pane -t "$TARGET" -p | tail -20
     echo "----------------------------------------"
 else
-    echo "Warning: telegram-codex-bot may not have started. Pane output:"
+    echo "Warning: telegram-agent-bot may not have started. Pane output:"
     echo "----------------------------------------"
     tmux capture-pane -t "$TARGET" -p | tail -30
     echo "----------------------------------------"

@@ -2,7 +2,7 @@
 
 import pytest
 
-from telegram_codex_bot.config import Config
+from telegram_agent_bot.config import Config
 
 pytestmark = pytest.mark.integration
 
@@ -17,7 +17,7 @@ class TestConfigIntegration:
         workdir = tmp_path / "workdir"
         workdir.mkdir()
         monkeypatch.chdir(workdir)
-        monkeypatch.setenv("TELEGRAM_CODEX_BOT_DIR", str(tmp_path))
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_DIR", str(tmp_path))
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
         monkeypatch.delenv("ALLOWED_USERS", raising=False)
         cfg = Config()
@@ -26,14 +26,14 @@ class TestConfigIntegration:
 
     def test_creates_config_dir_if_missing(self, tmp_path, monkeypatch):
         new_dir = tmp_path / "nonexistent"
-        monkeypatch.setenv("TELEGRAM_CODEX_BOT_DIR", str(new_dir))
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_DIR", str(new_dir))
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-create-dir")
         monkeypatch.setenv("ALLOWED_USERS", "1")
         Config()
         assert new_dir.is_dir()
 
     def test_multiple_comma_separated_allowed_users(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("TELEGRAM_CODEX_BOT_DIR", str(tmp_path))
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_DIR", str(tmp_path))
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-multi")
         monkeypatch.setenv("ALLOWED_USERS", "123,456,789")
         cfg = Config()
