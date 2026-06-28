@@ -1,9 +1,12 @@
-"""Hook subcommand for Codex session tracking.
+"""Hook subcommand for agent session tracking.
 
 Called by a SessionStart hook to maintain a window↔session mapping in
-<TELEGRAM_CODEX_BOT_DIR>/session_map.json. Also provides `--install` to enable Codex hooks
-in the active Codex home (`$CODEX_HOME` when set, else `~/.codex`) and
-register the SessionStart hook there.
+<TELEGRAM_CODEX_BOT_DIR>/session_map.json. Also provides `--install` to enable hooks
+in the active agent home (`$CODEX_HOME`/`$CLAUDE_HOME` when set, else
+`~/.codex` or `~/.claude` depending on agent_type) and register the
+SessionStart hook there.
+
+Supports both Codex CLI and Claude Code CLI.
 
 This module must NOT import config.py (which requires TELEGRAM_BOT_TOKEN),
 since hooks run inside tmux panes where bot env vars are not set.
@@ -52,9 +55,25 @@ def _is_non_interactive_session(payload: dict[str, Any]) -> bool:
 
 
 def _codex_dir() -> Path:
-    """Resolve the active Codex home for hook install/runtime."""
+    """Resolve the active agent home for hook install/runtime.
+
+    Priority: CODEX_HOME env > CLAUDE_HOME env > ~/.claude (if agent_type
+    can be detected) > ~/.codex.
+
+    This module avoids importing config.py (which requires TELEGRAM_BOT_TOKEN),
+    so agent_type detection here is best-effort from the environment only.
+    """
     codex_home = os.getenv("CODEX_HOME")
-    return Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
+    if codex_home:
+        return Path(codex_home).expanduser()
+    claude_home = os.getenv("CLAUDE_HOME")
+    if claude_home:
+        return Path(claude_home).expanduser()
+    # Best-effort agent_type detection without importing config
+    agent_type = os.getenv("TELEGRAM_CODEX_BOT_AGENT_TYPE", "").strip().lower()
+    if agent_type == "claude":
+        return Path.home() / ".claude"
+    return Path.home() / ".codex"
 
 
 def _codex_config_file() -> Path:

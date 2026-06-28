@@ -26,7 +26,16 @@ require_cmd() {
 
 require_cmd uv
 require_cmd tmux
-require_cmd codex
+# Detect agent type from existing .env, default to codex
+_agent_type=""
+if [[ -f "$ENV_PATH" ]]; then
+  _agent_type="$(grep -E '^TELEGRAM_CODEX_BOT_AGENT_TYPE=' "$ENV_PATH" | tail -1 | sed 's/.*=//')"
+fi
+if [[ "$_agent_type" == "claude" ]]; then
+  require_cmd claude
+else
+  require_cmd codex
+fi
 require_cmd python3
 
 mkdir -p "$BIN_DIR" "$LOG_DIR" "$SYSTEMD_DIR"
