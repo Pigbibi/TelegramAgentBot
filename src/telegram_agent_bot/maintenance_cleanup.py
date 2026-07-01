@@ -483,7 +483,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--min-free-gb",
         type=float,
-        default=_env_float("TELEGRAM_AGENT_BOT_CLEANUP_MIN_FREE_GB", DEFAULT_MIN_FREE_GB),
+        default=_env_float(
+            "TELEGRAM_AGENT_BOT_CLEANUP_MIN_FREE_GB", DEFAULT_MIN_FREE_GB
+        ),
     )
     parser.add_argument(
         "--tmp-retention-days",

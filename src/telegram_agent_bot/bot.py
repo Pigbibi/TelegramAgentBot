@@ -186,6 +186,7 @@ from .screenshot import text_to_image
 from .session import CodexSession, is_shell_pane_command, session_manager
 from .session_monitor import NewMessage
 from .terminal_parser import (
+    extract_auth_error_message,
     extract_bash_output,
     extract_interactive_content,
     is_codex_input_ready,
@@ -223,6 +224,10 @@ MEDIA_DOWNLOAD_READ_TIMEOUT_SECONDS = 60.0
 MEDIA_DOWNLOAD_WRITE_TIMEOUT_SECONDS = 30.0
 MEDIA_DOWNLOAD_POOL_TIMEOUT_SECONDS = 10.0
 BACKGROUND_WAIT_TOOL_STATUS_TEXT = "💭 Thinking…\n◦ Working in background terminal…"
+CODEX_AUTH_RECOVERY_MESSAGE = (
+    "Codex login expired or was revoked. Use /codexlogin to sign in again, "
+    "then send your message again."
+)
 
 # Active backend and local session monitor reference.
 agent_backend: AgentBackend | None = None
@@ -1085,6 +1090,11 @@ def _login_display_name(account_name: str | None) -> str:
     return f"the service user's default {agent_label} account"
 
 
+def _codex_auth_recovery_message(_pane_error: str | None = None) -> str:
+    """Return the Telegram-facing recovery instruction for Codex auth failures."""
+    return CODEX_AUTH_RECOVERY_MESSAGE
+
+
 def _account_command_usage() -> str:
     agent_label = config.agent_type_display
     return (
@@ -1119,7 +1129,7 @@ def _format_account_status() -> str:
             lines.append(f"- `{name}`{suffix}")
     else:
         lines.append("Saved accounts: none")
-    lines.append(f"Use /codexlogin [name] to refresh login from Telegram.")
+    lines.append("Use /codexlogin [name] to refresh login from Telegram.")
     return "\n".join(lines)
 
 
@@ -1236,8 +1246,9 @@ async def _codex_login_worker(
                 bot,
                 chat_id,
                 f"✅ Codex login completed for account `{account_name}` and saved.\n"
-                "New topics will use this account. Existing topics keep their current "
-                "window; use /unbind if you want this topic to start fresh.",
+                "New topics will use this account. Existing topics will be "
+                "recreated automatically if their current pane is still blocked "
+                "by the old login.",
                 message_thread_id=thread_id,
             )
         else:
@@ -1245,7 +1256,8 @@ async def _codex_login_worker(
                 bot,
                 chat_id,
                 "✅ Codex login completed. Send your message again. Existing topics "
-                "keep their current window; use /unbind if the current pane still errors.",
+                "will be recreated automatically if their current pane is still "
+                "blocked by the old login.",
                 message_thread_id=thread_id,
             )
     except Exception as exc:
@@ -1597,7 +1609,10 @@ async def _send_or_queue_agent_input(
             result = False, "Window not found (may have been closed)", False
         else:
             pane_text = capture.text or ""
-            if is_interactive_ui(pane_text):
+            auth_error = extract_auth_error_message(pane_text)
+            if auth_error:
+                result = False, _codex_auth_recovery_message(auth_error), False
+            elif is_interactive_ui(pane_text):
                 ok, control_message = await _send_control_to_agent(
                     user_id,
                     thread_id,
@@ -1699,6 +1714,16 @@ async def _drain_agent_input_queue(
                 return
 
             pane_text = capture.text or ""
+            auth_error = extract_auth_error_message(pane_text)
+            if auth_error:
+                await _notify_queued_input_failure(
+                    bot,
+                    user_id,
+                    thread_id,
+                    _codex_auth_recovery_message(auth_error),
+                )
+                queue.clear()
+                return
             if not is_codex_input_ready(pane_text) or is_interactive_ui(pane_text):
                 await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
                 continue
@@ -2346,6 +2371,20 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         if handled:
             return
+        capture = await capture_agent_output(user.id, thread_id, wid)
+        pane_text = capture.text if capture and not capture.missing else None
+        if pane_text:
+            handled = await _handle_auth_error_bound_window(
+                update_message=update.message,
+                user_id=user.id,
+                thread_id=thread_id,
+                window_id=wid,
+                pane_text=pane_text,
+                text=text_to_send,
+                success_reply=PHOTO_CONFIRMATION_MESSAGE,
+            )
+            if handled:
+                return
 
     await _safe_send_typing_action(update.message.chat, source="photo_handler")
     if wid:
@@ -2495,6 +2534,20 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         if handled:
             return
+        capture = await capture_agent_output(user.id, thread_id, wid)
+        pane_text = capture.text if capture and not capture.missing else None
+        if pane_text:
+            handled = await _handle_auth_error_bound_window(
+                update_message=update.message,
+                user_id=user.id,
+                thread_id=thread_id,
+                window_id=wid,
+                pane_text=pane_text,
+                text=text_to_send,
+                success_reply=FILE_CONFIRMATION_MESSAGE,
+            )
+            if handled:
+                return
 
     await _safe_send_typing_action(update.message.chat, source="document_handler")
     if wid:
@@ -2554,7 +2607,10 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not update.message or not update.message.voice:
         return
 
-    if not config.transcription_openai_api_key and not config.transcription_google_api_key:
+    if (
+        not config.transcription_openai_api_key
+        and not config.transcription_google_api_key
+    ):
         await safe_reply(
             update.message,
             "⚠ Voice transcription requires an API key.\n"
@@ -2632,6 +2688,22 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             text=text,
         )
         return
+
+    if wid:
+        capture = await capture_agent_output(user.id, thread_id, wid)
+        pane_text = capture.text if capture and not capture.missing else None
+        if pane_text:
+            handled = await _handle_auth_error_bound_window(
+                update_message=update.message,
+                user_id=user.id,
+                thread_id=thread_id,
+                window_id=wid,
+                pane_text=pane_text,
+                text=text,
+                success_reply=f'🎤 "{text}"',
+            )
+            if handled:
+                return
 
     if wid:
         success, message, queued = await _send_or_queue_agent_input(
@@ -2918,6 +2990,9 @@ async def _send_to_window_when_codex_ready(
         if capture.missing:
             return False, "Window not found (may have been closed)"
         pane_text = capture.text
+        auth_error = extract_auth_error_message(pane_text or "")
+        if auth_error:
+            return False, _codex_auth_recovery_message(auth_error)
         interactive = extract_interactive_content(pane_text or "")
         if interactive is not None:
             if auto_confirm_startup_trust:
@@ -3270,6 +3345,55 @@ async def _handle_non_codex_bound_window(
     return True
 
 
+async def _handle_auth_error_bound_window(
+    *,
+    update_message: Any,
+    user_id: int,
+    thread_id: int,
+    window_id: str,
+    pane_text: str,
+    text: str,
+    success_reply: str | None = None,
+) -> bool:
+    """Recover a bound window whose Codex TUI is blocked by expired auth."""
+    auth_error = extract_auth_error_message(pane_text)
+    if not auth_error:
+        return False
+
+    display = session_manager.get_display_name(window_id)
+    state = session_manager.window_states.get(window_id)
+    if state and state.session_id and state.cwd:
+        logger.info(
+            "Recovering auth-blocked Codex window %s (user=%d, thread=%d)",
+            display,
+            user_id,
+            thread_id,
+        )
+        await safe_reply(
+            update_message,
+            f"♻️ Window `{display}` is blocked by an expired Codex login. "
+            "Recreating it with the current login and resuming the previous session...",
+        )
+        await tmux_manager.kill_window(window_id)
+        recovered, recovery_message = await _recover_missing_bound_window(
+            user_id=user_id,
+            thread_id=thread_id,
+            old_window_id=window_id,
+            text=text,
+        )
+        if not recovered:
+            await safe_reply(update_message, f"❌ {recovery_message}")
+        elif success_reply:
+            await safe_reply(update_message, success_reply)
+        return True
+
+    await safe_reply(
+        update_message,
+        f"⚠️ {_codex_auth_recovery_message(auth_error)}",
+    )
+    return True
+
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -3508,6 +3632,17 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # This catches UIs (permission prompts, etc.) that status polling might have missed.
     capture = await capture_agent_output(user.id, thread_id, wid)
     pane_text = capture.text if capture and not capture.missing else None
+    if pane_text:
+        handled = await _handle_auth_error_bound_window(
+            update_message=update.message,
+            user_id=user.id,
+            thread_id=thread_id,
+            window_id=wid,
+            pane_text=pane_text,
+            text=text,
+        )
+        if handled:
+            return
     input_was_ready = is_codex_input_ready(pane_text or "")
     if pane_text and is_interactive_ui(pane_text):
         # UI detected: show it to the user before the text is bot-side queued.

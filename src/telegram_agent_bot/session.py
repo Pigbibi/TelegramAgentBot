@@ -37,7 +37,11 @@ import aiofiles
 from .account_manager import ACCOUNT_HOME_DIR, list_account_homes
 from .backends.base import AgentTarget
 from .config import config
-from .terminal_parser import is_codex_input_ready, parse_status_update
+from .terminal_parser import (
+    extract_auth_error_message,
+    is_codex_input_ready,
+    parse_status_update,
+)
 from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json, is_subagent_transcript, read_cwd_from_jsonl
@@ -1900,6 +1904,12 @@ class SessionManager:
                 f"(current command: {pane_cmd}); please create or resume a session again",
             )
         pane_text = await tmux_manager.capture_pane(window.window_id)
+        if pane_text and extract_auth_error_message(pane_text):
+            return (
+                False,
+                "Codex login expired or was revoked. Use /codexlogin to sign "
+                "in again, then send your message again.",
+            )
         if reject_busy and pane_text and not is_codex_input_ready(pane_text):
             status = parse_status_update(pane_text)
             if status:

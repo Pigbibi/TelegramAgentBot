@@ -229,6 +229,38 @@ class TestSendToWindow:
         send_keys.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_rejects_auth_error_pane_before_sending(
+        self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        find_window = AsyncMock(
+            return_value=SimpleNamespace(
+                window_id="@1",
+                pane_current_command="node",
+            )
+        )
+        capture_pane = AsyncMock(
+            return_value=(
+                "› hi\n\n"
+                "■ Your access token could not be refreshed because you have since "
+                "logged out or signed in to another account. Please sign in again.\n\n"
+                "›\n\n"
+                "  gpt-5.5 xhigh · ~/Projects\n"
+            )
+        )
+        send_keys = AsyncMock()
+        monkeypatch.setattr(
+            session_module.tmux_manager, "find_window_by_id", find_window
+        )
+        monkeypatch.setattr(session_module.tmux_manager, "capture_pane", capture_pane)
+        monkeypatch.setattr(session_module.tmux_manager, "send_keys", send_keys)
+
+        ok, message = await mgr.send_to_window("@1", "hi again")
+
+        assert ok is False
+        assert "Use /codexlogin" in message
+        send_keys.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_can_queue_prompt_for_busy_codex_when_allowed(
         self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch
     ) -> None:

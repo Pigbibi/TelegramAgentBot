@@ -109,7 +109,8 @@ class Config:
         # Agent type: "codex" (default) or "claude". Controls which CLI is launched,
         # where transcripts are stored, and which update mechanism is used.
         self.agent_type = (
-            os.getenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "codex").strip().lower() or "codex"
+            os.getenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "codex").strip().lower()
+            or "codex"
         )
         if self.agent_type not in ("codex", "claude"):
             logger.warning(
@@ -117,7 +118,9 @@ class Config:
                 self.agent_type,
             )
             self.agent_type = "codex"
-        self.agent_type_display = "Codex" if self.agent_type == "codex" else "Claude Code"
+        self.agent_type_display = (
+            "Codex" if self.agent_type == "codex" else "Claude Code"
+        )
 
         # Tmux session name/socket and window naming
         self.tmux_socket_name = os.getenv("TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME") or None

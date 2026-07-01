@@ -463,6 +463,38 @@ async def test_send_to_window_when_ready_confirms_startup_directory_trust(
 
 
 @pytest.mark.asyncio
+async def test_send_to_window_when_ready_reports_auth_error(monkeypatch):
+    capture = SimpleNamespace(
+        text=(
+            "› hi\n\n"
+            "■ Your access token could not be refreshed because your refresh token "
+            "was revoked. Please log out and sign in again.\n\n"
+            "›\n\n"
+            "  gpt-5.5 · ~/repo"
+        ),
+        missing=False,
+    )
+    send_message = AsyncMock()
+
+    monkeypatch.setattr(
+        bot_module, "capture_agent_output", AsyncMock(return_value=capture)
+    )
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+
+    ok, message = await bot_module._send_to_window_when_codex_ready(
+        12345,
+        42,
+        "@1",
+        "queued prompt",
+        timeout=1.0,
+    )
+
+    assert ok is False
+    assert "Use /codexlogin" in message
+    send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_handle_non_codex_bound_window_recovers_resumable_shell(monkeypatch):
     update_message = MagicMock()
     session_manager = MagicMock()
@@ -485,6 +517,50 @@ async def test_handle_non_codex_bound_window_recovers_resumable_shell(monkeypatc
         thread_id=42,
         window_id="@1",
         pane_command="bash",
+        text="pending prompt",
+        success_reply="sent",
+    )
+
+    assert handled is True
+    kill_window.assert_awaited_once_with("@1")
+    recover.assert_awaited_once_with(
+        user_id=12345,
+        thread_id=42,
+        old_window_id="@1",
+        text="pending prompt",
+    )
+    safe_reply.assert_any_await(update_message, "sent")
+
+
+@pytest.mark.asyncio
+async def test_handle_auth_error_bound_window_recovers_resumable_session(monkeypatch):
+    update_message = MagicMock()
+    session_manager = MagicMock()
+    session_manager.get_display_name.return_value = "Repo"
+    session_manager.window_states = {
+        "@1": SimpleNamespace(session_id="sid-1", cwd="/tmp/repo")
+    }
+    kill_window = AsyncMock(return_value=True)
+    recover = AsyncMock(return_value=(True, "Recovered"))
+    safe_reply = AsyncMock()
+    pane_text = (
+        "› hi\n\n"
+        "■ Your access token could not be refreshed because you have since "
+        "logged out or signed in to another account. Please sign in again.\n\n"
+        "›\n"
+    )
+
+    monkeypatch.setattr(bot_module, "session_manager", session_manager)
+    monkeypatch.setattr(bot_module.tmux_manager, "kill_window", kill_window)
+    monkeypatch.setattr(bot_module, "_recover_missing_bound_window", recover)
+    monkeypatch.setattr(bot_module, "safe_reply", safe_reply)
+
+    handled = await bot_module._handle_auth_error_bound_window(
+        update_message=update_message,
+        user_id=12345,
+        thread_id=42,
+        window_id="@1",
+        pane_text=pane_text,
         text="pending prompt",
         success_reply="sent",
     )

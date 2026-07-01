@@ -245,9 +245,7 @@ def load_codex_update_settings() -> CodexUpdateSettings:
     )
     default_executable = "claude" if agent_type == "claude" else "codex"
 
-    codex_command = os.getenv(
-        "TELEGRAM_AGENT_BOT_CODEX_COMMAND", default_executable
-    )
+    codex_command = os.getenv("TELEGRAM_AGENT_BOT_CODEX_COMMAND", default_executable)
     codex_executable = _extract_executable(codex_command) or default_executable
     return CodexUpdateSettings(
         enabled=_parse_bool(
@@ -257,8 +255,7 @@ def load_codex_update_settings() -> CodexUpdateSettings:
             os.getenv("TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE"), default=False
         ),
         package=(
-            os.getenv("TELEGRAM_AGENT_BOT_CODEX_UPDATE_PACKAGE")
-            or default_package
+            os.getenv("TELEGRAM_AGENT_BOT_CODEX_UPDATE_PACKAGE") or default_package
         ),
         codex_executable=shutil.which(codex_executable) or codex_executable,
         npm_executable=os.getenv("TELEGRAM_AGENT_BOT_CODEX_UPDATE_NPM")
@@ -965,6 +962,7 @@ def _agent_update_display_name() -> str:
     """Return the display name for the configured agent's update command."""
     try:
         from .config import config
+
         return "Claude Code" if config.agent_type == "claude" else "Codex CLI"
     except Exception:
         return "agent CLI"
