@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from collections.abc import Awaitable, Callable
 
 import httpx
 
@@ -92,7 +93,7 @@ async def _transcribe_google(ogg_data: bytes) -> str:
 
 
 # Registered provider functions, tried in config.transcription_providers order
-_PROVIDERS: dict[str, callable] = {
+_PROVIDERS: dict[str, Callable[[bytes], Awaitable[str]]] = {
     "openai": _transcribe_openai,
     "google": _transcribe_google,
 }
@@ -144,13 +145,10 @@ async def transcribe_voice(ogg_data: bytes) -> str:
             )
         except Exception as exc:
             last_error = exc
-            logger.warning(
-                "Transcription provider %s error: %s", provider_id, exc
-            )
+            logger.warning("Transcription provider %s error: %s", provider_id, exc)
 
     raise TranscriptionError(
-        f"All transcription providers failed"
-        + (f": {last_error}" if last_error else "")
+        "All transcription providers failed" + (f": {last_error}" if last_error else "")
     ) from last_error
 
 

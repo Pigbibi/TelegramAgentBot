@@ -246,6 +246,13 @@ _PROGRESS_BULLETS = ("•", "◦")
 _PROMPT_PREFIXES = ("›", "❯")
 _MAX_PROGRESS_LINES = 8
 _MAX_PROGRESS_CHARS = 1000
+_AUTH_ERROR_MARKERS = (
+    "access token could not be refreshed",
+    "refresh token was revoked",
+    "please log out and sign in again",
+    "please sign in again",
+    "logged out or signed in to another account",
+)
 
 
 def parse_status_line(pane_text: str) -> str | None:
@@ -290,6 +297,53 @@ def parse_status_line(pane_text: str) -> str | None:
 def is_codex_input_ready(pane_text: str) -> bool:
     """Return True when the visible Codex TUI is ready for a new prompt."""
     return codex_input_text(pane_text) is not None
+
+
+def _is_prompt_line(stripped: str) -> bool:
+    return stripped in _PROMPT_PREFIXES or stripped.startswith(("› ", "❯ "))
+
+
+def _current_turn_lines(lines: list[str]) -> list[str]:
+    """Return the pane slice most likely to describe the current prompt result."""
+    stripped_lines = [line.strip() for line in lines]
+    prompt_indexes = [
+        index
+        for index, stripped in enumerate(stripped_lines)
+        if _is_prompt_line(stripped)
+    ]
+    if not prompt_indexes:
+        return lines[-20:]
+
+    last_prompt = prompt_indexes[-1]
+    last_prompt_text = stripped_lines[last_prompt]
+    if last_prompt_text in _PROMPT_PREFIXES and len(prompt_indexes) >= 2:
+        previous_prompt = prompt_indexes[-2]
+        return lines[previous_prompt + 1 : last_prompt]
+
+    return lines[last_prompt + 1 :]
+
+
+def extract_auth_error_message(pane_text: str) -> str | None:
+    """Return the current Codex auth error shown in the pane, if any.
+
+    Old auth errors can remain visible in tmux scrollback after a later prompt has
+    started.  Limit detection to the current prompt result so those stale lines do
+    not cause the bot to recreate an active window.
+    """
+    if not pane_text:
+        return None
+
+    visible_lines = strip_pane_chrome(pane_text.split("\n"))
+    segment = "\n".join(_current_turn_lines(visible_lines)).strip()
+    if not segment:
+        return None
+
+    normalized = " ".join(segment.lower().split())
+    if "access token could not be refreshed" not in normalized:
+        return None
+    if not any(marker in normalized for marker in _AUTH_ERROR_MARKERS):
+        return None
+    return segment
 
 
 def codex_input_text(pane_text: str) -> str | None:

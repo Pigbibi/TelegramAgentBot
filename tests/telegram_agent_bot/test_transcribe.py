@@ -56,7 +56,9 @@ class TestTranscribeOpenAI:
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ):
-            with pytest.raises(transcribe.TranscriptionError, match="empty transcription"):
+            with pytest.raises(
+                transcribe.TranscriptionError, match="empty transcription"
+            ):
                 await transcribe.transcribe_voice(b"fake-ogg-data")
 
     @pytest.mark.asyncio
@@ -65,7 +67,9 @@ class TestTranscribeOpenAI:
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ):
-            with pytest.raises(transcribe.TranscriptionError, match="empty transcription"):
+            with pytest.raises(
+                transcribe.TranscriptionError, match="empty transcription"
+            ):
                 await transcribe.transcribe_voice(b"fake-ogg-data")
 
     @pytest.mark.asyncio
@@ -74,7 +78,9 @@ class TestTranscribeOpenAI:
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ):
-            with pytest.raises(transcribe.TranscriptionError, match="empty transcription"):
+            with pytest.raises(
+                transcribe.TranscriptionError, match="empty transcription"
+            ):
                 await transcribe.transcribe_voice(b"fake-ogg-data")
 
     @pytest.mark.asyncio
@@ -117,7 +123,9 @@ class TestTranscribeMultiProvider:
     async def test_skips_provider_without_api_key(self, mock_config):
         """When openai has no api key and no other providers, raises error."""
         mock_config.transcription_openai_api_key = ""
-        with pytest.raises(transcribe.TranscriptionError, match="All transcription providers failed"):
+        with pytest.raises(
+            transcribe.TranscriptionError, match="All transcription providers failed"
+        ):
             await transcribe.transcribe_voice(b"fake-ogg-data")
 
     @pytest.mark.asyncio
@@ -153,7 +161,9 @@ class TestTranscribeMultiProvider:
     async def test_unknown_provider_skipped(self, mock_config):
         """Unknown provider IDs are logged and skipped."""
         mock_config.transcription_providers = ("nonexistent",)
-        with pytest.raises(transcribe.TranscriptionError, match="All transcription providers failed"):
+        with pytest.raises(
+            transcribe.TranscriptionError, match="All transcription providers failed"
+        ):
             await transcribe.transcribe_voice(b"fake-ogg-data")
 
 

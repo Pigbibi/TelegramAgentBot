@@ -164,7 +164,9 @@ class TestExistingWindowBinding:
         with (
             patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
             patch("telegram_agent_bot.bot._get_thread_id", return_value=42),
-            patch("telegram_agent_bot.bot.config.transcription_openai_api_key", "test-key"),
+            patch(
+                "telegram_agent_bot.bot.config.transcription_openai_api_key", "test-key"
+            ),
             patch("telegram_agent_bot.bot.session_manager") as mock_sm,
             patch("telegram_agent_bot.bot.tmux_manager") as mock_tmux,
             patch(

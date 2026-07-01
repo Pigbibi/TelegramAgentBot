@@ -55,10 +55,9 @@ def is_valid_account_name(name: str) -> bool:
 
 def _has_auth_file(account_dir: Path) -> bool:
     """Return True if the directory contains any known auth file."""
-    return (
-        (account_dir / "auth.json").is_file()
-        or (account_dir / "credentials.db").is_file()
-    )
+    return (account_dir / "auth.json").is_file() or (
+        account_dir / "credentials.db"
+    ).is_file()
 
 
 def list_account_names() -> list[str]:
@@ -215,8 +214,6 @@ def disable_codex_update_prompt(codex_home: Path | None = None) -> None:
 
 def _agent_auth_path(codex_home: Path) -> Path:
     """Return the auth file path for the configured agent type."""
-    from .config import config
-
     return codex_home / agent_auth_filename()
 
 
@@ -239,7 +236,11 @@ def save_account_snapshot(
         raise FileNotFoundError(f"Codex auth file not found: {source_auth}")
 
     # Try agent-specific auth filename first, fall back to auth.json
-    for candidate in (auth_path, codex_home / "auth.json", codex_home / "credentials.db"):
+    for candidate in (
+        auth_path,
+        codex_home / "auth.json",
+        codex_home / "credentials.db",
+    ):
         if candidate.is_file():
             _copy_if_different(candidate, snapshot_dir / candidate.name)
             break

@@ -4,6 +4,7 @@ import pytest
 
 from telegram_agent_bot.terminal_parser import (
     codex_input_text,
+    extract_auth_error_message,
     extract_bash_output,
     extract_interactive_content,
     is_codex_input_ready,
@@ -179,6 +180,34 @@ class TestParseStatusUpdate:
 
     def test_codex_input_not_ready_without_prompt(self):
         assert not is_codex_input_ready("output only\nno prompt")
+
+
+class TestAuthErrorDetection:
+    def test_detects_current_auth_error(self):
+        pane = (
+            "› hi\n\n"
+            "■ Your access token could not be refreshed because you have since "
+            "logged out or signed in to another account. Please sign in again.\n\n"
+            "›\n\n"
+            "  gpt-5.5 xhigh · ~/Projects\n"
+        )
+
+        message = extract_auth_error_message(pane)
+
+        assert message is not None
+        assert "access token could not be refreshed" in message
+
+    def test_ignores_stale_auth_error_before_latest_prompt(self):
+        pane = (
+            "› hi\n\n"
+            "■ Your access token could not be refreshed because your refresh token "
+            "was revoked. Please log out and sign in again.\n\n"
+            "› Explain this codebase\n\n"
+            "• Working (1m 43s • esc to interrupt)\n\n"
+            "  gpt-5.5 xhigh · ~/Projects\n"
+        )
+
+        assert extract_auth_error_message(pane) is None
 
 
 # ── extract_interactive_content ──────────────────────────────────────────
