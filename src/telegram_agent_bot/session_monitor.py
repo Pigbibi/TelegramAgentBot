@@ -180,6 +180,29 @@ class SessionMonitor:
         return files
 
     @staticmethod
+    def _is_usage_limit_payload(payload: dict[str, Any]) -> bool:
+        if payload.get("type") == "error":
+            return payload.get("codex_error_info") == "usage_limit_exceeded"
+
+        if payload.get("type") == "token_count":
+            rate_limits = payload.get("rate_limits")
+            if not isinstance(rate_limits, dict):
+                return False
+
+            credits = rate_limits.get("credits")
+            if isinstance(credits, dict):
+                if credits.get("has_credits") is False and str(
+                    credits.get("balance")
+                ).strip() in {"0", "0.0"}:
+                    return True
+
+            rate_limit_reached_type = rate_limits.get("rate_limit_reached_type")
+            if isinstance(rate_limit_reached_type, str) and rate_limit_reached_type:
+                return True
+
+        return False
+
+    @staticmethod
     def _extract_usage_limit_message(line: str) -> str | None:
         """Extract a human-readable message from a usage_limit_exceeded event."""
         try:
@@ -194,10 +217,7 @@ class SessionMonitor:
         if not isinstance(payload, dict):
             return None
 
-        if (
-            payload.get("type") != "error"
-            or payload.get("codex_error_info") != "usage_limit_exceeded"
-        ):
+        if not SessionMonitor._is_usage_limit_payload(payload):
             return None
 
         message = payload.get("message")

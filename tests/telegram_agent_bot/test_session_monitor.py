@@ -340,6 +340,53 @@ class TestReadNewLinesOffsetRecovery:
         assert messages[0].content_type == "usage_limit"
         assert "usage limit" in messages[0].text.lower()
 
+    async def test_token_count_zero_balance_exhausted_emits_usage_limit(self, monitor, tmp_path):
+        """A token_count event with zero credits should be surfaced as usage limit."""
+        jsonl_file = tmp_path / "session.jsonl"
+        event = {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": None,
+                "rate_limits": {
+                    "limit_id": "premium",
+                    "limit_name": None,
+                    "credits": {
+                        "has_credits": False,
+                        "unlimited": False,
+                        "balance": "0",
+                    },
+                    "primary": None,
+                    "secondary": None,
+                    "individual_limit": None,
+                    "plan_type": None,
+                    "rate_limit_reached_type": None,
+                },
+            },
+        }
+        jsonl_file.write_text(json.dumps(event) + "\n", encoding="utf-8")
+
+        monitor.scan_projects = AsyncMock(
+            return_value=[
+                SessionInfo(
+                    session_id="session-token",
+                    file_path=jsonl_file,
+                )
+            ]
+        )
+        tracked = TrackedSession(
+            session_id="session-token",
+            file_path=jsonl_file,
+            last_byte_offset=0,
+        )
+        monitor.state.update_session(tracked)
+
+        messages = await monitor.check_for_updates(set())
+
+        assert len(messages) == 1
+        assert messages[0].content_type == "usage_limit"
+        assert "usage limit" in messages[0].text.lower()
+
     @pytest.mark.asyncio
     async def test_generic_error_event_emits_assistant_message(self, monitor, tmp_path):
         """A non-usage Codex error event should be visible in Telegram output."""

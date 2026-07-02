@@ -557,6 +557,66 @@ class TestWindowState:
         assert mgr.mark_window_usage_limit_exceeded("@1", False) is True
         assert mgr.get_window_state("@1").usage_limit_exceeded is False
 
+    def test_file_has_usage_limit_detects_zero_balance_token_count(
+        self, tmp_path: Path
+    ) -> None:
+        file_path = tmp_path / "session.jsonl"
+        file_path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"type": "response_item", "payload": {"type": "message"}}),
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "token_count",
+                                "info": None,
+                                "rate_limits": {
+                                    "credits": {
+                                        "has_credits": False,
+                                        "unlimited": False,
+                                        "balance": "0",
+                                    },
+                                    "primary": None,
+                                    "secondary": None,
+                                    "individual_limit": None,
+                                    "plan_type": None,
+                                    "rate_limit_reached_type": None,
+                                },
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        assert SessionManager._file_has_usage_limit_exceeded(file_path) is True
+
+    def test_file_has_usage_limit_false_when_has_credits(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "session.jsonl"
+        file_path.write_text(
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "rate_limits": {
+                            "credits": {
+                                "has_credits": True,
+                                "unlimited": False,
+                                "balance": "12345",
+                            }
+                        }
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        assert SessionManager._file_has_usage_limit_exceeded(file_path) is False
+
     def test_register_session_to_window_unhides_session(
         self, mgr: SessionManager
     ) -> None:
