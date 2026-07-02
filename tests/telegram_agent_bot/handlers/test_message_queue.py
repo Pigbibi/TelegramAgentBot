@@ -426,6 +426,71 @@ async def test_failed_content_send_preserves_working_status_and_reports_failure(
 
 
 @pytest.mark.asyncio
+async def test_content_task_is_retried_after_rate_limit(monkeypatch):
+    """Transient Telegram flood errors should retry content and eventually succeed."""
+    await message_queue.shutdown_workers()
+    attempts = 0
+
+    async def fake_process_content(bot, user_id, task):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise message_queue.RetryAfter(0)
+        return True
+
+    monkeypatch.setattr(message_queue, "_process_content_task", fake_process_content)
+
+    result = await message_queue.enqueue_content_message(
+        bot=object(),
+        user_id=1,
+        window_id="@1",
+        parts=["hello"],
+        thread_id=404,
+        wait_until_sent=True,
+    )
+
+    assert result is True
+    assert attempts == 2
+    await message_queue.shutdown_workers()
+
+
+@pytest.mark.asyncio
+async def test_content_task_rate_limit_exhaustion_sends_warning(monkeypatch):
+    """If retry attempts are exhausted, bot should send a rate-limit warning."""
+    await message_queue.shutdown_workers()
+
+    async def fake_process_content(bot, user_id, task):
+        raise message_queue.RetryAfter(0)
+
+    send_with_fallback = AsyncMock()
+    bot = object()
+    monkeypatch.setattr(message_queue, "_process_content_task", fake_process_content)
+    monkeypatch.setattr(message_queue, "send_with_fallback", send_with_fallback)
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+
+    result = await message_queue.enqueue_content_message(
+        bot=bot,
+        user_id=1,
+        window_id="@1",
+        parts=["hello"],
+        thread_id=505,
+        wait_until_sent=True,
+    )
+
+    assert result is False
+    send_with_fallback.assert_awaited_once()
+    call_args = send_with_fallback.await_args.args
+    assert call_args[0] is bot
+    assert call_args[1] == -100123
+    assert call_args[2] == message_queue.RATE_LIMIT_WARNING_TEXT
+    await message_queue.shutdown_workers()
+
+
+@pytest.mark.asyncio
 async def test_working_status_clear_waits_for_minimum_visible_time(monkeypatch):
     """Very fast replies should leave Thinking visible briefly before deletion."""
     message_queue._status_msg_info.clear()

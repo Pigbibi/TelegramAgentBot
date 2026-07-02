@@ -76,6 +76,10 @@ def _is_unrecoverable_delete_error(exc: Exception) -> bool:
 
 # Merge limit for content messages
 MERGE_MAX_LENGTH = 3800  # Leave room for markdown conversion overhead
+CONTENT_TASK_RETRY_LIMIT = 5
+RATE_LIMIT_WARNING_TEXT = (
+    "⚠️ Telegram is temporarily rate limited, retrying output automatically."
+)
 
 
 @dataclass
@@ -98,6 +102,7 @@ class MessageTask:
         repr=False,
         compare=False,
     )
+    retry_count: int = 0
 
 
 # Per-target message queues and worker tasks.
@@ -353,6 +358,7 @@ async def _merge_content_tasks(
             role=first.role,
             thread_id=first.thread_id,
             delivery_future=first.delivery_future,
+            retry_count=first.retry_count,
         ),
         merge_count,
     )
@@ -436,6 +442,8 @@ async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> 
             task = await queue.get()
             _active_queue_keys.add(key)
             delivery_success: bool | None = None
+            should_requeue = False
+            current_task: MessageTask = task
             try:
                 # Flood control: drop status, wait for content
                 flood_end = _flood_until.get(user_id, 0)
@@ -461,6 +469,7 @@ async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> 
                     merged_task, merge_count = await _merge_content_tasks(
                         queue, task, lock
                     )
+                    current_task = merged_task
                     if merge_count > 0:
                         logger.debug(f"Merged {merge_count} tasks for user {user_id}")
                         # Mark merged tasks as done
@@ -479,6 +488,42 @@ async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> 
                     if isinstance(e.retry_after, int)
                     else int(e.retry_after.total_seconds())
                 )
+                if (
+                    current_task.task_type == "content"
+                    and current_task.retry_count < CONTENT_TASK_RETRY_LIMIT
+                ):
+                    current_task.retry_count += 1
+                    _flood_until[user_id] = time.monotonic() + retry_secs
+                    logger.warning(
+                        "Flood control for user %d: retrying content task (%d/%d) "
+                        "after %ds",
+                        user_id,
+                        current_task.retry_count,
+                        CONTENT_TASK_RETRY_LIMIT,
+                        retry_secs,
+                    )
+                    queue.put_nowait(current_task)
+                    should_requeue = True
+                    continue
+
+                if current_task.task_type == "content":
+                    logger.error(
+                        "Content delivery failed after %d retry attempts for user %d; "
+                        "not retrying further",
+                        CONTENT_TASK_RETRY_LIMIT,
+                        user_id,
+                    )
+                    with contextlib.suppress(Exception):
+                        chat_id = session_manager.resolve_chat_id(
+                            user_id, current_task.thread_id
+                        )
+                        await send_with_fallback(
+                            bot,
+                            chat_id,
+                            RATE_LIMIT_WARNING_TEXT,
+                            **_send_kwargs(current_task.thread_id),  # type: ignore[arg-type]
+                        )
+
                 if retry_secs > FLOOD_CONTROL_MAX_WAIT:
                     _flood_until[user_id] = time.monotonic() + retry_secs
                     logger.warning(
@@ -497,7 +542,11 @@ async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> 
             except Exception as e:
                 logger.error(f"Error processing message task for user {user_id}: {e}")
             finally:
-                if task.delivery_future is not None and not task.delivery_future.done():
+                if (
+                    task.delivery_future is not None
+                    and not task.delivery_future.done()
+                    and not should_requeue
+                ):
                     task.delivery_future.set_result(bool(delivery_success))
                 _active_queue_keys.discard(key)
                 queue.task_done()
