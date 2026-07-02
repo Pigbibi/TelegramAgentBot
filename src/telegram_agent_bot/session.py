@@ -1925,6 +1925,26 @@ class SessionManager:
         max_bytes: int = 128 * 1024,
     ) -> bool:
         """Check recent transcript tail for a usage_limit_exceeded event."""
+        def _is_usage_limit_payload(payload: dict[str, Any]) -> bool:
+            if payload.get("type") == "error":
+                return payload.get("codex_error_info") == "usage_limit_exceeded"
+
+            if payload.get("type") == "token_count":
+                rate_limits = payload.get("rate_limits")
+                if isinstance(rate_limits, dict):
+                    credits = rate_limits.get("credits")
+                    if isinstance(credits, dict):
+                        if credits.get("has_credits") is False and str(
+                            credits.get("balance")
+                        ).strip() in {"0", "0.0"}:
+                            return True
+
+                    rate_limit_reached_type = rate_limits.get("rate_limit_reached_type")
+                    if isinstance(rate_limit_reached_type, str) and rate_limit_reached_type:
+                        return True
+
+            return False
+
         try:
             size = file_path.stat().st_size
             with file_path.open("rb") as handle:
@@ -1935,17 +1955,11 @@ class SessionManager:
             return False
 
         for line in reversed(chunk.splitlines()):
-            if "usage_limit_exceeded" not in line:
-                continue
             try:
                 payload = json.loads(line).get("payload", {})
             except json.JSONDecodeError:
                 continue
-            if (
-                isinstance(payload, dict)
-                and payload.get("type") == "error"
-                and payload.get("codex_error_info") == "usage_limit_exceeded"
-            ):
+            if isinstance(payload, dict) and _is_usage_limit_payload(payload):
                 return True
         return False
 
