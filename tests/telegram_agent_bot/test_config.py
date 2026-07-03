@@ -15,6 +15,7 @@ def _base_env(monkeypatch, tmp_path):
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_PROJECT_ROOTS", raising=False)
     monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CODEX_COMMAND", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_ENABLE_ACCOUNT_ROTATION", raising=False)
@@ -35,6 +36,13 @@ class TestConfigValid:
         cfg = Config()
         assert cfg.codex_command == "codex"
         assert cfg.codex_bypass_hook_trust is False
+
+    def test_claude_agent_defaults(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "claude")
+        cfg = Config()
+        assert cfg.agent_type == "claude"
+        assert cfg.agent_type_display == "Claude Code"
+        assert cfg.codex_command == "claude"
 
     def test_codex_hook_trust_bypass_can_be_enabled(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST", "true")
@@ -168,6 +176,14 @@ class TestConfigCodexProjectsPath:
         monkeypatch.setenv("CODEX_HOME", custom_codex_home)
         cfg = Config()
         assert cfg.codex_projects_path == Path(custom_codex_home)
+
+    def test_claude_agent_uses_home_claude_projects_path(self, monkeypatch):
+        """~/.claude/projects is the transcript root in Claude mode."""
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "claude")
+        monkeypatch.setenv("HOME", "/custom/home")
+        monkeypatch.setenv("CODEX_HOME", "/wrong/codex/home")
+        cfg = Config()
+        assert cfg.codex_projects_path == Path("/custom/home/.claude/projects")
 
     def test_codex_projects_path_takes_priority(self, monkeypatch):
         """TELEGRAM_AGENT_BOT_CODEX_PROJECTS_PATH takes priority over CODEX_HOME."""

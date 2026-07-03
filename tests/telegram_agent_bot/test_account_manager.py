@@ -1,6 +1,7 @@
 """Tests for saved account snapshot helpers."""
 
 from telegram_agent_bot import account_manager
+from telegram_agent_bot.config import config
 
 
 def test_next_account_rotates_by_name(tmp_path, monkeypatch) -> None:
@@ -55,6 +56,41 @@ def test_ensure_account_home_copies_auth_and_config(tmp_path, monkeypatch) -> No
     assert (home / "hooks.json").read_text(encoding="utf-8") == '{"hooks":{}}\n'
     assert (home / "memories").is_dir()
     assert (home / "tmp").is_dir()
+
+
+def test_ensure_claude_account_home_copies_credentials_and_settings(
+    tmp_path, monkeypatch
+) -> None:
+    snapshot_dir = tmp_path / "snapshots"
+    account_home_dir = tmp_path / "homes"
+    claude_dir = tmp_path / "claude"
+    claude_dir.mkdir(parents=True)
+
+    account_dir = snapshot_dir / "main"
+    account_dir.mkdir(parents=True)
+    (account_dir / "credentials.db").write_bytes(b"sqlite-data")
+    (claude_dir / "settings.json").write_text(
+        '{"hooks":{"SessionStart":[]}}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(config, "agent_type", "claude")
+    monkeypatch.setattr(account_manager, "SNAPSHOT_DIR", snapshot_dir)
+    monkeypatch.setattr(account_manager, "ACCOUNT_HOME_DIR", account_home_dir)
+    monkeypatch.setattr(account_manager, "CLAUDE_DIR", claude_dir)
+
+    home = account_manager.ensure_account_home("main")
+
+    assert home == account_home_dir / "main"
+    assert (home / ".claude" / "credentials.db").read_bytes() == b"sqlite-data"
+    assert (home / ".claude" / "settings.json").read_text(encoding="utf-8") == (
+        '{"hooks":{"SessionStart":[]}}\n'
+    )
+    assert not (home / "auth.json").exists()
+    assert not (home / "credentials.db").exists()
+    assert not (home / "config.toml").exists()
+    assert not (home / "hooks.json").exists()
+    assert (home / ".claude" / "projects").is_dir()
 
 
 def test_ensure_account_home_writes_update_check_before_tables(
@@ -124,6 +160,21 @@ def test_save_account_snapshot_copies_auth(tmp_path, monkeypatch) -> None:
     assert (snapshot / "auth.json").read_text(encoding="utf-8") == (
         '{"auth_mode":"chatgpt"}'
     )
+
+
+def test_save_claude_account_snapshot_copies_credentials(tmp_path, monkeypatch) -> None:
+    snapshot_dir = tmp_path / "snapshots"
+    claude_dir = tmp_path / "claude"
+    claude_dir.mkdir(parents=True)
+    (claude_dir / "credentials.db").write_bytes(b"sqlite-data")
+
+    monkeypatch.setattr(config, "agent_type", "claude")
+    monkeypatch.setattr(account_manager, "SNAPSHOT_DIR", snapshot_dir)
+
+    snapshot = account_manager.save_account_snapshot("main", claude_dir)
+
+    assert snapshot == snapshot_dir / "main"
+    assert (snapshot / "credentials.db").read_bytes() == b"sqlite-data"
 
 
 def test_clear_current_account_removes_selection(tmp_path, monkeypatch) -> None:

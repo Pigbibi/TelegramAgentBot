@@ -370,6 +370,59 @@ class TestParseLine:
             "content": "3 passed",
         }
 
+    def test_claude_message_entries_are_parsed(self):
+        lines = [
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+                    "cwd": "/tmp/project",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "I'll inspect the project."},
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_1",
+                                "name": "Bash",
+                                "input": {"command": "pytest -q"},
+                            },
+                        ],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_1",
+                                "content": "3 passed",
+                            }
+                        ],
+                    },
+                }
+            ),
+        ]
+
+        parsed = [TranscriptParser.parse_line(line) for line in lines]
+        result, pending = TranscriptParser.parse_entries(
+            [entry for entry in parsed if entry]
+        )
+
+        assert not pending
+        assert [entry.content_type for entry in result] == [
+            "text",
+            "tool_use",
+            "tool_result",
+        ]
+        assert result[0].text == "I'll inspect the project."
+        assert result[1].text == "**Bash**(pytest -q)"
+        assert "3 passed" in result[2].text
+
 
 # ── extract_text_only ────────────────────────────────────────────────────
 

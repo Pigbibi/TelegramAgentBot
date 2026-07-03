@@ -90,8 +90,9 @@ def _agent_command_for_launch() -> str:
     if _HOOK_TRUST_BYPASS_FLAG in parts:
         return cmd
     first_exe = _first_command_executable(parts)
-    # Only inject hook-trust bypass for codex and claude commands
-    if first_exe not in ("codex", "claude"):
+    # This flag is Codex-specific; Claude Code uses a different permission flag
+    # with broader semantics, so do not inject it for Claude mode.
+    if config.agent_type == "claude" or first_exe != "codex":
         return cmd
     return f"{cmd} {_HOOK_TRUST_BYPASS_FLAG}"
 
@@ -857,12 +858,16 @@ class TmuxManager:
                         cmd = _agent_command_for_launch()
                         if resume_session_id:
                             resume_target = _resume_target_id(resume_session_id)
-                            cmd = f"{cmd} resume {shlex.quote(resume_target)}"
+                            resume_arg = shlex.quote(resume_target)
+                            if config.agent_type == "claude":
+                                cmd = f"{cmd} --resume {resume_arg}"
+                            else:
+                                cmd = f"{cmd} resume {resume_arg}"
                         if account_name:
                             if config.agent_type == "claude":
                                 account_home = ensure_account_home(account_name)
                                 cmd = (
-                                    f"export CLAUDE_HOME={shlex.quote(str(account_home))}; "
+                                    f"export HOME={shlex.quote(str(account_home))}; "
                                     f"{cmd}"
                                 )
                             else:

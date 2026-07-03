@@ -55,9 +55,11 @@ def is_valid_account_name(name: str) -> bool:
 
 def _has_auth_file(account_dir: Path) -> bool:
     """Return True if the directory contains any known auth file."""
-    return (account_dir / "auth.json").is_file() or (
-        account_dir / "credentials.db"
-    ).is_file()
+    return (
+        (account_dir / "auth.json").is_file()
+        or (account_dir / "credentials.db").is_file()
+        or (account_dir / ".claude" / "credentials.db").is_file()
+    )
 
 
 def list_account_names() -> list[str]:
@@ -203,17 +205,25 @@ def disable_codex_update_prompt(codex_home: Path | None = None) -> None:
     from .config import config
 
     if codex_home is None:
-        env_home = os.getenv("CODEX_HOME") or os.getenv("CLAUDE_HOME")
         if config.agent_type == "claude":
-            codex_home = Path(env_home).expanduser() if env_home else agent_auth_dir()
+            codex_home = agent_auth_dir()
         else:
             env_home = os.getenv("CODEX_HOME")
             codex_home = Path(env_home).expanduser() if env_home else CODEX_DIR
     _disable_agent_update_prompt(config.agent_type, codex_home / "config.toml")
 
 
+def _claude_dir_for_home(agent_home: Path) -> Path:
+    """Return the Claude config dir for either a real ~/.claude or fake HOME."""
+    return agent_home if agent_home.name == ".claude" else agent_home / ".claude"
+
+
 def _agent_auth_path(codex_home: Path) -> Path:
     """Return the auth file path for the configured agent type."""
+    from .config import config
+
+    if config.agent_type == "claude":
+        return _claude_dir_for_home(codex_home) / agent_auth_filename()
     return codex_home / agent_auth_filename()
 
 
@@ -260,14 +270,21 @@ def prepare_account_home(name: str) -> Path:
         raise ValueError(f"Invalid account name: {name}")
     account_home = ACCOUNT_HOME_DIR / name
     account_home.mkdir(parents=True, exist_ok=True)
-    _copy_if_different(CODEX_DIR / "config.toml", account_home / "config.toml")
-    _copy_if_different(CODEX_DIR / "hooks.json", account_home / "hooks.json")
-    disable_codex_update_prompt(account_home)
+    if config.agent_type == "claude":
+        claude_home = _claude_dir_for_home(account_home)
+        claude_home.mkdir(parents=True, exist_ok=True)
+        _copy_if_different(CLAUDE_DIR / "settings.json", claude_home / "settings.json")
+    else:
+        _copy_if_different(CODEX_DIR / "config.toml", account_home / "config.toml")
+        _copy_if_different(CODEX_DIR / "hooks.json", account_home / "hooks.json")
+        disable_codex_update_prompt(account_home)
     for child in ("memories", "tmp"):
         (account_home / child).mkdir(parents=True, exist_ok=True)
     if config.agent_type == "claude":
         # Claude Code uses its own directory layout under .claude
-        (account_home / "projects").mkdir(parents=True, exist_ok=True)
+        (_claude_dir_for_home(account_home) / "projects").mkdir(
+            parents=True, exist_ok=True
+        )
     return account_home
 
 
@@ -282,7 +299,7 @@ def ensure_account_home(name: str) -> Path:
     fallback_auth = snapshot_dir / "auth.json"
     account_home = prepare_account_home(name)
 
-    target_auth = account_home / auth_filename
+    target_auth = _agent_auth_path(account_home)
     if not target_auth.is_file():
         if snapshot_auth.is_file():
             _copy_if_different(snapshot_auth, target_auth)
