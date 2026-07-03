@@ -260,9 +260,12 @@ def prepare_account_home(name: str) -> Path:
         raise ValueError(f"Invalid account name: {name}")
     account_home = ACCOUNT_HOME_DIR / name
     account_home.mkdir(parents=True, exist_ok=True)
-    _copy_if_different(CODEX_DIR / "config.toml", account_home / "config.toml")
-    _copy_if_different(CODEX_DIR / "hooks.json", account_home / "hooks.json")
-    disable_codex_update_prompt(account_home)
+    if config.agent_type == "claude":
+        _copy_if_different(CLAUDE_DIR / "settings.json", account_home / "settings.json")
+    else:
+        _copy_if_different(CODEX_DIR / "config.toml", account_home / "config.toml")
+        _copy_if_different(CODEX_DIR / "hooks.json", account_home / "hooks.json")
+        disable_codex_update_prompt(account_home)
     for child in ("memories", "tmp"):
         (account_home / child).mkdir(parents=True, exist_ok=True)
     if config.agent_type == "claude":

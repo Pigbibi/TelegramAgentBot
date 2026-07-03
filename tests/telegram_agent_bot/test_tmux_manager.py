@@ -188,6 +188,59 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_create_window_uses_claude_resume_flag_and_home(self) -> None:
+        pane = _DummyPane()
+        window = _DummyWindow(pane)
+        session = _DummySession(window)
+        manager = tmux_manager_module.TmuxManager(
+            session_name="telegram-agent-bot-test"
+        )
+
+        with tempfile.TemporaryDirectory(
+            prefix="telegram-agent-bot-workdir-"
+        ) as tmpdir:
+            with (
+                patch.object(
+                    manager, "find_window_by_name", AsyncMock(return_value=None)
+                ),
+                patch.object(manager, "get_or_create_session", return_value=session),
+                patch.object(tmux_manager_module.config, "agent_type", "claude"),
+                patch.object(
+                    tmux_manager_module.config,
+                    "codex_command",
+                    "/usr/bin/claude --model deepseek-v4-pro",
+                ),
+                patch.object(
+                    tmux_manager_module.config,
+                    "codex_bypass_hook_trust",
+                    True,
+                ),
+                patch(
+                    "telegram_agent_bot.tmux_manager.ensure_account_home",
+                    return_value=Path("/tmp/telegram-agent-bot-claude-home"),
+                ),
+            ):
+                ok, _msg, _window_name, window_id = await manager.create_window(
+                    tmpdir,
+                    window_name="Projects",
+                    resume_session_id="550e8400-e29b-41d4-a716-446655440000",
+                    account_name="main",
+                )
+
+        self.assertTrue(ok)
+        self.assertEqual(window_id, "@9")
+        self.assertEqual(
+            pane.commands,
+            [
+                (
+                    "export CLAUDE_HOME=/tmp/telegram-agent-bot-claude-home; "
+                    "/usr/bin/claude --model deepseek-v4-pro --resume "
+                    "550e8400-e29b-41d4-a716-446655440000",
+                    True,
+                )
+            ],
+        )
+
 
 class _SendKeysDummyPane:
     def __init__(self) -> None:

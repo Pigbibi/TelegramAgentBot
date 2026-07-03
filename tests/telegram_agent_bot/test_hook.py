@@ -264,8 +264,18 @@ class TestInstallHook:
         codex_dir = tmp_path / ".codex"
         config_file = codex_dir / "config.toml"
         hooks_file = codex_dir / "hooks.json"
+        monkeypatch.delenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", raising=False)
         monkeypatch.setenv("CODEX_HOME", str(codex_dir))
         return config_file, hooks_file
+
+    def _patch_claude_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> Path:
+        claude_dir = tmp_path / ".claude"
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "claude")
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_dir))
+        return claude_dir / "settings.json"
 
     def test_install_writes_config_and_hooks_json(
         self,
@@ -300,6 +310,80 @@ class TestInstallHook:
             }
         }
         assert "Hook installed successfully" in capsys.readouterr().out
+
+    def test_install_writes_claude_settings_json(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        settings_file = self._patch_claude_path(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            hook_module.shutil, "which", lambda _: "/usr/local/bin/telegram-agent-bot"
+        )
+
+        assert _install_hook() == 0
+
+        settings_payload = json.loads(settings_file.read_text(encoding="utf-8"))
+        assert settings_payload == {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "matcher": "startup|resume",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "/usr/local/bin/telegram-agent-bot hook",
+                                "statusMessage": "Registering Codex session",
+                                "timeout": 5,
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        assert not (settings_file.parent / "config.toml").exists()
+        assert not (settings_file.parent / "hooks.json").exists()
+        assert "Claude settings" in capsys.readouterr().out
+
+    def test_install_preserves_existing_claude_settings(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        settings_file = self._patch_claude_path(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            hook_module.shutil, "which", lambda _: "/opt/bin/telegram-agent-bot"
+        )
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        settings_file.write_text(
+            json.dumps(
+                {
+                    "permissions": {"allow": ["Bash(pytest *)"]},
+                    "env": {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"},
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "matcher": "startup",
+                                "hooks": [{"type": "command", "command": "other hook"}],
+                            }
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert _install_hook() == 0
+
+        settings_payload = json.loads(settings_file.read_text(encoding="utf-8"))
+        assert settings_payload["permissions"] == {"allow": ["Bash(pytest *)"]}
+        assert settings_payload["env"] == {
+            "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"
+        }
+        assert len(settings_payload["hooks"]["SessionStart"]) == 2
+        assert (
+            settings_payload["hooks"]["SessionStart"][1]["hooks"][0]["command"]
+            == "/opt/bin/telegram-agent-bot hook"
+        )
 
     def test_install_is_idempotent_and_enables_feature(
         self,

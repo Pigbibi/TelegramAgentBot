@@ -164,8 +164,9 @@ class Config:
         self.monitor_state_file = self.config_dir / "monitor_state.json"
 
         # Transcript/session monitoring configuration.
-        # Priority: explicit TELEGRAM_CODEX_BOT path > CODEX_HOME >
-        #   CLAUDE_HOME (claude) > default per agent_type.
+        # Priority: explicit TELEGRAM_CODEX_BOT path >
+        #   CLAUDE_HOME/projects (claude) > CODEX_HOME (codex) >
+        #   default per agent_type.
         #
         # Default: ~/.codex for codex, ~/.claude/projects for claude.
         custom_projects_path = os.getenv("TELEGRAM_AGENT_BOT_CODEX_PROJECTS_PATH")
@@ -174,14 +175,14 @@ class Config:
 
         if custom_projects_path:
             self.codex_projects_path = Path(custom_projects_path)
-        elif codex_home:
-            self.codex_projects_path = Path(codex_home)
         elif self.agent_type == "claude":
             self.codex_projects_path = (
                 Path(claude_home).expanduser() / "projects"
                 if claude_home
                 else Path.home() / ".claude" / "projects"
             )
+        elif codex_home:
+            self.codex_projects_path = Path(codex_home)
         else:
             self.codex_projects_path = Path.home() / ".codex"
 

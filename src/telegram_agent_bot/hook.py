@@ -55,25 +55,35 @@ def _is_non_interactive_session(payload: dict[str, Any]) -> bool:
     return source == "exec" or originator == "codex_exec"
 
 
+def _agent_type() -> str:
+    """Return the configured agent type without importing config.py."""
+    agent_type = os.getenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "codex").strip().lower()
+    return agent_type if agent_type in {"codex", "claude"} else "codex"
+
+
+def _is_claude_agent() -> bool:
+    return _agent_type() == "claude"
+
+
 def _codex_dir() -> Path:
     """Resolve the active agent home for hook install/runtime.
 
-    Priority: CODEX_HOME env > CLAUDE_HOME env > ~/.claude (if agent_type
-    can be detected) > ~/.codex.
+    Priority follows the active agent type:
+    - claude: CLAUDE_HOME env > ~/.claude
+    - codex: CODEX_HOME env > ~/.codex
 
     This module avoids importing config.py (which requires TELEGRAM_BOT_TOKEN),
     so agent_type detection here is best-effort from the environment only.
     """
+    if _is_claude_agent():
+        claude_home = os.getenv("CLAUDE_HOME")
+        if claude_home:
+            return Path(claude_home).expanduser()
+        return Path.home() / ".claude"
+
     codex_home = os.getenv("CODEX_HOME")
     if codex_home:
         return Path(codex_home).expanduser()
-    claude_home = os.getenv("CLAUDE_HOME")
-    if claude_home:
-        return Path(claude_home).expanduser()
-    # Best-effort agent_type detection without importing config
-    agent_type = os.getenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "").strip().lower()
-    if agent_type == "claude":
-        return Path.home() / ".claude"
     return Path.home() / ".codex"
 
 
@@ -83,6 +93,10 @@ def _codex_config_file() -> Path:
 
 def _codex_hooks_file() -> Path:
     return _codex_dir() / "hooks.json"
+
+
+def _claude_settings_file() -> Path:
+    return _codex_dir() / "settings.json"
 
 
 def _find_cli_path() -> str:
@@ -222,6 +236,18 @@ def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
 
+def _install_success_suffix(config_file: Path | None) -> str:
+    if config_file is None:
+        return " (Claude settings)"
+    return f" (Codex hooks enabled in {config_file})"
+
+
+def _hook_install_files() -> tuple[Path | None, Path]:
+    if _is_claude_agent():
+        return None, _claude_settings_file()
+    return _codex_config_file(), _codex_hooks_file()
+
+
 def _enable_codex_hooks_feature(config_file: Path) -> None:
     """Ensure `[features] hooks = true` exists in config.toml."""
     if config_file.exists():
@@ -281,19 +307,19 @@ def _enable_codex_hooks_feature(config_file: Path) -> None:
 
 
 def _install_hook() -> int:
-    """Install the telegram-agent-bot hook into Codex's config.toml and hooks.json.
+    """Install the telegram-agent-bot SessionStart hook for the active agent.
 
     Returns 0 on success, 1 on error.
     """
-    config_file = _codex_config_file()
-    hooks_file = _codex_hooks_file()
+    config_file, hooks_file = _hook_install_files()
 
-    try:
-        _enable_codex_hooks_feature(config_file)
-    except (OSError, ValueError) as e:
-        logger.error("Error updating %s: %s", config_file, e)
-        print(f"Error updating {config_file}: {e}", file=sys.stderr)
-        return 1
+    if config_file is not None:
+        try:
+            _enable_codex_hooks_feature(config_file)
+        except (OSError, ValueError) as e:
+            logger.error("Error updating %s: %s", config_file, e)
+            print(f"Error updating {config_file}: {e}", file=sys.stderr)
+            return 1
 
     try:
         settings = _read_json_file(hooks_file)
@@ -347,7 +373,7 @@ def _install_hook() -> int:
             )
             print(
                 "Hook command repaired in "
-                f"{hooks_file} (Codex hooks enabled in {config_file})"
+                f"{hooks_file}{_install_success_suffix(config_file)}"
             )
             return 0
 
@@ -362,12 +388,12 @@ def _install_hook() -> int:
                 return 1
             print(
                 "Removed "
-                f"{removed_stale_hooks} stale bot hook command(s) from {hooks_file} "
-                f"(Codex hooks enabled in {config_file})"
+                f"{removed_stale_hooks} stale bot hook command(s) from {hooks_file}"
+                f"{_install_success_suffix(config_file)}"
             )
             return 0
         print(
-            f"Hook already installed in {hooks_file} (Codex hooks enabled in {config_file})"
+            f"Hook already installed in {hooks_file}{_install_success_suffix(config_file)}"
         )
         return 0
 
@@ -398,7 +424,7 @@ def _install_hook() -> int:
     logger.info("Hook installed successfully in %s", hooks_file)
     print(
         "Hook installed successfully in "
-        f"{hooks_file} (Codex hooks enabled in {config_file})"
+        f"{hooks_file}{_install_success_suffix(config_file)}"
     )
     return 0
 
@@ -414,12 +440,12 @@ def hook_main() -> None:
 
     parser = argparse.ArgumentParser(
         prog="telegram-agent-bot hook",
-        description="Codex session tracking hook",
+        description="Agent session tracking hook",
     )
     parser.add_argument(
         "--install",
         action="store_true",
-        help="Enable Codex hooks and install the SessionStart hook in the active Codex home",
+        help="Install the SessionStart hook in the active agent home",
     )
     # Parse only known args to avoid conflicts with stdin JSON
     args, _ = parser.parse_known_args(sys.argv[2:])
