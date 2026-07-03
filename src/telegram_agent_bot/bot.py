@@ -5423,6 +5423,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
     application.add_handler(CommandHandler("interrupt", interrupt_command))
+    application.add_handler(CommandHandler("kill", topic_closed_handler))
     application.add_handler(CommandHandler("unbind", unbind_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("codexlogin", codex_login_command))

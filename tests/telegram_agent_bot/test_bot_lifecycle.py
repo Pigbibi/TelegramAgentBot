@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock
 
 import pytest
+from telegram.ext import CommandHandler
 
 from telegram_agent_bot import bot as bot_module
 
@@ -79,3 +80,22 @@ def test_create_bot_registers_post_stop_before_shutdown():
 
     assert application.post_stop is bot_module.post_stop
     assert application.post_shutdown is bot_module.post_shutdown
+
+
+def test_create_bot_registers_kill_command_before_forwarder():
+    application = bot_module.create_bot()
+
+    group_handlers = application.handlers[0]
+    kill_index = next(
+        index
+        for index, handler in enumerate(group_handlers)
+        if isinstance(handler, CommandHandler) and "kill" in handler.commands
+    )
+    forward_index = next(
+        index
+        for index, handler in enumerate(group_handlers)
+        if handler.callback is bot_module.forward_command_handler
+    )
+
+    assert group_handlers[kill_index].callback is bot_module.topic_closed_handler
+    assert kill_index < forward_index
