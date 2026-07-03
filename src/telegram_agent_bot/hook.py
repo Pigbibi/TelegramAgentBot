@@ -45,6 +45,7 @@ _HOOK_TIMEOUT_SECONDS = 5
 
 # The hook command suffix for detection
 _HOOK_COMMAND_SUFFIX = "telegram-agent-bot hook"
+_MANAGED_HOOK_EXECUTABLES = frozenset({"telegram-agent-bot", "telegram-codex-bot"})
 
 
 def _is_non_interactive_session(payload: dict[str, Any]) -> bool:
@@ -120,6 +121,17 @@ def _is_telegram_agent_bot_hook_command(command: str) -> bool:
     return Path(parts[-2]).name == "telegram-agent-bot"
 
 
+def _is_managed_bot_hook_command(command: str) -> bool:
+    """Return True for current or legacy bot hook commands managed by this package."""
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return False
+    if len(parts) < 2 or parts[-1] != "hook":
+        return False
+    return Path(parts[-2]).name in _MANAGED_HOOK_EXECUTABLES
+
+
 def _find_installed_hook(settings: dict) -> dict[str, Any] | None:
     """Find the first installed telegram-agent-bot hook command, if any."""
     hooks = settings.get("hooks", {})
@@ -153,6 +165,45 @@ def _hook_command_has_missing_absolute_executable(command: str) -> bool:
         return False
     executable = Path(parts[-2]).expanduser()
     return executable.is_absolute() and not executable.exists()
+
+
+def _remove_stale_managed_hook_commands(settings: dict[str, Any]) -> int:
+    """Remove missing current/legacy bot hook commands from SessionStart hooks."""
+    session_start = settings.get("hooks", {}).get("SessionStart", [])
+    if not isinstance(session_start, list):
+        return 0
+
+    removed = 0
+    kept_entries: list[Any] = []
+    for entry in session_start:
+        if not isinstance(entry, dict):
+            kept_entries.append(entry)
+            continue
+        hooks = entry.get("hooks", [])
+        if not isinstance(hooks, list):
+            kept_entries.append(entry)
+            continue
+        kept_hooks = []
+        removed_from_entry = 0
+        for hook in hooks:
+            command = hook.get("command") if isinstance(hook, dict) else None
+            if (
+                isinstance(command, str)
+                and _is_managed_bot_hook_command(command)
+                and Path(shlex.split(command)[-2]).name != "telegram-agent-bot"
+                and _hook_command_has_missing_absolute_executable(command)
+            ):
+                removed += 1
+                removed_from_entry += 1
+                continue
+            kept_hooks.append(hook)
+        entry["hooks"] = kept_hooks
+        if kept_hooks or not removed_from_entry:
+            kept_entries.append(entry)
+
+    session_start[:] = kept_entries
+
+    return removed
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
@@ -265,6 +316,8 @@ def _install_hook() -> int:
         print(message, file=sys.stderr)
         return 1
 
+    removed_stale_hooks = _remove_stale_managed_hook_commands(settings)
+
     # Find the full path to telegram-agent-bot
     cli_path = _find_cli_path()
     hook_command = f"{cli_path} hook"
@@ -299,6 +352,20 @@ def _install_hook() -> int:
             return 0
 
         logger.info("Hook already installed in %s", hooks_file)
+        if removed_stale_hooks:
+            try:
+                hooks_file.parent.mkdir(parents=True, exist_ok=True)
+                _write_json_file(hooks_file, settings)
+            except OSError as e:
+                logger.error("Error writing %s: %s", hooks_file, e)
+                print(f"Error writing {hooks_file}: {e}", file=sys.stderr)
+                return 1
+            print(
+                "Removed "
+                f"{removed_stale_hooks} stale bot hook command(s) from {hooks_file} "
+                f"(Codex hooks enabled in {config_file})"
+            )
+            return 0
         print(
             f"Hook already installed in {hooks_file} (Codex hooks enabled in {config_file})"
         )

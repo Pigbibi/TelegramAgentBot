@@ -197,6 +197,23 @@ class TestAuthErrorDetection:
         assert message is not None
         assert "access token could not be refreshed" in message
 
+    def test_detects_codex_login_prompt(self):
+        pane = (
+            "Welcome to Codex, OpenAI's command-line coding agent\n\n"
+            "Sign in with ChatGPT to use Codex as part of your paid plan\n"
+            "or connect an API key for usage-based billing\n\n"
+            "> 1. Sign in with ChatGPT\n"
+            "  2. Sign in with Device Code\n"
+            "  3. Provide your own API key\n\n"
+            "Press enter to continue\n\n"
+            "Login timed out\n"
+        )
+
+        message = extract_auth_error_message(pane)
+
+        assert message is not None
+        assert "Sign in with ChatGPT" in message
+
     def test_ignores_stale_auth_error_before_latest_prompt(self):
         pane = (
             "› hi\n\n"

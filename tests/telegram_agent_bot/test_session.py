@@ -564,7 +564,9 @@ class TestWindowState:
         file_path.write_text(
             "\n".join(
                 [
-                    json.dumps({"type": "response_item", "payload": {"type": "message"}}),
+                    json.dumps(
+                        {"type": "response_item", "payload": {"type": "message"}}
+                    ),
                     json.dumps(
                         {
                             "type": "event_msg",
@@ -607,7 +609,7 @@ class TestWindowState:
                                 "unlimited": False,
                                 "balance": "12345",
                             }
-                        }
+                        },
                     },
                 }
             )

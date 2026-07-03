@@ -1925,6 +1925,7 @@ class SessionManager:
         max_bytes: int = 128 * 1024,
     ) -> bool:
         """Check recent transcript tail for a usage_limit_exceeded event."""
+
         def _is_usage_limit_payload(payload: dict[str, Any]) -> bool:
             if payload.get("type") == "error":
                 return payload.get("codex_error_info") == "usage_limit_exceeded"
@@ -1940,7 +1941,10 @@ class SessionManager:
                             return True
 
                     rate_limit_reached_type = rate_limits.get("rate_limit_reached_type")
-                    if isinstance(rate_limit_reached_type, str) and rate_limit_reached_type:
+                    if (
+                        isinstance(rate_limit_reached_type, str)
+                        and rate_limit_reached_type
+                    ):
                         return True
 
             return False
