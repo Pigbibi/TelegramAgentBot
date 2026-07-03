@@ -252,6 +252,10 @@ _AUTH_ERROR_MARKERS = (
     "please log out and sign in again",
     "please sign in again",
     "logged out or signed in to another account",
+    "sign in with chatgpt",
+    "sign in with device code",
+    "provide your own api key",
+    "login timed out",
 )
 
 
@@ -339,8 +343,6 @@ def extract_auth_error_message(pane_text: str) -> str | None:
         return None
 
     normalized = " ".join(segment.lower().split())
-    if "access token could not be refreshed" not in normalized:
-        return None
     if not any(marker in normalized for marker in _AUTH_ERROR_MARKERS):
         return None
     return segment

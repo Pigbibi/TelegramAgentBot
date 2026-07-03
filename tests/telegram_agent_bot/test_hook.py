@@ -384,6 +384,61 @@ class TestInstallHook:
         assert installed_hooks[0]["command"] == "/opt/bin/telegram-agent-bot hook"
         assert "Hook command repaired" in capsys.readouterr().out
 
+    def test_install_removes_missing_legacy_bot_hook(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _, hooks_file = self._patch_codex_paths(monkeypatch, tmp_path)
+        current_cli = tmp_path / "bin" / "telegram-agent-bot"
+        current_cli.parent.mkdir(parents=True)
+        current_cli.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(hook_module.shutil, "which", lambda _: str(current_cli))
+        stale_cli = tmp_path / "deleted" / ".venv" / "bin" / "telegram-codex-bot"
+        hooks_file.parent.mkdir(parents=True, exist_ok=True)
+        hooks_file.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "matcher": "startup|resume",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": f"{stale_cli} hook",
+                                        "statusMessage": "Registering Codex session",
+                                        "timeout": 5,
+                                    }
+                                ],
+                            },
+                            {
+                                "matcher": "startup|resume",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": f"{current_cli} hook",
+                                        "statusMessage": "Registering Codex session",
+                                        "timeout": 5,
+                                    }
+                                ],
+                            },
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert _install_hook() == 0
+
+        hooks_payload = json.loads(hooks_file.read_text(encoding="utf-8"))
+        session_start = hooks_payload["hooks"]["SessionStart"]
+        assert len(session_start) == 1
+        assert session_start[0]["hooks"][0]["command"] == f"{current_cli} hook"
+        assert "Removed 1 stale bot hook command" in capsys.readouterr().out
+
     def test_install_preserves_existing_hooks(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
