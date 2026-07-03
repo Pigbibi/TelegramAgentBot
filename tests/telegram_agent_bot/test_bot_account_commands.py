@@ -37,6 +37,36 @@ def test_extract_device_login_details_strips_ansi() -> None:
     )
 
 
+def test_agent_login_args_use_codex_device_auth() -> None:
+    from telegram_agent_bot import bot as bot_module
+
+    with (
+        patch.object(bot_module.config, "agent_type", "codex"),
+        patch.object(bot_module.config, "codex_command", "codex"),
+        patch("telegram_agent_bot.bot.shutil.which", return_value="/usr/bin/codex"),
+    ):
+        assert bot_module._agent_login_args() == [
+            "/usr/bin/codex",
+            "login",
+            "--device-auth",
+        ]
+
+
+def test_agent_login_args_use_claude_auth_login() -> None:
+    from telegram_agent_bot import bot as bot_module
+
+    with (
+        patch.object(bot_module.config, "agent_type", "claude"),
+        patch.object(bot_module.config, "codex_command", "claude"),
+        patch("telegram_agent_bot.bot.shutil.which", return_value="/usr/bin/claude"),
+    ):
+        assert bot_module._agent_login_args() == [
+            "/usr/bin/claude",
+            "auth",
+            "login",
+        ]
+
+
 @pytest.mark.asyncio
 async def test_codex_account_list_reports_status() -> None:
     update = _make_update()

@@ -28,6 +28,7 @@ concurrency:
 
 jobs:
   gate:
+    name: Codex Review Gate / gate
     if: >
       github.event_name == 'pull_request_review'
       && github.event.review.user.login == 'chatgpt-codex-connector[bot]'

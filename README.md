@@ -5,26 +5,26 @@
 > TelegramAgentBot controls live Codex CLI / Claude Code sessions over Telegram.
 > The CLI/package name is `telegram-agent-bot`.
 
-Control Codex sessions remotely through Telegram while keeping tmux as the source of truth. This lets you monitor, answer, interrupt, resume, and clean up real terminal sessions from your phone without switching to a separate SDK session.
+Control Codex CLI or Claude Code sessions remotely through Telegram while keeping tmux as the source of truth. This lets you monitor, answer, interrupt, resume, and clean up real terminal sessions from your phone without switching to a separate SDK session.
 
 ## What it does
 
 TelegramAgentBot is a Telegram controller for live Codex CLI / Claude Code sessions (`TELEGRAM_AGENT_BOT_AGENT_TYPE`):
 
-- `codex` is the default command for new tmux windows
-- transcript parsing and monitoring target modern Codex JSONL output under `~/.codex`
-- Telegram delivery and topic isolation are hardened for long-running Codex sessions
+- `codex` is the default command for new tmux windows; set `TELEGRAM_AGENT_BOT_AGENT_TYPE=claude` to run Claude Code
+- transcript parsing and monitoring target `~/.codex` for Codex, or `~/.claude/projects` for Claude Code
+- Telegram delivery and topic isolation are hardened for long-running agent sessions
 - tmux stays the source of truth, so you can return to the same terminal session on desktop
 - the default backend is local tmux, with an optional plugin interface for center-bot / remote agent-node deployments
 - GitHub bridge support can inject structured tasks from issues into Codex tmux sessions
 
 ## Features
 
-- **Topic-based sessions** — each Telegram topic maps 1:1 to a tmux window and Codex session
+- **Topic-based sessions** — each Telegram topic maps 1:1 to a tmux window and agent session
 - **Real-time notifications** — assistant replies, thinking, tool calls, tool results, and local command output can be forwarded to Telegram
 - **Interactive UI support** — navigate AskUserQuestion, ExitPlanMode, and permission prompts from inline keyboards
 - **Voice message transcription** — voice messages are transcribed (OpenAI, Google Gemini, or multi-provider failover) and forwarded as text
-- **Resume existing sessions** — choose an existing Codex session in a directory and continue from there
+- **Resume existing sessions** — choose an existing session in a directory and continue from there
 - **Closed-session hiding** — sessions closed through topic deletion or cleanup are hidden from the resume picker by default, without deleting their transcripts
 - **Topic cleanup** — stale topics, stale tmux windows, and dead bindings are cleaned up more safely
 - **Usage/auth recovery** — usage-limit and login failures are reported in Telegram; optional account failover can be enabled when you have saved backup accounts
@@ -35,7 +35,7 @@ TelegramAgentBot is a Telegram controller for live Codex CLI / Claude Code sessi
 ## Prerequisites
 
 - **tmux** installed and available in PATH
-- **Codex CLI** installed and working locally
+- **Codex CLI** or **Claude Code** installed and working locally
 - A **Telegram bot** with threaded/forum mode enabled
 
 ## Installation
@@ -73,7 +73,8 @@ The script does the following:
 
 - run `uv sync`
 - create `~/.telegram-agent-bot/.env` from `.env.example` if missing
-- install `telegram-agent-bot hook --install` into the active Codex home
+- install `telegram-agent-bot hook --install` for the current environment
+  (Codex by default)
 - generate a reusable `~/.telegram-agent-bot/bin/telegram-agent-bot-launch`
 - generate a LaunchAgent plist for macOS
 
@@ -82,19 +83,29 @@ Required local setup after the script runs:
 1. `TELEGRAM_BOT_TOKEN`
 2. `ALLOWED_USERS`
 3. optional `AI_TRANSCRIPTION_OPENAI_API_KEY` if you want voice transcription
-4. run `codex login`
+4. run `codex login` for Codex CLI, or configure Claude Code auth/settings for Claude mode
+
+If you switch `.env` to Claude mode after bootstrap, rerun:
+
+```bash
+uv run telegram-agent-bot hook --install
+```
+
+The install command reads `~/.telegram-agent-bot/.env`, so it will write the
+hook to `~/.claude/settings.json` when
+`TELEGRAM_AGENT_BOT_AGENT_TYPE=claude`.
 
 This project does not use a separate `GPT_SUBSCRIPTION=` env var.
-It reuses the local Codex login state:
+In Codex mode, it reuses the local Codex login state:
 
 ```bash
 codex login
 ```
 
-If you use multiple Codex accounts or need to refresh login while away from the server, use Telegram commands:
+If you use multiple accounts or need to refresh login while away from the server, use Telegram commands:
 
 ```text
-/codexlogin          # refresh the service user's default Codex login
+/codexlogin          # refresh the service user's default agent login
 /codexlogin backup   # login and save a named backup account
 /codexaccount list
 /codexaccount use backup
@@ -128,7 +139,7 @@ chmod +x scripts/bootstrap-linux.sh
 ./scripts/bootstrap-linux.sh
 ```
 
-Keep the bot checkout outside the project roots that Codex sessions can browse
+Keep the bot checkout outside the project roots that agent sessions can browse
 or clean, such as `~/Projects`. The Linux bootstrap refuses an unsafe checkout
 inside `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` or
 `TELEGRAM_AGENT_BOT_PROJECT_ROOTS`, because the systemd launcher points back to
@@ -138,20 +149,24 @@ The Linux helper:
 
 - runs `uv sync`
 - creates `~/.telegram-agent-bot/.env` from `.env.example` if needed
-- installs `telegram-agent-bot hook --install`
+- installs `telegram-agent-bot hook --install` for the current environment
+  (Codex by default)
 - writes `~/.telegram-agent-bot/bin/telegram-agent-bot-launch`
 - writes a user service at `~/.config/systemd/user/io.github.telegramagentbot.service`
 
 After that:
 
 1. edit `~/.telegram-agent-bot/.env`
-2. run `codex login`
+2. run `codex login` for Codex CLI, or configure Claude Code auth/settings for Claude mode
 3. start the service if it was not auto-started:
 
 ```bash
 systemctl --user daemon-reload
 systemctl --user enable --now io.github.telegramagentbot.service
 ```
+
+If you switch `.env` to Claude mode after bootstrap, rerun
+`uv run telegram-agent-bot hook --install` before starting the service.
 
 On a VPS, if you want the service to keep running after reboot without an
 interactive login session:
@@ -186,6 +201,10 @@ TELEGRAM_AGENT_BOT_AUTO_UPDATE=true
 TELEGRAM_AGENT_BOT_CODEX_UPDATE_CHECK=true
 TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE=true
 TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES=true
+# Optional Claude Code mode:
+# TELEGRAM_AGENT_BOT_AGENT_TYPE=claude
+# Change TELEGRAM_AGENT_BOT_CODEX_COMMAND above to claude, or remove it to use
+# the Claude default.
 ```
 
 For most setups, this is the only file you need to edit.
@@ -224,9 +243,9 @@ be committed.
 | `TELEGRAM_AGENT_BOT_BACKEND` | `local` | Agent backend ID. `local` keeps the single-machine tmux behavior |
 | `TELEGRAM_AGENT_BOT_BACKEND_PLUGINS` | _(none)_ | Comma-separated Python modules that register optional agent backends |
 | `TELEGRAM_AGENT_BOT_TMUX_SESSION_NAME` | `telegram-agent-bot` | tmux session name used by the bot |
-| `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | `codex` | Command used when creating a new window |
+| `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | `codex` for Codex, `claude` for Claude Code | Command used when creating a new window |
 | `TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST` | `false` | Append Codex `--dangerously-bypass-hook-trust` for unattended hosts after you have vetted the configured hooks |
-| `TELEGRAM_AGENT_BOT_CODEX_PROJECTS_PATH` | `~/.codex` | Transcript root to scan |
+| `TELEGRAM_AGENT_BOT_CODEX_PROJECTS_PATH` | `~/.codex` for Codex, `~/.claude/projects` for Claude Code | Transcript root to scan |
 | `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
 | `TELEGRAM_AGENT_BOT_PROJECT_ROOTS` | _(none)_ | Optional named roots shown before directory browsing |
 | `TELEGRAM_AGENT_BOT_MONITOR_POLL_INTERVAL` | `2.0` | Poll interval in seconds |
@@ -258,6 +277,28 @@ be committed.
 
 Telegram formatting uses MarkdownV2 with plain-text fallback when needed.
 
+### Claude Code mode
+
+Set `TELEGRAM_AGENT_BOT_AGENT_TYPE=claude` to manage Claude Code instead of
+Codex CLI. In this mode:
+
+- new windows run `claude` by default unless `TELEGRAM_AGENT_BOT_CODEX_COMMAND`
+  overrides it; if your `.env` contains `TELEGRAM_AGENT_BOT_CODEX_COMMAND=codex`,
+  change it to `claude` or remove that line
+- `telegram-agent-bot hook --install` writes the SessionStart hook to
+  `~/.claude/settings.json`
+- transcripts are scanned from `~/.claude/projects` unless
+  `TELEGRAM_AGENT_BOT_CODEX_PROJECTS_PATH` is set
+- bot-created Claude homes are isolated with `HOME=<account_home>` and store
+  settings/transcripts under `<account_home>/.claude`
+- the bot does not rely on `CLAUDE_HOME`
+
+The command names `/codexlogin` and `/codexaccount` are kept for backward
+compatibility. In Claude mode they launch `claude auth login`. Claude Code
+subscription/OAuth credentials can be OS- or keychain-dependent, so verify
+named-account switching on your target host before relying on automatic
+rotation; API-key settings in `settings.json` are copied with the account home.
+
 ### Project Roots
 
 To choose a computer, VPS, or mounted workspace before browsing directories,
@@ -277,7 +318,7 @@ running telegram-agent-bot, for example through SSHFS or NFS mounts.
 
 TelegramAgentBot starts with the `local` backend by default. This is the
 existing single-machine mode: Telegram talks to a local tmux session, and the
-bot monitors local Codex transcript files.
+bot monitors local agent transcript files.
 
 Single-machine mode is the supported default. The backend interface exists so
 center-bot / remote agent-node deployments can be added without changing the
@@ -374,25 +415,28 @@ TELEGRAM_AGENT_BOT_CODEX_COMMAND=IS_SANDBOX=1 codex --dangerously-bypass-approva
 
 ## Multi-account login, switching, and failover
 
-By default, new sessions use the service user's normal `~/.codex` login and **automatic account rotation is disabled**. This keeps single-account installs predictable.
+By default, new sessions use the service user's normal agent login (`~/.codex`
+for Codex, `~/.claude` for Claude Code) and **automatic account rotation is
+disabled**. This keeps single-account installs predictable.
 
 Telegram commands:
 
 ```text
-/codexlogin          # start Codex device login for the default CODEX_HOME
+/codexlogin          # start agent login for the default home
 /codexlogin backup   # login into an isolated account home and save it as backup
 /codexaccount list
 /codexaccount use backup
-/codexaccount clear  # go back to the service user's default CODEX_HOME
+/codexaccount clear  # go back to the service user's default agent home
 ```
 
-Named accounts are stored under `~/.telegram-agent-bot/accounts/`. Switching affects newly created topics only; existing topics keep their current tmux window. Use `/unbind` when you want the current topic to start a fresh session with the selected account.
+Named accounts are stored under `~/.telegram-agent-bot/accounts/`. Switching affects newly created topics only; existing topics keep their current tmux window. Use `/unbind` when you want the current topic to start a fresh session with the selected account. In Claude mode, validate named-account switching on your host before enabling rotation because Claude subscription credentials may be stored outside the copied home on some platforms.
 
-If you want usage-limit failover, set `TELEGRAM_AGENT_BOT_ENABLE_ACCOUNT_ROTATION=true`. When a live session emits `usage_limit_exceeded`, TelegramAgentBot marks that window as exhausted; on the next message it can create a fresh tmux window on the next saved account and forward the message there. This is **session rotation**, not seamless continuation of the exact same Codex session.
+If you want usage-limit failover, set `TELEGRAM_AGENT_BOT_ENABLE_ACCOUNT_ROTATION=true`. When a live session emits `usage_limit_exceeded`, TelegramAgentBot marks that window as exhausted; on the next message it can create a fresh tmux window on the next saved account and forward the message there. This is **session rotation**, not seamless continuation of the exact same agent session.
 
 ## Session tracking
 
-By default, this project scans Codex transcript files under `~/.codex`.
+By default, this project scans transcript files under `~/.codex` for Codex or
+`~/.claude/projects` for Claude Code.
 
 If you want automatic session-to-window tracking via the CLI hook, install it with:
 
@@ -400,7 +444,7 @@ If you want automatic session-to-window tracking via the CLI hook, install it wi
 telegram-agent-bot hook --install
 ```
 
-This command enables Codex hooks in the active Codex home:
+For Codex CLI, this command enables hooks in the active Codex home:
 
 - `$CODEX_HOME/config.toml` and `$CODEX_HOME/hooks.json` when `CODEX_HOME` is set
 - otherwise `~/.codex/config.toml` and `~/.codex/hooks.json`
@@ -426,7 +470,7 @@ hooks = true
           {
             "type": "command",
             "command": "telegram-agent-bot hook",
-            "statusMessage": "Registering Codex session",
+            "statusMessage": "Registering agent session",
             "timeout": 5
           }
         ]
@@ -436,7 +480,30 @@ hooks = true
 }
 ```
 
-The hook writes window/session mappings into `$TELEGRAM_AGENT_BOT_DIR/session_map.json`, which helps the bot keep tmux windows associated with Codex sessions even after clears or restarts.
+For Claude Code, the same command writes to `~/.claude/settings.json` instead
+of `~/.codex/hooks.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "telegram-agent-bot hook",
+            "statusMessage": "Registering agent session",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The hook writes window/session mappings into `$TELEGRAM_AGENT_BOT_DIR/session_map.json`, which helps the bot keep tmux windows associated with agent sessions even after clears or restarts.
 
 On unattended hosts, newer Codex versions may require hook trust before the
 first session starts. After you have verified that `$CODEX_HOME/hooks.json`
@@ -467,14 +534,14 @@ uv run telegram-agent-bot
 | `/start` | Show the welcome message |
 | `/history` | Show message history for the current topic |
 | `/screenshot` | Capture the current terminal pane |
-| `/esc`, `/interrupt` | Send Escape to Codex |
+| `/esc`, `/interrupt` | Send Escape to the agent |
 | `/kill` | Kill the bound tmux window and clean up the topic binding |
 | `/unbind` | Unbind the topic without killing the running tmux window |
-| `/usage` | Open Codex usage info in the TUI and send the parsed result |
-| `/codexlogin [name]` | Start Codex device login from Telegram |
-| `/codexaccount` | List, save, select, or clear saved Codex accounts |
+| `/usage` | Open Codex usage info in the TUI and send the parsed result; Codex-specific |
+| `/codexlogin [name]` | Start agent login from Telegram |
+| `/codexaccount` | List, save, select, or clear saved agent accounts |
 
-### Forwarded Codex slash commands
+### Forwarded agent slash commands
 
 | Command | Description |
 | --- | --- |
@@ -486,7 +553,7 @@ uv run telegram-agent-bot
 | `/memory` | Edit AGENTS.md |
 | `/model` | Switch the model |
 
-Other unknown slash commands are forwarded to Codex as-is.
+Other unknown slash commands are forwarded to the current agent as-is.
 
 ## Topic workflow
 
@@ -515,8 +582,8 @@ After a topic is bound, just keep sending text or voice messages in that topic.
 - use `/unbind` if you want to keep the tmux window alive but detach the topic
 
 If you close/delete a topic (or the bot cleans up a dead topic/window), the
-associated Codex session is hidden from the resume picker by default. The
-underlying transcript file is kept on disk under `~/.codex`.
+associated session is hidden from the resume picker by default. The underlying
+transcript file is kept on disk under the configured transcript root.
 
 ## Notifications
 
@@ -551,6 +618,7 @@ The window must live inside the configured `telegram-agent-bot` tmux session.
 | `$TELEGRAM_AGENT_BOT_DIR/monitor_state.json` | Monitor byte offsets per session |
 | `$TELEGRAM_AGENT_BOT_DIR/pending_topic_deletions.json` | Deferred topic deletions after local cleanup |
 | `~/.codex/` | Codex transcript root (read-only) |
+| `~/.claude/projects/` | Claude Code transcript root (read-only, Claude mode) |
 | `~/.telegram-agent-bot/accounts/` | Optional saved account homes and snapshots |
 
 ## File structure

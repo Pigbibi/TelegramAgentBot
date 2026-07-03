@@ -1056,7 +1056,8 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 def _agent_login_executable() -> str:
     """Return the agent executable to use for device login.
 
-    Supports both Codex (``codex login``) and Claude Code (``claude login``).
+    Supports both Codex (``codex login``) and Claude Code
+    (``claude auth login``).
     """
     try:
         command_parts = shlex.split(config.codex_command)
@@ -1070,6 +1071,14 @@ def _agent_login_executable() -> str:
         return shutil.which(part) or part
     default = "claude" if config.agent_type == "claude" else "codex"
     return shutil.which(default) or default
+
+
+def _agent_login_args() -> list[str]:
+    """Return the argv used to start an interactive agent login."""
+    executable = _agent_login_executable()
+    if config.agent_type == "claude":
+        return [executable, "auth", "login"]
+    return [executable, "login", "--device-auth"]
 
 
 def _extract_device_login_details(output: str) -> tuple[str | None, str | None]:
@@ -1168,7 +1177,7 @@ async def _codex_login_worker(
     """Run agent login and report status back to Telegram.
 
     For Codex: runs ``codex login --device-auth``.
-    For Claude Code: runs ``claude login``.
+    For Claude Code: runs ``claude auth login``.
     """
     account_home = None
     process: asyncio.subprocess.Process | None = None
@@ -1181,9 +1190,7 @@ async def _codex_login_worker(
             else:
                 env["CODEX_HOME"] = str(account_home)
 
-        login_args = [_agent_login_executable(), "login"]
-        if config.agent_type == "codex":
-            login_args.append("--device-auth")
+        login_args = _agent_login_args()
 
         process = await asyncio.create_subprocess_exec(
             *login_args,

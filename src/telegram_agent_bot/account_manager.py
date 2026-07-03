@@ -38,8 +38,9 @@ def agent_auth_dir() -> Path:
 def agent_auth_filename() -> str:
     """Return the auth file name for the configured agent type.
 
-    Codex stores auth in auth.json, Claude Code stores credentials.db.
-    Fall back to auth.json for unknown types.
+    Codex stores auth in auth.json. Claude Code auth storage has changed
+    across versions, so credentials.db is the legacy primary name while
+    .credentials.json is also handled as a fallback.
     """
     from .config import config
 
@@ -58,7 +59,9 @@ def _has_auth_file(account_dir: Path) -> bool:
     return (
         (account_dir / "auth.json").is_file()
         or (account_dir / "credentials.db").is_file()
+        or (account_dir / ".credentials.json").is_file()
         or (account_dir / ".claude" / "credentials.db").is_file()
+        or (account_dir / ".claude" / ".credentials.json").is_file()
     )
 
 
@@ -227,6 +230,19 @@ def _agent_auth_path(codex_home: Path) -> Path:
     return codex_home / agent_auth_filename()
 
 
+def _agent_auth_candidates(codex_home: Path) -> tuple[Path, ...]:
+    """Return known auth file locations for the configured agent type."""
+    from .config import config
+
+    if config.agent_type == "claude":
+        claude_home = _claude_dir_for_home(codex_home)
+        return (
+            claude_home / "credentials.db",
+            claude_home / ".credentials.json",
+        )
+    return (codex_home / "auth.json",)
+
+
 def save_account_snapshot(
     name: str,
     codex_home: Path | None = None,
@@ -240,16 +256,16 @@ def save_account_snapshot(
     snapshot_dir = SNAPSHOT_DIR / name
     snapshot_dir.mkdir(parents=True, exist_ok=True)
 
-    auth_path = _agent_auth_path(codex_home)
     source_auth = codex_home / "auth.json"
     if not source_auth.is_file() and config.agent_type == "codex":
         raise FileNotFoundError(f"Codex auth file not found: {source_auth}")
 
     # Try agent-specific auth filename first, fall back to auth.json
     for candidate in (
-        auth_path,
+        *_agent_auth_candidates(codex_home),
         codex_home / "auth.json",
         codex_home / "credentials.db",
+        codex_home / ".credentials.json",
     ):
         if candidate.is_file():
             _copy_if_different(candidate, snapshot_dir / candidate.name)
@@ -300,15 +316,22 @@ def ensure_account_home(name: str) -> Path:
     account_home = prepare_account_home(name)
 
     target_auth = _agent_auth_path(account_home)
-    if not target_auth.is_file():
+    target_candidates = _agent_auth_candidates(account_home)
+    if not any(candidate.is_file() for candidate in target_candidates):
+        claude_json_auth = snapshot_dir / ".credentials.json"
         if snapshot_auth.is_file():
             _copy_if_different(snapshot_auth, target_auth)
+        elif claude_json_auth.is_file() and config.agent_type == "claude":
+            _copy_if_different(
+                claude_json_auth,
+                _claude_dir_for_home(account_home) / ".credentials.json",
+            )
         elif fallback_auth.is_file():
             _copy_if_different(fallback_auth, account_home / "auth.json")
         else:
             raise FileNotFoundError(
                 f"Account snapshot not found: {name} "
-                f"(looked for {auth_filename} and auth.json)"
+                f"(looked for {auth_filename}, .credentials.json, and auth.json)"
             )
 
     logger.debug(

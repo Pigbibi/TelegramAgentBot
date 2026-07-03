@@ -301,7 +301,7 @@ class TestInstallHook:
                             {
                                 "type": "command",
                                 "command": "/usr/local/bin/telegram-agent-bot hook",
-                                "statusMessage": "Registering Codex session",
+                                "statusMessage": "Registering agent session",
                                 "timeout": 5,
                             }
                         ],
@@ -334,7 +334,7 @@ class TestInstallHook:
                             {
                                 "type": "command",
                                 "command": "/usr/local/bin/telegram-agent-bot hook",
-                                "statusMessage": "Registering Codex session",
+                                "statusMessage": "Registering agent session",
                                 "timeout": 5,
                             }
                         ],
@@ -345,6 +345,37 @@ class TestInstallHook:
         assert not (settings_file.parent / "config.toml").exists()
         assert not (settings_file.parent / "hooks.json").exists()
         assert "Claude settings" in capsys.readouterr().out
+
+    def test_hook_main_install_loads_agent_type_from_env_file(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        app_dir = tmp_path / "app"
+        home_dir = tmp_path / "home"
+        work_dir = tmp_path / "work"
+        app_dir.mkdir()
+        work_dir.mkdir()
+        (app_dir / ".env").write_text(
+            "TELEGRAM_AGENT_BOT_AGENT_TYPE=claude\n",
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", raising=False)
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+        monkeypatch.chdir(work_dir)
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_DIR", str(app_dir))
+        monkeypatch.setenv("HOME", str(home_dir))
+        monkeypatch.setattr(sys, "argv", ["telegram-agent-bot", "hook", "--install"])
+        monkeypatch.setattr(
+            hook_module.shutil, "which", lambda _: "/usr/local/bin/telegram-agent-bot"
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            hook_main()
+
+        assert exc.value.code == 0
+        assert (home_dir / ".claude" / "settings.json").is_file()
+        assert not (home_dir / ".codex" / "hooks.json").exists()
 
     def test_install_preserves_existing_claude_settings(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -405,7 +436,7 @@ class TestInstallHook:
                                     {
                                         "type": "command",
                                         "command": "telegram-agent-bot hook",
-                                        "statusMessage": "Registering Codex session",
+                                        "statusMessage": "Registering agent session",
                                         "timeout": 5,
                                     }
                                 ],
@@ -447,7 +478,7 @@ class TestInstallHook:
                                     {
                                         "type": "command",
                                         "command": f"{stale_cli} hook",
-                                        "statusMessage": "Registering Codex session",
+                                        "statusMessage": "Registering agent session",
                                         "timeout": 5,
                                     }
                                 ],
@@ -492,7 +523,7 @@ class TestInstallHook:
                                     {
                                         "type": "command",
                                         "command": f"{stale_cli} hook",
-                                        "statusMessage": "Registering Codex session",
+                                        "statusMessage": "Registering agent session",
                                         "timeout": 5,
                                     }
                                 ],
@@ -503,7 +534,7 @@ class TestInstallHook:
                                     {
                                         "type": "command",
                                         "command": f"{current_cli} hook",
-                                        "statusMessage": "Registering Codex session",
+                                        "statusMessage": "Registering agent session",
                                         "timeout": 5,
                                     }
                                 ],

@@ -93,6 +93,33 @@ def test_ensure_claude_account_home_copies_credentials_and_settings(
     assert (home / ".claude" / "projects").is_dir()
 
 
+def test_ensure_claude_account_home_copies_json_credentials(
+    tmp_path, monkeypatch
+) -> None:
+    snapshot_dir = tmp_path / "snapshots"
+    account_home_dir = tmp_path / "homes"
+    claude_dir = tmp_path / "claude"
+    claude_dir.mkdir(parents=True)
+
+    account_dir = snapshot_dir / "main"
+    account_dir.mkdir(parents=True)
+    (account_dir / ".credentials.json").write_text(
+        '{"account":"claude"}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(config, "agent_type", "claude")
+    monkeypatch.setattr(account_manager, "SNAPSHOT_DIR", snapshot_dir)
+    monkeypatch.setattr(account_manager, "ACCOUNT_HOME_DIR", account_home_dir)
+    monkeypatch.setattr(account_manager, "CLAUDE_DIR", claude_dir)
+
+    home = account_manager.ensure_account_home("main")
+
+    assert (home / ".claude" / ".credentials.json").read_text(
+        encoding="utf-8"
+    ) == '{"account":"claude"}'
+
+
 def test_ensure_account_home_writes_update_check_before_tables(
     tmp_path, monkeypatch
 ) -> None:
@@ -175,6 +202,28 @@ def test_save_claude_account_snapshot_copies_credentials(tmp_path, monkeypatch) 
 
     assert snapshot == snapshot_dir / "main"
     assert (snapshot / "credentials.db").read_bytes() == b"sqlite-data"
+
+
+def test_save_claude_account_snapshot_copies_json_credentials(
+    tmp_path, monkeypatch
+) -> None:
+    snapshot_dir = tmp_path / "snapshots"
+    claude_dir = tmp_path / "claude"
+    claude_dir.mkdir(parents=True)
+    (claude_dir / ".credentials.json").write_text(
+        '{"account":"claude"}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(config, "agent_type", "claude")
+    monkeypatch.setattr(account_manager, "SNAPSHOT_DIR", snapshot_dir)
+
+    snapshot = account_manager.save_account_snapshot("main", claude_dir)
+
+    assert snapshot == snapshot_dir / "main"
+    assert (snapshot / ".credentials.json").read_text(encoding="utf-8") == (
+        '{"account":"claude"}'
+    )
 
 
 def test_clear_current_account_removes_selection(tmp_path, monkeypatch) -> None:
