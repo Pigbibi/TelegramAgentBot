@@ -233,7 +233,7 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
             pane.commands,
             [
                 (
-                    "export CLAUDE_HOME=/tmp/telegram-agent-bot-claude-home; "
+                    "export HOME=/tmp/telegram-agent-bot-claude-home; "
                     "/usr/bin/claude --model deepseek-v4-pro --resume "
                     "550e8400-e29b-41d4-a716-446655440000",
                     True,

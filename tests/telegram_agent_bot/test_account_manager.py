@@ -82,14 +82,15 @@ def test_ensure_claude_account_home_copies_credentials_and_settings(
     home = account_manager.ensure_account_home("main")
 
     assert home == account_home_dir / "main"
-    assert (home / "credentials.db").read_bytes() == b"sqlite-data"
-    assert (home / "settings.json").read_text(encoding="utf-8") == (
+    assert (home / ".claude" / "credentials.db").read_bytes() == b"sqlite-data"
+    assert (home / ".claude" / "settings.json").read_text(encoding="utf-8") == (
         '{"hooks":{"SessionStart":[]}}\n'
     )
     assert not (home / "auth.json").exists()
+    assert not (home / "credentials.db").exists()
     assert not (home / "config.toml").exists()
     assert not (home / "hooks.json").exists()
-    assert (home / "projects").is_dir()
+    assert (home / ".claude" / "projects").is_dir()
 
 
 def test_ensure_account_home_writes_update_check_before_tables(

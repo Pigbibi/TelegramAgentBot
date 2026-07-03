@@ -68,11 +68,19 @@ _UUID_SUFFIX_RE = re.compile(
 
 def _iter_transcript_roots(preferred_account_name: str = "") -> list[Path]:
     """Return transcript roots to search, preferring one account home when known."""
+
+    def account_transcript_root(account_home: Path) -> Path:
+        if config.agent_type == "claude":
+            return account_home / ".claude" / "projects"
+        return account_home
+
     candidates: list[Path] = []
     if preferred_account_name:
-        candidates.append(ACCOUNT_HOME_DIR / preferred_account_name)
+        candidates.append(
+            account_transcript_root(ACCOUNT_HOME_DIR / preferred_account_name)
+        )
     candidates.append(config.codex_projects_path)
-    candidates.extend(list_account_homes())
+    candidates.extend(account_transcript_root(home) for home in list_account_homes())
 
     seen: set[str] = set()
     roots: list[Path] = []

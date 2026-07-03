@@ -1112,7 +1112,7 @@ def _format_account_status() -> str:
     current = get_current_account_name()
     rotation = "enabled" if config.enable_account_rotation else "disabled"
     agent_label = config.agent_type_display
-    env_var = "CLAUDE_HOME" if config.agent_type == "claude" else "CODEX_HOME"
+    env_var = "HOME" if config.agent_type == "claude" else "CODEX_HOME"
     lines = [
         f"🔐 {agent_label} account status",
         f"Automatic quota rotation: {rotation}",
@@ -1177,7 +1177,7 @@ async def _codex_login_worker(
         if account_name:
             account_home = prepare_account_home(account_name)
             if config.agent_type == "claude":
-                env["CLAUDE_HOME"] = str(account_home)
+                env["HOME"] = str(account_home)
             else:
                 env["CODEX_HOME"] = str(account_home)
 

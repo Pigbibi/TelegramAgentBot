@@ -867,7 +867,7 @@ class TmuxManager:
                             if config.agent_type == "claude":
                                 account_home = ensure_account_home(account_name)
                                 cmd = (
-                                    f"export CLAUDE_HOME={shlex.quote(str(account_home))}; "
+                                    f"export HOME={shlex.quote(str(account_home))}; "
                                     f"{cmd}"
                                 )
                             else:

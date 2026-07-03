@@ -271,11 +271,11 @@ class TestInstallHook:
     def _patch_claude_path(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> Path:
-        claude_dir = tmp_path / ".claude"
+        home_dir = tmp_path / "home"
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "claude")
         monkeypatch.delenv("CODEX_HOME", raising=False)
-        monkeypatch.setenv("CLAUDE_HOME", str(claude_dir))
-        return claude_dir / "settings.json"
+        monkeypatch.setenv("HOME", str(home_dir))
+        return home_dir / ".claude" / "settings.json"
 
     def test_install_writes_config_and_hooks_json(
         self,

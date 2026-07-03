@@ -2,7 +2,7 @@
 
 Called by a SessionStart hook to maintain a window↔session mapping in
 <TELEGRAM_AGENT_BOT_DIR>/session_map.json. Also provides `--install` to enable hooks
-in the active agent home (`$CODEX_HOME`/`$CLAUDE_HOME` when set, else
+in the active agent home (`$CODEX_HOME` for Codex, else
 `~/.codex` or `~/.claude` depending on agent_type) and register the
 SessionStart hook there.
 
@@ -69,16 +69,13 @@ def _codex_dir() -> Path:
     """Resolve the active agent home for hook install/runtime.
 
     Priority follows the active agent type:
-    - claude: CLAUDE_HOME env > ~/.claude
+    - claude: ~/.claude
     - codex: CODEX_HOME env > ~/.codex
 
     This module avoids importing config.py (which requires TELEGRAM_BOT_TOKEN),
     so agent_type detection here is best-effort from the environment only.
     """
     if _is_claude_agent():
-        claude_home = os.getenv("CLAUDE_HOME")
-        if claude_home:
-            return Path(claude_home).expanduser()
         return Path.home() / ".claude"
 
     codex_home = os.getenv("CODEX_HOME")
