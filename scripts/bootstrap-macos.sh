@@ -25,7 +25,15 @@ require_cmd() {
 
 require_cmd uv
 require_cmd tmux
-require_cmd codex
+_agent_type="${TELEGRAM_AGENT_BOT_AGENT_TYPE:-}"
+if [[ -z "$_agent_type" && -f "$ENV_PATH" ]]; then
+  _agent_type="$(grep -E '^TELEGRAM_AGENT_BOT_AGENT_TYPE=' "$ENV_PATH" | tail -1 | sed 's/.*=//')"
+fi
+if [[ "$_agent_type" == "claude" ]]; then
+  require_cmd claude
+else
+  require_cmd codex
+fi
 require_cmd plutil
 require_cmd launchctl
 
@@ -133,7 +141,8 @@ Next steps:
      - TELEGRAM_BOT_TOKEN
      - ALLOWED_USERS
      - optional OPENAI_API_KEY / OPENAI_BASE_URL
-  2. Run: codex login
+  2. Run: codex login (Codex mode), or configure Claude Code auth/settings
+     and rerun: uv run telegram-agent-bot hook --install
   3. Optional Telegram recovery commands:
      /codexlogin
      /codexlogin backup

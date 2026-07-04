@@ -40,7 +40,7 @@ _HOOKS_FLAG_RE = re.compile(r"^\s*hooks\s*=")
 _LEGACY_CODEX_HOOKS_FLAG_RE = re.compile(r"^\s*codex_hooks\s*=")
 
 _SESSION_START_MATCHER = "startup|resume"
-_HOOK_STATUS_MESSAGE = "Registering Codex session"
+_HOOK_STATUS_MESSAGE = "Registering agent session"
 _HOOK_TIMEOUT_SECONDS = 5
 
 # The hook command suffix for detection
@@ -59,6 +59,29 @@ def _agent_type() -> str:
     """Return the configured agent type without importing config.py."""
     agent_type = os.getenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "codex").strip().lower()
     return agent_type if agent_type in {"codex", "claude"} else "codex"
+
+
+def _load_env_for_install() -> None:
+    """Load local/global .env before deciding which agent home to install into."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+
+    config_dir = os.getenv("TELEGRAM_AGENT_BOT_DIR")
+    global_env = (
+        Path(config_dir).expanduser()
+        if config_dir
+        else Path.home() / ".telegram-agent-bot"
+    ) / ".env"
+    local_env = Path(".env")
+
+    # Match config.py precedence: local .env first, then global .env, with
+    # override=False so already-exported environment variables still win.
+    if local_env.is_file():
+        load_dotenv(local_env, override=False)
+    if global_env.is_file():
+        load_dotenv(global_env, override=False)
 
 
 def _is_claude_agent() -> bool:
@@ -449,6 +472,7 @@ def hook_main() -> None:
 
     if args.install:
         logger.info("Hook install requested")
+        _load_env_for_install()
         sys.exit(_install_hook())
 
     # Normal hook processing: read JSON from stdin
