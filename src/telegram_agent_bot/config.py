@@ -150,7 +150,7 @@ class Config:
             "TELEGRAM_AGENT_BOT_CODEX_COMMAND", _default_command
         )
         self.codex_model = os.getenv(
-            "TELEGRAM_AGENT_BOT_CODEX_MODEL", "gpt-5.6-luna"
+            "TELEGRAM_AGENT_BOT_CODEX_MODEL", "gpt-5.4-mini"
         ).strip()
         self.claude_command = os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_COMMAND", "claude")
         self.claude_model = os.getenv(
