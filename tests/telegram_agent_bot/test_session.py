@@ -22,6 +22,26 @@ def mgr(monkeypatch) -> SessionManager:
 
 
 class TestThreadBindings:
+    def test_output_mode_defaults_to_clean_and_persists_per_topic(
+        self, mgr: SessionManager
+    ) -> None:
+        assert mgr.get_output_mode(100, 1) == "clean"
+        assert not mgr.is_trace_mode(100, 1)
+
+        mgr.set_output_mode(100, 1, "trace")
+
+        assert mgr.get_output_mode(100, 1) == "trace"
+        assert mgr.is_trace_mode(100, 1)
+        assert mgr.get_output_mode(100, 2) == "clean"
+
+    def test_unbind_clears_output_mode(self, mgr: SessionManager) -> None:
+        mgr.bind_thread(100, 1, "@1")
+        mgr.set_output_mode(100, 1, "trace")
+
+        mgr.unbind_thread(100, 1)
+
+        assert mgr.get_output_mode(100, 1) == "clean"
+
     def test_bind_and_get(self, mgr: SessionManager) -> None:
         mgr.bind_thread(100, 1, "@1")
         assert mgr.get_window_for_thread(100, 1) == "@1"

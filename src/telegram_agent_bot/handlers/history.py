@@ -13,6 +13,7 @@ from typing import Any
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..config import config
+from ..output_mode import OUTPUT_MODE_CLEAN
 from ..session import session_manager
 from ..telegram_sender import split_message
 from ..transcript_parser import TranscriptParser
@@ -78,6 +79,7 @@ async def send_history(
     user_id: int | None = None,
     bot: Bot | None = None,
     message_thread_id: int | None = None,
+    output_mode: str = OUTPUT_MODE_CLEAN,
 ) -> None:
     """Send or edit message history for a window's session.
 
@@ -129,6 +131,13 @@ async def send_history(
         else:
             # Filter to assistant messages only
             messages = [m for m in messages if m["role"] == "assistant"]
+        if output_mode == OUTPUT_MODE_CLEAN:
+            messages = [
+                m
+                for m in messages
+                if m.get("content_type")
+                not in {"tool_use", "tool_result", "local_command"}
+            ]
         total = len(messages)
         if total == 0:
             if is_unread:

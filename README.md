@@ -202,6 +202,7 @@ TELEGRAM_AGENT_BOT_AUTO_UPDATE=true
 TELEGRAM_AGENT_BOT_CODEX_UPDATE_CHECK=true
 TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE=true
 TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES=false
+TELEGRAM_AGENT_BOT_OUTPUT_MODE=clean
 # Optional Claude Code mode:
 # TELEGRAM_AGENT_BOT_AGENT_TYPE=claude
 # Change TELEGRAM_AGENT_BOT_CODEX_COMMAND above to claude, or remove it to use
@@ -274,6 +275,7 @@ be committed.
 | `TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE` | `false` | Run `npm install -g @openai/codex@latest` when an idle Codex update exists |
 | `TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES` | `false` | Forward intermediary commentary messages; model reasoning is always hidden |
 | `TELEGRAM_AGENT_BOT_SHOW_TOOL_CALLS` | `true` | Forward tool call notifications and outputs |
+| `TELEGRAM_AGENT_BOT_OUTPUT_MODE` | `clean` | Default per-topic output mode; `clean` hides tools, `trace` shows public tool summaries |
 | `TELEGRAM_AGENT_BOT_SHOW_BASH_TOOL_CALLS` | `true` | Forward Bash command and output notifications; set `false` to hide Bash only |
 | `TELEGRAM_AGENT_BOT_SHOW_HIDDEN_DIRS` | `false` | Show dot-directories in the directory picker |
 | `AI_TRANSCRIPTION_PROVIDERS` | `openai` | Comma-separated provider IDs tried in order (`openai`, `google`) |
@@ -566,6 +568,7 @@ uv run telegram-agent-bot
 | --- | --- |
 | `/start` | Show the welcome message |
 | `/history` | Show message history for the current topic |
+| `/mode [clean|trace]` | Choose clean output or public tool trace for this topic |
 | `/screenshot` | Capture the current terminal pane |
 | `/esc`, `/interrupt` | Send Escape to the agent |
 | `/kill` | Kill the bound tmux window and clean up the topic binding |
