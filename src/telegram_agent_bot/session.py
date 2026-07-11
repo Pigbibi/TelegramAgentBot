@@ -832,9 +832,7 @@ class SessionManager:
             self.thread_output_modes.get(key), config.output_mode_default
         )
 
-    def set_output_mode(
-        self, user_id: int, thread_id: int | None, mode: str
-    ) -> str:
+    def set_output_mode(self, user_id: int, thread_id: int | None, mode: str) -> str:
         """Persist and return a normalized output mode for one topic."""
         normalized = normalize_output_mode(mode, config.output_mode_default)
         self.thread_output_modes[self._thread_state_key(user_id, thread_id)] = (

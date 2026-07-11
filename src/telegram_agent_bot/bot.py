@@ -5746,10 +5746,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         # Clean mode keeps the topic focused on the final answer. Background
         # waits above remain visible as a generic status, while other tool and
         # local-command entries are omitted and still advance the read offset.
-        if (
-            not session_manager.is_trace_mode(user_id, thread_id)
-            and msg.content_type in ("tool_use", "tool_result", "local_command")
-        ):
+        if not session_manager.is_trace_mode(
+            user_id, thread_id
+        ) and msg.content_type in ("tool_use", "tool_result", "local_command"):
             if not is_remote_target and msg.source_offset > 0:
                 await _mark_transcript_message_delivered(user_id, wid, msg)
             continue
