@@ -246,7 +246,7 @@ be committed.
 | `TELEGRAM_AGENT_BOT_TMUX_SESSION_NAME` | `telegram-agent-bot` | tmux session name used by the bot |
 | `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | `codex` for Codex, `claude` for Claude Code | Command used when creating a new window |
 | `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` | `~/.telegram-agent-bot/claude.env` | Optional 0600 environment file for Claude Code/DeepSeek; sourced without putting the key in tmux command text |
-| `TELEGRAM_AGENT_BOT_CODEX_MODEL` | `gpt-5.6-luna` | Default Codex model for new topics |
+| `TELEGRAM_AGENT_BOT_CODEX_MODEL` | `gpt-5.4-mini` | Default Codex model for new topics |
 | `TELEGRAM_AGENT_BOT_CLAUDE_MODEL` | `deepseek-v4-flash` | Default Claude Code model for new topics; override for another provider |
 | `TELEGRAM_AGENT_BOT_CODEX_MODELS` | `auto` | `auto` uses the installed Codex app-server catalog; a comma-separated list pins the choices |
 | `TELEGRAM_AGENT_BOT_CLAUDE_MODELS` | `auto` | `auto` queries the configured Anthropic-compatible provider; a comma-separated list pins the choices |

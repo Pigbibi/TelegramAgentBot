@@ -43,8 +43,8 @@ class TestConfigValid:
 
     def test_default_models_are_agent_specific(self):
         cfg = Config()
-        assert cfg.codex_model == "gpt-5.6-luna"
-        assert cfg.codex_models == ("gpt-5.6-luna",)
+        assert cfg.codex_model == "gpt-5.4-mini"
+        assert cfg.codex_models == ("gpt-5.4-mini",)
         assert cfg.claude_model == "deepseek-v4-flash"
         assert cfg.claude_models == ("deepseek-v4-flash",)
 
