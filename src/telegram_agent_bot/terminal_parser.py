@@ -246,6 +246,10 @@ _PROGRESS_BULLETS = ("•", "◦")
 _PROMPT_PREFIXES = ("›", "❯")
 _MAX_PROGRESS_LINES = 8
 _MAX_PROGRESS_CHARS = 1000
+_COMPLETION_STATUS_RE = re.compile(
+    r"^(?:brewed|cooked)\s+for\s+\d+(?:\.\d+)?s$",
+    re.IGNORECASE,
+)
 _AUTH_ERROR_MARKERS = (
     "access token could not be refreshed",
     "refresh token was revoked",
@@ -555,6 +559,12 @@ def parse_status_update(pane_text: str) -> str | None:
         return tail_progress_block
 
     if not status_line:
+        return None
+
+    # Claude Code leaves a final "Brewed for ..." line in its TUI. Codex has
+    # an equivalent completion footer. It is not active progress and must not
+    # become a persistent Telegram status message.
+    if _COMPLETION_STATUS_RE.fullmatch(status_line.strip()):
         return None
 
     if progress_block:
