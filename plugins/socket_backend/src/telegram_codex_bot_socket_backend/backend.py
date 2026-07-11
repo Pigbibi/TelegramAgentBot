@@ -145,6 +145,10 @@ class SocketClusterBackend:
                     "window_name": request.window_name,
                     "resume_session_id": request.resume_session_id,
                     "account_name": request.account_name,
+                    "agent_type": request.agent_type,
+                    "model": request.model,
+                    "reasoning_effort": request.reasoning_effort,
+                    "fast_mode": request.fast_mode,
                 },
             )
         except Exception as exc:

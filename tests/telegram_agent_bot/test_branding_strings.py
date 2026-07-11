@@ -17,28 +17,28 @@ from telegram_agent_bot import bot
 
 
 class BrandingStringTests(unittest.TestCase):
-    def test_user_visible_branding_uses_codex(self) -> None:
-        self.assertEqual(bot.PRODUCT_NAME, "Codex")
-        self.assertIn("Codex Monitor", bot.WELCOME_MESSAGE)
+    def test_user_visible_branding_uses_generic_agent_name(self) -> None:
+        self.assertEqual(bot.PRODUCT_NAME, "Agent")
+        self.assertIn("Agent Monitor", bot.WELCOME_MESSAGE)
         self.assertEqual(
             bot.UNSUPPORTED_CONTENT_MESSAGE,
-            "⚠ Only text, photo, file, and voice messages are supported. Stickers, video, and other media cannot be forwarded to Codex.",
+            "⚠ Only text, photo, file, and voice messages are supported. Stickers, video, and other media cannot be forwarded to Agent.",
         )
-        self.assertEqual(bot.PHOTO_CONFIRMATION_MESSAGE, "📷 Image sent to Codex.")
-        self.assertEqual(bot.FILE_CONFIRMATION_MESSAGE, "📎 File sent to Codex.")
+        self.assertEqual(bot.PHOTO_CONFIRMATION_MESSAGE, "📷 Image sent to Agent.")
+        self.assertEqual(bot.FILE_CONFIRMATION_MESSAGE, "📎 File sent to Agent.")
         self.assertEqual(
             bot.SESSION_STILL_RUNNING_MESSAGE,
-            "The Codex session is still running in tmux.",
+            "The Agent session is still running in tmux.",
         )
-        self.assertEqual(bot.HELP_COMMAND_DESCRIPTION, "↗ Show Codex help")
+        self.assertEqual(bot.HELP_COMMAND_DESCRIPTION, "↗ Show Agent help")
         self.assertEqual(bot.CC_COMMANDS["goal"], "↗ Set or update session goal")
         self.assertEqual(bot.CC_COMMANDS["memory"], "↗ Edit AGENTS.md")
-        self.assertEqual(bot.ESC_COMMAND_DESCRIPTION, "Interrupt current Codex run")
+        self.assertEqual(bot.ESC_COMMAND_DESCRIPTION, "Interrupt current Agent run")
         self.assertEqual(
             bot.INTERRUPT_COMMAND_DESCRIPTION,
             "Interrupt; optional text sends next",
         )
-        self.assertEqual(bot.USAGE_COMMAND_DESCRIPTION, "Show Codex usage remaining")
+        self.assertEqual(bot.USAGE_COMMAND_DESCRIPTION, "Show Agent usage remaining")
 
     def test_default_directory_browser_path_is_not_machine_specific(self) -> None:
         projects_dir = bot.config.default_projects_path

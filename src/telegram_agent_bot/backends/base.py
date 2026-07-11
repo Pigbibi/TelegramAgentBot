@@ -41,6 +41,7 @@ class CreateSessionRequest:
     agent_type: str = ""
     model: str = ""
     reasoning_effort: str = ""
+    fast_mode: bool = False
 
 
 @dataclass(frozen=True)

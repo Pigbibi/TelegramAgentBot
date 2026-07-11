@@ -58,6 +58,8 @@ CB_SESSION_CANCEL = "rs:cancel"  # cancel
 CB_PROFILE_AGENT = "ap:agent:"  # ap:agent:codex|claude
 CB_PROFILE_MODEL = "ap:model:"  # ap:model:<index>
 CB_PROFILE_EFFORT = "ap:effort:"  # ap:effort:<level>
+CB_PROFILE_FAST = "ap:fast:"  # ap:fast:on|off
+CB_PROFILE_CONFIRM = "ap:confirm"
 CB_PROFILE_CANCEL = "ap:cancel"
 
 # Screenshot control keys

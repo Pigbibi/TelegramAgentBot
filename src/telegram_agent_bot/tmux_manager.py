@@ -839,6 +839,7 @@ class TmuxManager:
         agent_type: str | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        fast_mode: bool = False,
     ) -> tuple[bool, str, str, str]:
         """Create a new tmux window and optionally start Codex.
 
@@ -855,6 +856,7 @@ class TmuxManager:
             agent_type=normalize_agent_type(agent_type, config.agent_type),
             model=(model or "").strip(),
             reasoning_effort=reasoning_effort or "",
+            fast_mode=fast_mode,
         )
         command_override = config.codex_command if agent_type is None else None
 

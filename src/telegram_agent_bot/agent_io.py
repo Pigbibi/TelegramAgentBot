@@ -92,6 +92,7 @@ async def create_agent_session(
     agent_type: str = "",
     model: str = "",
     reasoning_effort: str = "",
+    fast_mode: bool = False,
 ) -> CreateSessionResult:
     """Create or resume an agent session through the configured backend."""
     backend = get_configured_backend()
@@ -105,6 +106,7 @@ async def create_agent_session(
             agent_type=agent_type,
             model=model,
             reasoning_effort=reasoning_effort,
+            fast_mode=fast_mode,
         )
     )
 

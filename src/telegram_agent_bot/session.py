@@ -168,6 +168,7 @@ class WindowState:
     agent_type: str = ""
     model: str = ""
     reasoning_effort: str = ""
+    fast_mode: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -188,6 +189,8 @@ class WindowState:
             d["model"] = self.model
         if self.reasoning_effort:
             d["reasoning_effort"] = self.reasoning_effort
+        if self.fast_mode:
+            d["fast_mode"] = True
         return d
 
     @classmethod
@@ -204,6 +207,7 @@ class WindowState:
             else "",
             model=str(data.get("model") or ""),
             reasoning_effort=str(data.get("reasoning_effort") or ""),
+            fast_mode=bool(data.get("fast_mode", False)),
         )
 
 
@@ -1109,6 +1113,7 @@ class SessionManager:
         state.agent_type = ""
         state.model = ""
         state.reasoning_effort = ""
+        state.fast_mode = False
         self._save_state()
         logger.info("Cleared session for window_id %s", window_id)
 
@@ -1122,6 +1127,7 @@ class SessionManager:
         agent_type: str = "",
         model: str = "",
         reasoning_effort: str = "",
+        fast_mode: bool = False,
     ) -> None:
         """Persist metadata for a freshly created tmux window."""
         state = self.get_window_state(window_id)
@@ -1133,6 +1139,7 @@ class SessionManager:
         state.agent_type = normalize_agent_type(agent_type) if agent_type else ""
         state.model = model
         state.reasoning_effort = reasoning_effort
+        state.fast_mode = fast_mode
         state.launch_started_at = time.time()
         if window_name:
             self.window_display_names[window_id] = window_name
@@ -1946,20 +1953,20 @@ class SessionManager:
         if _is_shell_pane_command(pane_cmd):
             return (
                 False,
-                "Window is not running Codex "
+                "Window is not running an agent "
                 f"(current command: {pane_cmd}); please create or resume a session again",
             )
         pane_text = await tmux_manager.capture_pane(window.window_id)
         if pane_text and extract_auth_error_message(pane_text):
             return (
                 False,
-                "Codex login expired or was revoked. Use /codexlogin to sign "
+                "Agent login expired or was revoked. Use /codexlogin to sign "
                 "in again, then send your message again.",
             )
         if reject_busy and pane_text and not is_codex_input_ready(pane_text):
             status = parse_status_update(pane_text)
             if status:
-                return False, f"Codex is still busy: {status}"
+                return False, f"Agent is still busy: {status}"
         success = await tmux_manager.send_keys(window.window_id, text)
         if success:
             return True, f"Sent to {display}"

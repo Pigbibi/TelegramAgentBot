@@ -7,12 +7,14 @@ import pytest
 from telegram_agent_bot.backends.base import AgentTarget, CreateSessionResult
 from telegram_agent_bot.handlers.callback_data import (
     CB_DIR_CONFIRM,
-    CB_PROFILE_EFFORT,
+    CB_PROFILE_CONFIRM,
     CB_SESSION_SELECT,
 )
 from telegram_agent_bot.handlers.directory_browser import (
     BROWSE_PATH_KEY,
     PROFILE_AGENT_KEY,
+    PROFILE_EFFORT_KEY,
+    PROFILE_FAST_MODE_KEY,
     PROFILE_MODEL_KEY,
     PROFILE_MODELS_KEY,
     SESSIONS_KEY,
@@ -71,14 +73,18 @@ class TestSessionPickerIsolation:
         assert context.user_data["_selected_path"] == "/tmp/project"
 
     @pytest.mark.asyncio
-    async def test_profile_effort_creates_claude_session_with_selected_settings(self):
-        update, query = _make_callback_update(f"{CB_PROFILE_EFFORT}low")
+    async def test_profile_confirmation_creates_claude_session_with_selected_settings(
+        self,
+    ):
+        update, query = _make_callback_update(CB_PROFILE_CONFIRM)
         context = _make_context()
         context.user_data = {
             "_pending_thread_id": 42,
             "_selected_path": "/tmp/project",
             PROFILE_AGENT_KEY: "claude",
             PROFILE_MODEL_KEY: "deepseek-v4-pro",
+            PROFILE_EFFORT_KEY: "low",
+            PROFILE_FAST_MODE_KEY: False,
             PROFILE_MODELS_KEY: ["deepseek-v4-pro"],
         }
 
@@ -107,6 +113,7 @@ class TestSessionPickerIsolation:
             agent_type="claude",
             model="deepseek-v4-pro",
             reasoning_effort="low",
+            fast_mode=False,
         )
 
     @pytest.mark.asyncio

@@ -512,7 +512,7 @@ class TestExistingWindowBinding:
         safe_edit.assert_not_called()
         query.answer.assert_awaited_once()
         assert query.answer.await_args.args == (
-            "This window has no tracked Codex session yet. Please choose New Session instead.",
+            "This window has no tracked agent session yet. Please choose New Session instead.",
         )
         assert query.answer.await_args.kwargs["show_alert"] is True
 

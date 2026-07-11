@@ -193,7 +193,7 @@ class TestSendToWindow:
         ok, message = await mgr.send_to_window("@1", "hi")
 
         assert ok is False
-        assert "not running Codex" in message
+        assert "not running an agent" in message
         send_keys.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -225,7 +225,7 @@ class TestSendToWindow:
         ok, message = await mgr.send_to_window("@1", "hi")
 
         assert ok is False
-        assert message.startswith("Codex is still busy:")
+        assert message.startswith("Agent is still busy:")
         send_keys.assert_not_awaited()
 
     @pytest.mark.asyncio
