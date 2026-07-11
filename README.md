@@ -12,7 +12,7 @@ Control Codex CLI or Claude Code sessions remotely through Telegram while keepin
 TelegramAgentBot is a Telegram controller for live Codex CLI / Claude Code sessions (`TELEGRAM_AGENT_BOT_AGENT_TYPE`):
 
 - New topics can choose `Codex` or `Claude Code`, then choose a configured model and reasoning level. `TELEGRAM_AGENT_BOT_AGENT_TYPE` remains the default.
-- Claude Code topics expose Fast mode as a separate session toggle after model and reasoning selection; it is not a reasoning level.
+- Codex and Claude Code topics expose Fast mode as a separate session toggle after model and reasoning selection; it is not a reasoning level.
 - transcript parsing and monitoring target `~/.codex` for Codex, or `~/.claude/projects` for Claude Code
 - Telegram delivery and topic isolation are hardened for long-running agent sessions
 - tmux stays the source of truth, so you can return to the same terminal session on desktop
@@ -323,7 +323,7 @@ rotation; API-key settings in `settings.json` are copied with the account home.
 
 - `/codexlogin`, `/codexaccount`, `/claudelogin`, and `/claudeaccount` explicitly target one agent.
 - `/agentlogin` and `/agentaccount` remain compatibility aliases for the configured default agent.
-- `fast` is no longer a reasoning-effort value. Use the Claude Code Fast mode toggle after selecting a model and reasoning level.
+- `fast` is no longer a reasoning-effort value. Use the Fast mode toggle after selecting a model and reasoning level. Codex and Claude Code forward this to their respective `/fast` command.
 - Upgrade existing deployments and migrate bot commands before restarting them.
 
 ### Project Roots

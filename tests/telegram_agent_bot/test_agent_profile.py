@@ -48,6 +48,20 @@ def test_fast_mode_is_separate_from_reasoning_and_buttons_fit_two_columns():
     assert keyboard.inline_keyboard[-3][0].text == "⚡ Fast: On"
 
 
+def test_codex_profile_exposes_fast_mode_toggle():
+    profile = AgentProfile(
+        agent_type="codex",
+        model="gpt-5.4-mini",
+        reasoning_effort="medium",
+        fast_mode=False,
+    )
+
+    text, keyboard = build_profile_picker(profile, ["gpt-5.4-mini"])
+
+    assert "Fast mode: `Off`" in text
+    assert keyboard.inline_keyboard[-3][0].text == "⚡ Fast: Off"
+
+
 def test_claude_launch_uses_effort_flag_and_env_file(tmp_path):
     env_file = tmp_path / "claude.env"
     env_file.write_text("ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic\n")

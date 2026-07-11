@@ -328,7 +328,7 @@ CC_COMMANDS: dict[str, str] = {
     "help": HELP_COMMAND_DESCRIPTION,
     "memory": "↗ Edit AGENTS.md",
     "model": "↗ Switch AI model",
-    "fast": "↗ Toggle Fast mode (Claude Code)",
+    "fast": "↗ Toggle Fast mode",
 }
 
 
@@ -3367,8 +3367,8 @@ async def _enable_fast_mode_if_requested(
     profile: AgentProfile,
     chat_id: int,
 ) -> None:
-    """Enable Claude Code Fast mode after the selected session is ready."""
-    if not profile.fast_mode or profile.agent_type != AGENT_CLAUDE:
+    """Enable Fast mode after the selected agent session is ready."""
+    if not profile.fast_mode:
         return
 
     success, message = await _send_to_window_when_codex_ready(
@@ -3381,7 +3381,8 @@ async def _enable_fast_mode_if_requested(
     if success:
         return
     logger.warning(
-        "Failed to enable Claude Code Fast mode for window %s: %s",
+        "Failed to enable %s Fast mode for window %s: %s",
+        profile.display_name,
         window_id,
         message,
     )
