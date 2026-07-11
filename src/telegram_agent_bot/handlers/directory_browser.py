@@ -27,7 +27,7 @@ from ..agent_profile import (
     AGENT_CODEX,
     AgentProfile,
     EFFORT_DEEP,
-    EFFORT_FAST,
+    EFFORT_LOW,
     EFFORT_MAX,
     EFFORT_STANDARD,
     agent_display_name,
@@ -48,7 +48,9 @@ from .callback_data import (
     CB_SESSION_SELECT,
     CB_PROFILE_AGENT,
     CB_PROFILE_CANCEL,
+    CB_PROFILE_CONFIRM,
     CB_PROFILE_EFFORT,
+    CB_PROFILE_FAST,
     CB_PROFILE_MODEL,
     CB_WIN_BIND,
     CB_WIN_CANCEL,
@@ -79,6 +81,7 @@ SESSIONS_KEY = "cached_sessions"  # Cache of CodexSession list
 PROFILE_AGENT_KEY = "profile_agent"
 PROFILE_MODEL_KEY = "profile_model"
 PROFILE_EFFORT_KEY = "profile_effort"
+PROFILE_FAST_MODE_KEY = "profile_fast_mode"
 PROFILE_MODELS_KEY = "profile_models"
 
 
@@ -125,6 +128,7 @@ def clear_profile_picker_state(user_data: dict | None) -> None:
             PROFILE_AGENT_KEY,
             PROFILE_MODEL_KEY,
             PROFILE_EFFORT_KEY,
+            PROFILE_FAST_MODE_KEY,
             PROFILE_MODELS_KEY,
         ):
             user_data.pop(key, None)
@@ -146,7 +150,7 @@ def build_agent_picker() -> tuple[str, InlineKeyboardMarkup]:
             [InlineKeyboardButton("Cancel", callback_data=CB_PROFILE_CANCEL)],
         ]
     )
-    return "*Choose Agent*\n\nSelect the CLI for this Telegram topic.", keyboard
+    return "*Choose Agent*\n\nSelect the AI runtime for this Telegram topic.", keyboard
 
 
 def build_profile_picker(
@@ -156,10 +160,15 @@ def build_profile_picker(
     """Build model and reasoning-effort controls for a selected agent."""
     model_label = profile.model or "CLI default"
     lines = [
-        f"*{agent_display_name(profile.agent_type)} session settings*",
+        f"*{agent_display_name(profile.agent_type)} settings*",
         f"Model: `{model_label}`",
         f"Reasoning: `{profile.effort_label}`",
-        "\nChoose a model and reasoning level:",
+        (
+            f"Fast mode: `{profile.fast_label}`"
+            if profile.agent_type == AGENT_CLAUDE
+            else "Fast mode: `Not available for Codex CLI`"
+        ),
+        "\nChoose model and reasoning, then create:",
     ]
     buttons: list[list[InlineKeyboardButton]] = []
     for index, model in enumerate(models):
@@ -174,19 +183,32 @@ def build_profile_picker(
         )
 
     effort_options = (
-        (EFFORT_FAST, "⚡ Fast"),
-        (EFFORT_STANDARD, "⚖ Standard"),
-        (EFFORT_DEEP, "🧠 Deep"),
-        (EFFORT_MAX, "🚀 Max"),
+        (EFFORT_LOW, "Low"),
+        (EFFORT_STANDARD, "Standard"),
+        (EFFORT_DEEP, "Deep"),
+        (EFFORT_MAX, "Max"),
     )
+    for index in range(0, len(effort_options), 2):
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"{'✅ ' if profile.reasoning_effort == value else ''}{label}",
+                    callback_data=f"{CB_PROFILE_EFFORT}{value}",
+                )
+                for value, label in effort_options[index : index + 2]
+            ]
+        )
+    if profile.agent_type == AGENT_CLAUDE:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"⚡ Fast: {profile.fast_label}",
+                    callback_data=f"{CB_PROFILE_FAST}{'off' if profile.fast_mode else 'on'}",
+                )
+            ]
+        )
     buttons.append(
-        [
-            InlineKeyboardButton(
-                f"{'✅ ' if profile.reasoning_effort == value else ''}{label}",
-                callback_data=f"{CB_PROFILE_EFFORT}{value}",
-            )
-            for value, label in effort_options
-        ]
+        [InlineKeyboardButton("✅ Create session", callback_data=CB_PROFILE_CONFIRM)]
     )
     buttons.append([InlineKeyboardButton("Cancel", callback_data=CB_PROFILE_CANCEL)])
     return "\n".join(lines), InlineKeyboardMarkup(buttons)
@@ -224,7 +246,7 @@ def _build_root_picker_text_and_keyboard(
     """Build common root picker text and buttons."""
     lines = [
         "*Select Computer / VPS*\n",
-        "Pick where this new Codex session should start.\n",
+        "Pick where this new Agent session should start.\n",
     ]
     buttons: list[list[InlineKeyboardButton]] = []
     for i, root in enumerate(roots):

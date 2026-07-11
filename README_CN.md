@@ -11,7 +11,7 @@
 
 TelegramAgentBot 是一个通过 Telegram 远程控制 Codex CLI / Claude Code 会话的工具：
 
-- 创建新 topic 时可以选择 `Codex` 或 `Claude Code`，并选择模型与 `Fast/Standard/Deep/Max` 推理档位；全局 `TELEGRAM_AGENT_BOT_AGENT_TYPE` 仍作为默认值
+- 创建新 topic 时可以选择 `Codex` 或 `Claude Code`，再选择模型、推理档位；Claude Code 另有独立的 Fast mode 开关；全局 `TELEGRAM_AGENT_BOT_AGENT_TYPE` 仍作为默认值
 - 会话监控默认面向 Codex 的 `~/.codex`，Claude Code 模式下使用 `~/.claude/projects`
 - Telegram 转发、topic 隔离、清理流程按长时间跑 agent 的方式做了加固
 - 保留 tmux-first 的用法，手机和桌面都围绕同一个真实终端会话工作

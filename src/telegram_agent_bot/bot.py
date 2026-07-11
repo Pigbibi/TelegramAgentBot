@@ -117,7 +117,9 @@ from .handlers.callback_data import (
     CB_DIR_UP,
     CB_PROFILE_AGENT,
     CB_PROFILE_CANCEL,
+    CB_PROFILE_CONFIRM,
     CB_PROFILE_EFFORT,
+    CB_PROFILE_FAST,
     CB_PROFILE_MODEL,
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
@@ -152,6 +154,7 @@ from .handlers.directory_browser import (
     UNBOUND_WINDOWS_KEY,
     PROFILE_AGENT_KEY,
     PROFILE_EFFORT_KEY,
+    PROFILE_FAST_MODE_KEY,
     PROFILE_MODEL_KEY,
     PROFILE_MODELS_KEY,
     build_backend_root_picker,
@@ -244,7 +247,7 @@ MEDIA_DOWNLOAD_WRITE_TIMEOUT_SECONDS = 30.0
 MEDIA_DOWNLOAD_POOL_TIMEOUT_SECONDS = 10.0
 BACKGROUND_WAIT_TOOL_STATUS_TEXT = "💭 Thinking…\n◦ Working in background terminal…"
 CODEX_AUTH_RECOVERY_MESSAGE = (
-    "Codex login expired or was revoked. Use /codexlogin to sign in again, "
+    "Agent login expired or was revoked. Use /codexlogin to sign in again, "
     "then send your message again."
 )
 
@@ -272,7 +275,7 @@ _agent_input_queues: dict[tuple[int, int, str], deque[_QueuedAgentInput]] = {}
 _agent_input_tasks: dict[tuple[int, int, str], asyncio.Task] = {}
 _agent_input_locks: dict[tuple[int, int, str], asyncio.Lock] = {}
 
-PRODUCT_NAME = "Codex"
+PRODUCT_NAME = "Agent"
 WELCOME_MESSAGE = (
     f"🤖 *{PRODUCT_NAME} Monitor*\n\n"
     "Each topic is a session. Create a new topic to start."
@@ -294,8 +297,8 @@ HELP_COMMAND_DESCRIPTION = f"↗ Show {PRODUCT_NAME} help"
 ESC_COMMAND_DESCRIPTION = f"Interrupt current {PRODUCT_NAME} run"
 INTERRUPT_COMMAND_DESCRIPTION = "Interrupt; optional text sends next"
 USAGE_COMMAND_DESCRIPTION = f"Show {PRODUCT_NAME} usage remaining"
-ACCOUNT_COMMAND_DESCRIPTION = "Manage Codex login accounts"
-CODEX_LOGIN_COMMAND_DESCRIPTION = "Start Codex device login"
+ACCOUNT_COMMAND_DESCRIPTION = "Manage agent login accounts"
+CODEX_LOGIN_COMMAND_DESCRIPTION = "Start agent device login"
 CODEX_LOGIN_TIMEOUT_SECONDS = 16 * 60
 _CODEX_LOGIN_DEFAULT_KEY = "__default__"
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -312,7 +315,7 @@ async def _safe_send_typing_action(chat: Chat, *, source: str) -> None:
         logger.debug("Failed to send typing action (%s): %s", source, exc)
 
 
-# Codex commands shown in bot menu (forwarded via tmux)
+# Agent commands shown in bot menu (forwarded via tmux)
 CC_COMMANDS: dict[str, str] = {
     "agentcmd": "↗ Send a custom agent command",
     "clear": "↗ Clear conversation history",
@@ -322,6 +325,7 @@ CC_COMMANDS: dict[str, str] = {
     "help": HELP_COMMAND_DESCRIPTION,
     "memory": "↗ Edit AGENTS.md",
     "model": "↗ Switch AI model",
+    "fast": "↗ Toggle Fast mode (Claude Code)",
 }
 
 
@@ -723,10 +727,12 @@ def _profile_from_context(user_data: dict | None) -> AgentProfile:
         else default_effort
     )
     model = user_data.get(PROFILE_MODEL_KEY, "") if user_data else ""
+    fast_mode = user_data.get(PROFILE_FAST_MODE_KEY, False) if user_data else False
     return AgentProfile(
         agent_type=normalized,
         model=model if isinstance(model, str) else "",
         reasoning_effort=normalize_effort(effort, default_effort),
+        fast_mode=bool(fast_mode),
     )
 
 
@@ -837,6 +843,7 @@ async def _continue_creation_with_profile(
         "agent_type": profile.agent_type,
         "model": profile.model,
         "reasoning_effort": profile.reasoning_effort,
+        "fast_mode": profile.fast_mode,
     }
     if node_id:
         create_kwargs["node_id"] = node_id
@@ -1145,7 +1152,7 @@ async def interrupt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             )
             if not success:
                 logger.warning(
-                    "Codex did not become ready after interrupt in window %s: %s; "
+                    "Agent did not become ready after interrupt in window %s: %s; "
                     "queuing replacement until ready",
                     wid,
                     message,
@@ -1378,7 +1385,7 @@ async def _codex_login_worker(
             await safe_send(
                 bot,
                 chat_id,
-                "❌ Codex login did not print a device URL/code. "
+                "❌ Agent login did not print a device URL/code. "
                 "Please check the service logs or try again.",
                 message_thread_id=thread_id,
             )
@@ -1387,7 +1394,7 @@ async def _codex_login_worker(
         await safe_send(
             bot,
             chat_id,
-            "🔐 Codex login started for "
+            "🔐 Agent login started for "
             f"{_login_display_name(account_name)}.\n"
             f"Open: {login_url}\n"
             f"Code: `{login_code}`\n"
@@ -1404,7 +1411,7 @@ async def _codex_login_worker(
             await safe_send(
                 bot,
                 chat_id,
-                "❌ Codex login timed out. Run /codexlogin again when ready.",
+                "❌ Agent login timed out. Run /codexlogin again when ready.",
                 message_thread_id=thread_id,
             )
             return
@@ -1413,7 +1420,7 @@ async def _codex_login_worker(
             await safe_send(
                 bot,
                 chat_id,
-                "❌ Codex login failed or was cancelled. Run /codexlogin again if needed.",
+                "❌ Agent login failed or was cancelled. Run /codexlogin again if needed.",
                 message_thread_id=thread_id,
             )
             return
@@ -1424,7 +1431,7 @@ async def _codex_login_worker(
             await safe_send(
                 bot,
                 chat_id,
-                f"✅ Codex login completed for account `{account_name}` and saved.\n"
+                f"✅ Agent login completed for account `{account_name}` and saved.\n"
                 "New topics will use this account. Existing topics will be "
                 "recreated automatically if their current pane is still blocked "
                 "by the old login.",
@@ -1434,17 +1441,17 @@ async def _codex_login_worker(
             await safe_send(
                 bot,
                 chat_id,
-                "✅ Codex login completed. Send your message again. Existing topics "
+                "✅ Agent login completed. Send your message again. Existing topics "
                 "will be recreated automatically if their current pane is still "
                 "blocked by the old login.",
                 message_thread_id=thread_id,
             )
     except Exception as exc:
-        logger.exception("Codex login failed")
+        logger.exception("Agent login failed")
         await safe_send(
             bot,
             chat_id,
-            f"❌ Codex login failed: {exc}",
+            f"❌ Agent login failed: {exc}",
             message_thread_id=thread_id,
         )
     finally:
@@ -1479,7 +1486,7 @@ async def codex_login_command(
     if existing and not existing.done():
         await safe_reply(
             update.message,
-            f"⏳ Codex login is already running for {_login_display_name(account_name)}.",
+            f"⏳ Agent login is already running for {_login_display_name(account_name)}.",
         )
         return
 
@@ -1744,7 +1751,7 @@ async def _queue_agent_input_after_interrupt(
             _ensure_agent_input_drain_task(bot, key)
             return (
                 False,
-                "Codex is still handling the interrupt and the input queue is full "
+                "Agent is still handling the interrupt and the input queue is full "
                 f"({limit} pending). Wait for it to finish or use /esc first.",
             )
         _ensure_agent_input_drain_task(bot, key)
@@ -1772,7 +1779,7 @@ async def _send_or_queue_agent_input(
                 _ensure_agent_input_drain_task(bot, key)
                 result = (
                     False,
-                    "Codex is still busy and the input queue is full "
+                    "Agent is still busy and the input queue is full "
                     f"({limit} pending). Wait for it to finish or use /interrupt.",
                     False,
                 )
@@ -1820,7 +1827,7 @@ async def _send_or_queue_agent_input(
                     _ensure_agent_input_drain_task(bot, key)
                     result = (
                         True,
-                        "Interrupted Codex prompt and queued until Codex is ready "
+                        "Interrupted agent prompt and queued until the agent is ready "
                         f"({depth}/{limit})",
                         True,
                     )
@@ -1930,7 +1937,7 @@ async def _drain_agent_input_queue(
                     bot,
                     user_id,
                     thread_id,
-                    "Codex did not confirm that the queued message reached the "
+                    "Agent did not confirm that the queued message reached the "
                     "transcript after submit retry",
                 )
             await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
@@ -2016,6 +2023,7 @@ async def _create_agent_local_window(
     agent_type: str = "",
     model: str = "",
     reasoning_effort: str = "",
+    fast_mode: bool = False,
 ) -> tuple[bool, str, str, str, AgentTarget | None]:
     success, message, display_name, window_id, target = await _create_agent_target(
         cwd=cwd,
@@ -2025,6 +2033,7 @@ async def _create_agent_local_window(
         agent_type=agent_type,
         model=model,
         reasoning_effort=reasoning_effort,
+        fast_mode=fast_mode,
     )
     if success and not window_id:
         return (
@@ -2047,8 +2056,9 @@ async def _create_agent_target(
     agent_type: str = "",
     model: str = "",
     reasoning_effort: str = "",
+    fast_mode: bool = False,
 ) -> tuple[bool, str, str, str, AgentTarget | None]:
-    create_kwargs = {
+    create_kwargs: dict[str, Any] = {
         "cwd": cwd,
         "window_name": window_name,
         "resume_session_id": resume_session_id,
@@ -2060,6 +2070,8 @@ async def _create_agent_target(
         create_kwargs["model"] = model
     if reasoning_effort:
         create_kwargs["reasoning_effort"] = reasoning_effort
+    if fast_mode:
+        create_kwargs["fast_mode"] = True
     if node_id:
         create_kwargs["node_id"] = node_id
     result = await create_agent_session(**create_kwargs)
@@ -3083,7 +3095,7 @@ async def _rotate_thread_after_usage_limit(
             context.bot,
             session_manager.resolve_chat_id(user_id, thread_id),
             "⚠️ This session has hit its usage limit. Automatic account rotation "
-            "is disabled. Use /codexlogin to refresh the current Codex login, "
+            "is disabled. Use /codexlogin to refresh the current agent login, "
             "or /codexaccount to choose a saved account. Then /unbind if you "
             "want this topic to start a fresh session.",
             message_thread_id=thread_id,
@@ -3252,7 +3264,7 @@ async def _send_to_window_when_codex_ready(
         if not is_codex_input_ready(pane_text or ""):
             status = parse_status_update(pane_text or "")
             if status:
-                last_message = f"Codex is still busy: {status}"
+                last_message = f"Agent is still busy: {status}"
             else:
                 last_message = "Codex UI is not ready for input"
             await asyncio.sleep(interval)
@@ -3266,10 +3278,48 @@ async def _send_to_window_when_codex_ready(
         if send_ok:
             return True, send_msg
         last_message = send_msg
-        if "Window is not running Codex" not in send_msg:
+        if (
+            "Window is not running an agent" not in send_msg
+            and "Window is not running Codex" not in send_msg
+        ):
             return False, send_msg
         await asyncio.sleep(interval)
-    return False, last_message or "Codex did not become ready"
+    return False, last_message or "Agent did not become ready"
+
+
+async def _enable_fast_mode_if_requested(
+    bot: Bot,
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+    profile: AgentProfile,
+    chat_id: int,
+) -> None:
+    """Enable Claude Code Fast mode after the selected session is ready."""
+    if not profile.fast_mode or profile.agent_type != AGENT_CLAUDE:
+        return
+
+    success, message = await _send_to_window_when_codex_ready(
+        user_id,
+        thread_id,
+        window_id,
+        "/fast",
+        auto_confirm_startup_trust=True,
+    )
+    if success:
+        return
+    logger.warning(
+        "Failed to enable Claude Code Fast mode for window %s: %s",
+        window_id,
+        message,
+    )
+    await safe_send(
+        bot,
+        chat_id,
+        "⚠️ Fast mode could not be enabled for this model. "
+        "The session will continue with the selected reasoning level.",
+        message_thread_id=thread_id,
+    )
 
 
 async def _refresh_session_map_after_first_prompt(
@@ -3927,7 +3977,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if not confirmed:
             await safe_reply(
                 update.message,
-                "⚠️ I sent the message, but Codex did not confirm it reached "
+                "⚠️ I sent the message, but the agent did not confirm it reached "
                 "the transcript after a submit retry. If the topic stays idle, "
                 "send it again or use /interrupt.",
             )
@@ -3961,6 +4011,7 @@ async def _create_and_bind_window(
     agent_type: str = "",
     model: str = "",
     reasoning_effort: str = "",
+    fast_mode: bool = False,
     node_id: str = "",
     answer_callback: bool = True,
 ) -> None:
@@ -3983,6 +4034,7 @@ async def _create_and_bind_window(
             if normalized_agent == AGENT_CLAUDE
             else config.codex_reasoning_effort
         ),
+        fast_mode=fast_mode,
     )
     # Account snapshots are agent-specific. Do not apply a Codex snapshot to a
     # Claude topic (or vice versa) when both agents are enabled per topic.
@@ -4003,6 +4055,7 @@ async def _create_and_bind_window(
         agent_type=profile.agent_type,
         model=profile.model,
         reasoning_effort=profile.reasoning_effort,
+        fast_mode=profile.fast_mode,
     )
     if success:
         if launch_account:
@@ -4036,6 +4089,15 @@ async def _create_and_bind_window(
                 await safe_edit(
                     query,
                     f"✅ {message}\n\n{status}. Send messages here.",
+                )
+
+                await _enable_fast_mode_if_requested(
+                    context.bot,
+                    query.from_user.id,
+                    pending_thread_id,
+                    "",
+                    profile,
+                    resolved_chat,
                 )
 
                 pending_text = (
@@ -4095,6 +4157,7 @@ async def _create_and_bind_window(
             agent_type=profile.agent_type,
             model=profile.model,
             reasoning_effort=profile.reasoning_effort,
+            fast_mode=profile.fast_mode,
         )
         if resume_session_id:
             # A resumed Codex window continues writing to the original JSONL.
@@ -4181,6 +4244,15 @@ async def _create_and_bind_window(
                 f"✅ {message}\n\n{status}. Send messages here.",
             )
 
+            await _enable_fast_mode_if_requested(
+                context.bot,
+                query.from_user.id,
+                pending_thread_id,
+                created_wid,
+                profile,
+                resolved_chat,
+            )
+
             # Send pending text if any
             pending_text = (
                 context.user_data.get("_pending_thread_text")
@@ -4221,9 +4293,9 @@ async def _create_and_bind_window(
                         await safe_send(
                             context.bot,
                             resolved_chat,
-                            "⚠️ I sent the first message, but Codex did not "
+                            "⚠️ I sent the first message, but the agent did not "
                             "confirm it reached the transcript after a submit "
-                            "retry. I will show any pending Codex prompt below; "
+                            "retry. I will show any pending agent prompt below; "
                             "if the topic stays idle, send the message again.",
                             message_thread_id=pending_thread_id,
                         )
@@ -4551,6 +4623,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if context.user_data is not None:
             context.user_data[PROFILE_AGENT_KEY] = agent_type
             context.user_data[PROFILE_MODEL_KEY] = models[0] if models else ""
+            context.user_data[PROFILE_FAST_MODE_KEY] = False
             context.user_data[PROFILE_EFFORT_KEY] = (
                 config.claude_reasoning_effort
                 if agent_type == AGENT_CLAUDE
@@ -4586,6 +4659,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         effort = normalize_effort(data[len(CB_PROFILE_EFFORT) :])
         if context.user_data is not None:
             context.user_data[PROFILE_EFFORT_KEY] = effort
+        await _show_agent_profile_settings(query, context)
+        await query.answer("Reasoning selected")
+
+    elif data.startswith(CB_PROFILE_FAST):
+        pending_tid = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
+        if pending_tid is not None and _get_thread_id(update) != pending_tid:
+            await query.answer("Stale picker (topic mismatch)", show_alert=True)
+            return
+        fast_mode = data[len(CB_PROFILE_FAST) :] == "on"
+        if context.user_data is not None:
+            context.user_data[PROFILE_FAST_MODE_KEY] = fast_mode
+        await _show_agent_profile_settings(query, context)
+        await query.answer("Fast mode updated")
+
+    elif data == CB_PROFILE_CONFIRM:
+        pending_tid = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
+        if pending_tid is not None and _get_thread_id(update) != pending_tid:
+            await query.answer("Stale picker (topic mismatch)", show_alert=True)
+            return
         await _continue_creation_with_profile(query, context, user)
 
     elif data == CB_PROFILE_CANCEL:
@@ -4904,6 +5000,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "agent_type": profile.agent_type,
             "model": profile.model,
             "reasoning_effort": profile.reasoning_effort,
+            "fast_mode": profile.fast_mode,
         }
         if selected_node_id:
             create_kwargs["node_id"] = selected_node_id
@@ -4944,6 +5041,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "agent_type": profile.agent_type,
             "model": profile.model,
             "reasoning_effort": profile.reasoning_effort,
+            "fast_mode": profile.fast_mode,
         }
         if selected_node_id:
             create_kwargs["node_id"] = selected_node_id
@@ -4973,6 +5071,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data.pop(PROFILE_AGENT_KEY, None)
             context.user_data.pop(PROFILE_MODEL_KEY, None)
             context.user_data.pop(PROFILE_EFFORT_KEY, None)
+            context.user_data.pop(PROFILE_FAST_MODE_KEY, None)
             context.user_data.pop(PROFILE_MODELS_KEY, None)
         await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
@@ -5007,7 +5106,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         if not _has_trackable_session_for_window(selected_wid):
             await query.answer(
-                "This window has no tracked Codex session yet. Please choose New Session instead.",
+                "This window has no tracked agent session yet. Please choose New Session instead.",
                 show_alert=True,
             )
             return

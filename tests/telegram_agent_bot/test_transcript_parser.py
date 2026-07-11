@@ -48,7 +48,7 @@ class TestParseLine:
         assert parsed["message"]["content"] == [
             {
                 "type": "text",
-                "text": "⚠️ Codex error: Your access token could not be refreshed.\n\nUse /codexlogin to start a Codex device login from Telegram.",
+                "text": "⚠️ Agent error: Your access token could not be refreshed.\n\nUse /codexlogin to start an agent device login from Telegram.",
             }
         ]
 
@@ -79,7 +79,7 @@ class TestParseLine:
         assert parsed is not None
         assert parsed["type"] == "assistant"
         assert parsed["text"] == (
-            "✅ Codex finished. No additional final message was emitted."
+            "✅ Agent finished. No additional final message was emitted."
         )
 
     def test_task_complete_with_final_message_is_skipped_to_avoid_duplicate(self):

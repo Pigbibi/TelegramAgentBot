@@ -105,7 +105,7 @@ async def test_send_or_queue_agent_input_interrupts_and_queues_during_interactiv
 
     assert ok is True
     assert queued is True
-    assert message.startswith("Interrupted Codex prompt and queued")
+    assert message.startswith("Interrupted agent prompt and queued")
     assert (
         list(bot_module._agent_input_queues[(12345, 42, "@1")])[0].text
         == "answer after prompt"

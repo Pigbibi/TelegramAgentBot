@@ -96,7 +96,7 @@ class TranscriptParser:
         "refresh_token_reused",
         "token_invalidated",
     )
-    _AUTH_ERROR_HINT = "Use /codexlogin to start a Codex device login from Telegram."
+    _AUTH_ERROR_HINT = "Use /codexlogin to start an agent device login from Telegram."
     _ENCRYPTED_REASONING_PLACEHOLDER = "Working on it…"
 
     @classmethod
@@ -111,8 +111,8 @@ class TranscriptParser:
 
     @classmethod
     def _format_error_message(cls, message: str) -> str:
-        """Format a Codex runtime error for Telegram."""
-        formatted = f"⚠️ Codex error: {message.strip()}"
+        """Format an agent runtime error for Telegram."""
+        formatted = f"⚠️ Agent error: {message.strip()}"
         lowered = message.lower()
         if any(marker in lowered for marker in cls._AUTH_ERROR_HINT_MARKERS):
             formatted = f"{formatted}\n\n{cls._AUTH_ERROR_HINT}"
@@ -384,7 +384,7 @@ class TranscriptParser:
                     role="assistant",
                     timestamp=timestamp,
                     content=(
-                        "✅ Codex finished. No additional final message was emitted."
+                        "✅ Agent finished. No additional final message was emitted."
                     ),
                 )
 

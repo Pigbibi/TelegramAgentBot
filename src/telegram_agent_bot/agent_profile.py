@@ -12,11 +12,13 @@ AGENT_CODEX = "codex"
 AGENT_CLAUDE = "claude"
 SUPPORTED_AGENT_TYPES = (AGENT_CODEX, AGENT_CLAUDE)
 
-EFFORT_FAST = "low"
+EFFORT_LOW = "low"
+# Backward-compatible alias for older config/tests that used Fast as an effort.
+EFFORT_FAST = EFFORT_LOW
 EFFORT_STANDARD = "medium"
 EFFORT_DEEP = "high"
 EFFORT_MAX = "max"
-SUPPORTED_EFFORTS = (EFFORT_FAST, EFFORT_STANDARD, EFFORT_DEEP, EFFORT_MAX)
+SUPPORTED_EFFORTS = (EFFORT_LOW, EFFORT_STANDARD, EFFORT_DEEP, EFFORT_MAX)
 
 
 def normalize_agent_type(value: str | None, default: str = AGENT_CODEX) -> str:
@@ -48,6 +50,7 @@ class AgentProfile:
     agent_type: str = AGENT_CODEX
     model: str = ""
     reasoning_effort: str = EFFORT_STANDARD
+    fast_mode: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "agent_type", normalize_agent_type(self.agent_type))
@@ -57,6 +60,7 @@ class AgentProfile:
                 "reasoning_effort",
                 normalize_effort(self.reasoning_effort),
             )
+        object.__setattr__(self, "fast_mode", bool(self.fast_mode))
 
     @property
     def display_name(self) -> str:
@@ -65,8 +69,12 @@ class AgentProfile:
     @property
     def effort_label(self) -> str:
         return {
-            EFFORT_FAST: "Fast",
+            EFFORT_LOW: "Low",
             EFFORT_STANDARD: "Standard",
             EFFORT_DEEP: "Deep",
             EFFORT_MAX: "Max",
         }.get(self.reasoning_effort, "Default")
+
+    @property
+    def fast_label(self) -> str:
+        return "On" if self.fast_mode else "Off"

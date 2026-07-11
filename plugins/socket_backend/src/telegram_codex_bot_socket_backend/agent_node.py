@@ -180,6 +180,10 @@ class AgentNodeServer:
                 window_name=str(request.get("window_name", "")),
                 resume_session_id=str(request.get("resume_session_id", "")),
                 account_name=str(request.get("account_name", "")),
+                agent_type=str(request.get("agent_type", "")),
+                model=str(request.get("model", "")),
+                reasoning_effort=str(request.get("reasoning_effort", "")),
+                fast_mode=bool(request.get("fast_mode", False)),
             )
         )
         window_id = result.target.window_id if result.target else ""
@@ -189,6 +193,10 @@ class AgentNodeServer:
                 cwd=str(request.get("cwd", "")),
                 window_name=result.display_name,
                 account_name=str(request.get("account_name", "")),
+                agent_type=str(request.get("agent_type", "")),
+                model=str(request.get("model", "")),
+                reasoning_effort=str(request.get("reasoning_effort", "")),
+                fast_mode=bool(request.get("fast_mode", False)),
             )
             resume_session_id = str(request.get("resume_session_id", ""))
             if resume_session_id:

@@ -12,6 +12,7 @@ Control Codex CLI or Claude Code sessions remotely through Telegram while keepin
 TelegramAgentBot is a Telegram controller for live Codex CLI / Claude Code sessions (`TELEGRAM_AGENT_BOT_AGENT_TYPE`):
 
 - New topics can choose `Codex` or `Claude Code`, then choose a configured model and reasoning level. `TELEGRAM_AGENT_BOT_AGENT_TYPE` remains the default.
+- Claude Code topics expose Fast mode as a separate session toggle after model and reasoning selection; it is not a reasoning level.
 - transcript parsing and monitoring target `~/.codex` for Codex, or `~/.claude/projects` for Claude Code
 - Telegram delivery and topic isolation are hardened for long-running agent sessions
 - tmux stays the source of truth, so you can return to the same terminal session on desktop

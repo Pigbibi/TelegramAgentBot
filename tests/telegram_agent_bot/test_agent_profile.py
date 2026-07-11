@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 from telegram_agent_bot.agent_profile import AgentProfile
 from telegram_agent_bot.config import config
+from telegram_agent_bot.handlers.directory_browser import build_profile_picker
 from telegram_agent_bot.tmux_manager import _agent_command_for_launch
 
 
@@ -15,6 +16,30 @@ def test_claude_code_alias_and_fast_effort_are_normalized():
     assert profile.agent_type == "claude"
     assert profile.reasoning_effort == "low"
     assert profile.display_name == "Claude Code"
+
+
+def test_fast_mode_is_separate_from_reasoning_and_buttons_fit_two_columns():
+    profile = AgentProfile(
+        agent_type="claude",
+        model="deepseek-v4-pro",
+        reasoning_effort="high",
+        fast_mode=True,
+    )
+
+    text, keyboard = build_profile_picker(profile, ["deepseek-v4-pro"])
+
+    assert "Reasoning: `Deep`" in text
+    assert "Fast mode: `On`" in text
+    assert keyboard.inline_keyboard[-2][0].text == "✅ Create session"
+    assert [button.text for button in keyboard.inline_keyboard[-5]] == [
+        "Low",
+        "Standard",
+    ]
+    assert [button.text for button in keyboard.inline_keyboard[-4]] == [
+        "✅ Deep",
+        "Max",
+    ]
+    assert keyboard.inline_keyboard[-3][0].text == "⚡ Fast: On"
 
 
 def test_claude_launch_uses_effort_flag_and_env_file(tmp_path):
