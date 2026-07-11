@@ -89,7 +89,10 @@ class TestParseStatusUpdate:
         pane = f"output\n✻ Reading file src/main.py\n{chrome}"
         assert parse_status_update(pane) == "Reading file src/main.py"
 
-    @pytest.mark.parametrize("completion", ["Brewed for 3s", "Cooked for 2.5s"])
+    @pytest.mark.parametrize(
+        "completion",
+        ["Brewed for 3s", "Cooked for 2.5s", "Worked for 4s"],
+    )
     def test_hides_completion_footer(self, completion: str, chrome: str):
         pane = f"final answer\n✻ {completion}\n{chrome}"
         assert parse_status_update(pane) is None
