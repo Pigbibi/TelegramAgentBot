@@ -246,6 +246,10 @@ be committed.
 | `TELEGRAM_AGENT_BOT_TMUX_SESSION_NAME` | `telegram-agent-bot` | tmux session name used by the bot |
 | `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | `codex` for Codex, `claude` for Claude Code | Command used when creating a new window |
 | `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` | `~/.telegram-agent-bot/claude.env` | Optional 0600 environment file for Claude Code/DeepSeek; sourced without putting the key in tmux command text |
+| `TELEGRAM_AGENT_BOT_CODEX_MODEL` | `gpt-5.6-luna` | Default Codex model for new topics |
+| `TELEGRAM_AGENT_BOT_CLAUDE_MODEL` | `deepseek-v4-flash` | Default Claude Code model for new topics; override for another provider |
+| `TELEGRAM_AGENT_BOT_CODEX_MODELS` | _(default only)_ | Comma-separated Codex model choices shown in the topic picker |
+| `TELEGRAM_AGENT_BOT_CLAUDE_MODELS` | _(default only)_ | Comma-separated Claude Code model choices shown in the topic picker |
 | `TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST` | `false` | Append Codex `--dangerously-bypass-hook-trust` for unattended hosts after you have vetted the configured hooks |
 | `TELEGRAM_AGENT_BOT_CODEX_PROJECTS_PATH` | `~/.codex` for Codex, `~/.claude/projects` for Claude Code | Transcript root to scan |
 | `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
@@ -295,14 +299,18 @@ Codex CLI. In this mode:
   settings/transcripts under `<account_home>/.claude`
 - the bot does not rely on `CLAUDE_HOME`
 
-Use `/agentlogin` and `/agentaccount` for provider-neutral account operations. In Claude mode they launch `claude auth login`. Claude Code
+Use `/codexlogin` and `/codexaccount` for Codex accounts, or `/claudelogin` and
+`/claudeaccount` for Claude Code accounts. The provider-neutral `/agentlogin` and
+`/agentaccount` commands remain available and follow
+`TELEGRAM_AGENT_BOT_AGENT_TYPE`. In Claude mode they launch `claude auth login`. Claude Code
 subscription/OAuth credentials can be OS- or keychain-dependent, so verify
 named-account switching on your target host before relying on automatic
 rotation; API-key settings in `settings.json` are copied with the account home.
 
-### 2.0.0 breaking changes
+### 2.0.0 interface notes
 
-- `/codexlogin` and `/codexaccount` were removed; use `/agentlogin` and `/agentaccount`.
+- `/codexlogin`, `/codexaccount`, `/claudelogin`, and `/claudeaccount` explicitly target one agent.
+- `/agentlogin` and `/agentaccount` remain compatibility aliases for the configured default agent.
 - `fast` is no longer a reasoning-effort value. Use the Claude Code Fast mode toggle after selecting a model and reasoning level.
 - Upgrade existing deployments and migrate bot commands before restarting them.
 
@@ -429,14 +437,19 @@ disabled**. This keeps single-account installs predictable.
 Telegram commands:
 
 ```text
-/agentlogin          # start agent login for the default home
-/agentlogin backup   # login into an isolated account home and save it as backup
-/agentaccount list
-/agentaccount use backup
-/agentaccount clear  # go back to the service user's default agent home
+/codexlogin          # login to Codex
+/codexlogin backup   # login to Codex and save a named account
+/codexaccount list
+/codexaccount use backup
+/claudelogin         # login to Claude Code
+/claudelogin backup  # login to Claude Code and save a named account
+/claudeaccount list
+/claudeaccount use backup
+/agentlogin          # compatibility alias for the configured default agent
+/agentaccount clear  # clear the configured default agent selection
 ```
 
-Named accounts are stored under `~/.telegram-agent-bot/accounts/`. Switching affects newly created topics only; existing topics keep their current tmux window. Use `/unbind` when you want the current topic to start a fresh session with the selected account. In Claude mode, validate named-account switching on your host before enabling rotation because Claude subscription credentials may be stored outside the copied home on some platforms.
+Named accounts are stored under `~/.telegram-agent-bot/accounts/<agent>/`. Switching affects newly created topics only; existing topics keep their current tmux window. Use `/unbind` when you want the current topic to start a fresh session with the selected account. In Claude mode, validate named-account switching on your host before enabling rotation because Claude subscription credentials may be stored outside the copied home on some platforms.
 
 If you want usage-limit failover, set `TELEGRAM_AGENT_BOT_ENABLE_ACCOUNT_ROTATION=true`. When a live session emits `usage_limit_exceeded`, TelegramAgentBot marks that window as exhausted; on the next message it can create a fresh tmux window on the next saved account and forward the message there. This is **session rotation**, not seamless continuation of the exact same agent session.
 
@@ -547,6 +560,10 @@ uv run telegram-agent-bot
 | `/usage` | Open Codex usage info in the TUI and send the parsed result; Codex-specific |
 | `/agentlogin [name]` | Start agent login from Telegram |
 | `/agentaccount` | List, save, select, or clear saved agent accounts |
+| `/codexlogin [name]` | Login to Codex and optionally save a named account |
+| `/codexaccount` | Manage saved Codex accounts |
+| `/claudelogin [name]` | Login to Claude Code and optionally save a named account |
+| `/claudeaccount` | Manage saved Claude Code accounts |
 
 ### Forwarded agent slash commands
 

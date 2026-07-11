@@ -90,7 +90,9 @@ from .agent_io import (
 )
 from .agent_profile import (
     AGENT_CLAUDE,
+    AGENT_CODEX,
     AgentProfile,
+    agent_display_name,
     normalize_agent_type,
     normalize_effort,
 )
@@ -1232,14 +1234,30 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update.message, f"```\n{trimmed}\n```")
 
 
-def _agent_login_executable() -> str:
+def _requested_agent_type(agent_type: str | None = None) -> str:
+    return normalize_agent_type(agent_type, config.agent_type)
+
+
+def _agent_command_name(agent_type: str, action: str) -> str:
+    prefix = "claude" if agent_type == AGENT_CLAUDE else "codex"
+    return f"/{prefix}{action}"
+
+
+def _agent_login_executable(agent_type: str | None = None) -> str:
     """Return the agent executable to use for device login.
 
     Supports both Codex (``codex login``) and Claude Code
     (``claude auth login``).
     """
+    selected_agent = _requested_agent_type(agent_type)
+    if agent_type is None:
+        command = config.codex_command
+    elif selected_agent == AGENT_CLAUDE:
+        command = config.claude_command
+    else:
+        command = getattr(config, "codex_cli_command", config.codex_command)
     try:
-        command_parts = shlex.split(config.codex_command)
+        command_parts = shlex.split(command)
     except ValueError:
         command_parts = []
 
@@ -1248,14 +1266,15 @@ def _agent_login_executable() -> str:
         if sep and name.isidentifier():
             continue
         return shutil.which(part) or part
-    default = "claude" if config.agent_type == "claude" else "codex"
+    default = "claude" if selected_agent == AGENT_CLAUDE else "codex"
     return shutil.which(default) or default
 
 
-def _agent_login_args() -> list[str]:
+def _agent_login_args(agent_type: str | None = None) -> list[str]:
     """Return the argv used to start an interactive agent login."""
-    executable = _agent_login_executable()
-    if config.agent_type == "claude":
+    selected_agent = _requested_agent_type(agent_type)
+    executable = _agent_login_executable(agent_type)
+    if selected_agent == AGENT_CLAUDE:
         return [executable, "auth", "login"]
     return [executable, "login", "--device-auth"]
 
@@ -1271,8 +1290,8 @@ def _extract_device_login_details(output: str) -> tuple[str | None, str | None]:
     )
 
 
-def _login_display_name(account_name: str | None) -> str:
-    agent_label = config.agent_type_display
+def _login_display_name(account_name: str | None, agent_type: str | None = None) -> str:
+    agent_label = agent_display_name(_requested_agent_type(agent_type))
     if account_name:
         return f"account `{account_name}`"
     return f"the service user's default {agent_label} account"
@@ -1283,24 +1302,28 @@ def _codex_auth_recovery_message(_pane_error: str | None = None) -> str:
     return AGENT_AUTH_RECOVERY_MESSAGE
 
 
-def _account_command_usage() -> str:
-    agent_label = config.agent_type_display
+def _account_command_usage(agent_type: str | None = None) -> str:
+    selected_agent = _requested_agent_type(agent_type)
+    account_command = _agent_command_name(selected_agent, "account")
+    login_command = _agent_command_name(selected_agent, "login")
     return (
         "Usage:\n"
-        "/agentaccount list\n"
-        "/agentaccount use <name>\n"
-        "/agentaccount clear\n"
-        "/agentaccount save <name>\n"
-        f"/agentlogin [name] — login to {agent_label}"
+        f"{account_command} list\n"
+        f"{account_command} use <name>\n"
+        f"{account_command} clear\n"
+        f"{account_command} save <name>\n"
+        f"{login_command} [name] — login to {agent_display_name(selected_agent)}"
     )
 
 
-def _format_account_status() -> str:
-    names = list_account_names()
-    current = get_current_account_name()
+def _format_account_status(agent_type: str | None = None) -> str:
+    names = list_account_names(agent_type)
+    current = get_current_account_name(agent_type)
     rotation = "enabled" if config.enable_account_rotation else "disabled"
-    agent_label = config.agent_type_display
-    env_var = "HOME" if config.agent_type == "claude" else "CODEX_HOME"
+    selected_agent = _requested_agent_type(agent_type)
+    agent_label = agent_display_name(selected_agent)
+    env_var = "HOME" if selected_agent == AGENT_CLAUDE else "CODEX_HOME"
+    login_command = _agent_command_name(selected_agent, "login")
     lines = [
         f"🔐 {agent_label} account status",
         f"Automatic quota rotation: {rotation}",
@@ -1317,7 +1340,7 @@ def _format_account_status() -> str:
             lines.append(f"- `{name}`{suffix}")
     else:
         lines.append("Saved accounts: none")
-    lines.append("Use /agentlogin [name] to refresh login from Telegram.")
+    lines.append(f"Use {login_command} [name] to refresh login from Telegram.")
     return "\n".join(lines)
 
 
@@ -1352,6 +1375,7 @@ async def _agent_login_worker(
     thread_id: int | None,
     account_name: str | None,
     login_key: str,
+    agent_type: str,
 ) -> None:
     """Run agent login and report status back to Telegram.
 
@@ -1363,13 +1387,13 @@ async def _agent_login_worker(
     try:
         env = os.environ.copy()
         if account_name:
-            account_home = prepare_account_home(account_name)
-            if config.agent_type == "claude":
+            account_home = prepare_account_home(account_name, agent_type)
+            if agent_type == AGENT_CLAUDE:
                 env["HOME"] = str(account_home)
             else:
                 env["CODEX_HOME"] = str(account_home)
 
-        login_args = _agent_login_args()
+        login_args = _agent_login_args(agent_type)
 
         process = await asyncio.create_subprocess_exec(
             *login_args,
@@ -1395,7 +1419,7 @@ async def _agent_login_worker(
             bot,
             chat_id,
             "🔐 Agent login started for "
-            f"{_login_display_name(account_name)}.\n"
+            f"{_login_display_name(account_name, agent_type)}.\n"
             f"Open: {login_url}\n"
             f"Code: `{login_code}`\n"
             "Expires in about 15 minutes. Only complete this login if you requested it.",
@@ -1411,7 +1435,7 @@ async def _agent_login_worker(
             await safe_send(
                 bot,
                 chat_id,
-                "❌ Agent login timed out. Run /agentlogin again when ready.",
+                f"❌ Agent login timed out. Run {_agent_command_name(agent_type, 'login')} again when ready.",
                 message_thread_id=thread_id,
             )
             return
@@ -1420,14 +1444,14 @@ async def _agent_login_worker(
             await safe_send(
                 bot,
                 chat_id,
-                "❌ Agent login failed or was cancelled. Run /agentlogin again if needed.",
+                f"❌ Agent login failed or was cancelled. Run {_agent_command_name(agent_type, 'login')} again if needed.",
                 message_thread_id=thread_id,
             )
             return
 
         if account_name and account_home is not None:
-            save_account_snapshot(account_name, account_home)
-            remember_current_account(account_name)
+            save_account_snapshot(account_name, account_home, agent_type)
+            remember_current_account(account_name, agent_type)
             await safe_send(
                 bot,
                 chat_id,
@@ -1458,19 +1482,23 @@ async def _agent_login_worker(
         _agent_login_tasks.pop(login_key, None)
 
 
-async def agent_login_command(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
+async def _agent_login_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, agent_type: str | None = None
 ) -> None:
-    """Start Codex device login from Telegram."""
+    """Start login for the configured or explicitly selected agent."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
     if not update.message or not update.effective_chat:
         return
 
+    selected_agent = _requested_agent_type(agent_type)
     args = context.args or []
     if len(args) > 1:
-        await safe_reply(update.message, "Usage: /agentlogin [account-name]")
+        await safe_reply(
+            update.message,
+            f"Usage: {_agent_command_name(selected_agent, 'login')} [account-name]",
+        )
         return
 
     account_name = args[0].strip() if args else None
@@ -1481,12 +1509,13 @@ async def agent_login_command(
         )
         return
 
-    login_key = account_name or _AGENT_LOGIN_DEFAULT_KEY
+    login_key = f"{selected_agent}:{account_name or _AGENT_LOGIN_DEFAULT_KEY}"
     existing = _agent_login_tasks.get(login_key)
     if existing and not existing.done():
         await safe_reply(
             update.message,
-            f"⏳ Agent login is already running for {_login_display_name(account_name)}.",
+            f"⏳ {agent_display_name(selected_agent)} login is already running for "
+            f"{_login_display_name(account_name, selected_agent)}.",
         )
         return
 
@@ -1497,42 +1526,64 @@ async def agent_login_command(
             thread_id=_get_thread_id(update),
             account_name=account_name,
             login_key=login_key,
+            agent_type=selected_agent,
         )
     )
     _agent_login_tasks[login_key] = task
     await safe_reply(
         update.message,
-        f"⏳ Starting Codex device login for {_login_display_name(account_name)}...",
+        f"⏳ Starting {agent_display_name(selected_agent)} login for "
+        f"{_login_display_name(account_name, selected_agent)}...",
     )
 
 
-async def agent_account_command(
+async def agent_login_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Manage saved Codex account snapshots."""
+    await _agent_login_command(update, context)
+
+
+async def codex_login_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    await _agent_login_command(update, context, AGENT_CODEX)
+
+
+async def claude_login_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    await _agent_login_command(update, context, AGENT_CLAUDE)
+
+
+async def _agent_account_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, agent_type: str | None = None
+) -> None:
+    """Manage saved account snapshots for one agent."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
     if not update.message:
         return
 
+    selected_agent = _requested_agent_type(agent_type)
     args = context.args or []
     if not args or args[0].lower() == "list":
-        await safe_reply(update.message, _format_account_status())
+        await safe_reply(update.message, _format_account_status(selected_agent))
         return
 
     action = args[0].lower()
     if action == "clear":
-        clear_current_account()
+        clear_current_account(selected_agent)
         await safe_reply(
             update.message,
-            "✅ New sessions will use the service user's default CODEX_HOME. "
+            f"✅ New {agent_display_name(selected_agent)} sessions will use the "
+            f"service user's default {'HOME' if selected_agent == AGENT_CLAUDE else 'CODEX_HOME'}. "
             "Existing topics keep their current window; use /unbind to start fresh.",
         )
         return
 
     if action not in {"save", "use", "switch"} or len(args) != 2:
-        await safe_reply(update.message, _account_command_usage())
+        await safe_reply(update.message, _account_command_usage(selected_agent))
         return
 
     account_name = args[1].strip()
@@ -1545,35 +1596,55 @@ async def agent_account_command(
 
     if action == "save":
         try:
-            save_account_snapshot(account_name)
+            save_account_snapshot(account_name, agent_type=selected_agent)
         except FileNotFoundError:
             await safe_reply(
                 update.message,
-                "❌ Agent auth data was not found. Use /agentlogin first, "
-                "or run codex login on this machine.",
+                f"❌ {agent_display_name(selected_agent)} auth data was not found. "
+                f"Use {_agent_command_name(selected_agent, 'login')} first.",
             )
             return
         await safe_reply(
             update.message,
-            f"✅ Saved current Codex login as account `{account_name}`. "
-            f"Use /agentaccount use {account_name} to select it for new sessions.",
+            f"✅ Saved current {agent_display_name(selected_agent)} login as account "
+            f"`{account_name}`. Use {_agent_command_name(selected_agent, 'account')} "
+            f"use {account_name} to select it for new sessions.",
         )
         return
 
-    names = list_account_names()
+    names = list_account_names(selected_agent)
     if account_name not in names:
         await safe_reply(
             update.message,
-            f"❌ Account `{account_name}` is not saved yet. Use /agentlogin {account_name} first.",
+            f"❌ Account `{account_name}` is not saved yet. Use "
+            f"{_agent_command_name(selected_agent, 'login')} {account_name} first.",
         )
         return
 
-    remember_current_account(account_name)
+    remember_current_account(account_name, selected_agent)
     await safe_reply(
         update.message,
         f"✅ New sessions will use saved account `{account_name}`. Existing topics "
         "keep their current window; use /unbind if you want this topic to start fresh.",
     )
+
+
+async def agent_account_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    await _agent_account_command(update, context)
+
+
+async def codex_account_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    await _agent_account_command(update, context, AGENT_CODEX)
+
+
+async def claude_account_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    await _agent_account_command(update, context, AGENT_CLAUDE)
 
 
 # --- Screenshot keyboard with quick control keys ---
@@ -4038,9 +4109,7 @@ async def _create_and_bind_window(
     )
     # Account snapshots are agent-specific. Do not apply a Codex snapshot to a
     # Claude topic (or vice versa) when both agents are enabled per topic.
-    launch_account = account_name or (
-        get_default_account_name() if profile.agent_type == config.agent_type else None
-    )
+    launch_account = account_name or get_default_account_name(profile.agent_type)
     (
         success,
         message,
@@ -4059,7 +4128,7 @@ async def _create_and_bind_window(
     )
     if success:
         if launch_account:
-            remember_current_account(launch_account)
+            remember_current_account(launch_account, profile.agent_type)
         if created_target and created_target.backend_id != "local":
             created_wname = created_wname or _format_remote_target(created_target)
             logger.info(
@@ -5660,6 +5729,10 @@ async def post_init(application: Application) -> None:
         BotCommand("usage", USAGE_COMMAND_DESCRIPTION),
         BotCommand("agentlogin", AGENT_LOGIN_COMMAND_DESCRIPTION),
         BotCommand("agentaccount", ACCOUNT_COMMAND_DESCRIPTION),
+        BotCommand("codexlogin", "Login to Codex"),
+        BotCommand("codexaccount", "Manage Codex accounts"),
+        BotCommand("claudelogin", "Login to Claude Code"),
+        BotCommand("claudeaccount", "Manage Claude Code accounts"),
     ]
     # Add Codex slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -5810,6 +5883,10 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("agentlogin", agent_login_command))
     application.add_handler(CommandHandler("agentaccount", agent_account_command))
+    application.add_handler(CommandHandler("codexlogin", codex_login_command))
+    application.add_handler(CommandHandler("codexaccount", codex_account_command))
+    application.add_handler(CommandHandler("claudelogin", claude_login_command))
+    application.add_handler(CommandHandler("claudeaccount", claude_account_command))
     application.add_handler(CommandHandler(["agentcmd", "cmd"], agent_command_mode))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window

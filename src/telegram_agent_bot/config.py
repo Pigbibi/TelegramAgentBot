@@ -149,9 +149,13 @@ class Config:
         self.codex_command = os.getenv(
             "TELEGRAM_AGENT_BOT_CODEX_COMMAND", _default_command
         )
-        self.codex_model = os.getenv("TELEGRAM_AGENT_BOT_CODEX_MODEL", "").strip()
+        self.codex_model = os.getenv(
+            "TELEGRAM_AGENT_BOT_CODEX_MODEL", "gpt-5.6-luna"
+        ).strip()
         self.claude_command = os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_COMMAND", "claude")
-        self.claude_model = os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_MODEL", "").strip()
+        self.claude_model = os.getenv(
+            "TELEGRAM_AGENT_BOT_CLAUDE_MODEL", "deepseek-v4-flash"
+        ).strip()
         claude_env_file = os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE", "")
         self.claude_env_file = (
             Path(claude_env_file).expanduser()
