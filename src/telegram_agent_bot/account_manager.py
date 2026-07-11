@@ -13,6 +13,7 @@ import re
 import shutil
 from pathlib import Path
 
+from .agent_profile import AGENT_CLAUDE, normalize_agent_type
 from .utils import app_dir
 
 logger = logging.getLogger(__name__)
@@ -21,30 +22,48 @@ TELEGRAM_AGENT_BOT_ACCOUNTS_DIR = app_dir() / "accounts"
 SNAPSHOT_DIR = TELEGRAM_AGENT_BOT_ACCOUNTS_DIR / "snapshots"
 CURRENT_NAME_FILE = TELEGRAM_AGENT_BOT_ACCOUNTS_DIR / "current_name"
 ACCOUNT_HOME_DIR = TELEGRAM_AGENT_BOT_ACCOUNTS_DIR / "homes"
+AGENT_ACCOUNT_ROOT = TELEGRAM_AGENT_BOT_ACCOUNTS_DIR
 CODEX_DIR = Path.home() / ".codex"
 CLAUDE_DIR = Path.home() / ".claude"
 _ACCOUNT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
 
-def agent_auth_dir() -> Path:
-    """Return the home auth directory for the configured agent type."""
+def _configured_agent_type(agent_type: str | None = None) -> str:
+    if agent_type is not None:
+        return normalize_agent_type(agent_type)
     from .config import config
 
-    if config.agent_type == "claude":
+    return normalize_agent_type(config.agent_type)
+
+
+def _account_storage_paths(agent_type: str | None = None) -> tuple[Path, Path, Path]:
+    """Return snapshot, current-selection, and home paths for one agent.
+
+    Calls without an explicit type retain the v1/v2 legacy layout so existing
+    Codex snapshots continue to work. Explicit Codex and Claude commands use
+    isolated namespaces to prevent same-named accounts from colliding.
+    """
+    if agent_type is None:
+        return SNAPSHOT_DIR, CURRENT_NAME_FILE, ACCOUNT_HOME_DIR
+    root = AGENT_ACCOUNT_ROOT / _configured_agent_type(agent_type)
+    return root / "snapshots", root / "current_name", root / "homes"
+
+
+def agent_auth_dir(agent_type: str | None = None) -> Path:
+    """Return the home auth directory for the configured agent type."""
+    if _configured_agent_type(agent_type) == AGENT_CLAUDE:
         return CLAUDE_DIR
     return CODEX_DIR
 
 
-def agent_auth_filename() -> str:
+def agent_auth_filename(agent_type: str | None = None) -> str:
     """Return the auth file name for the configured agent type.
 
     Codex stores auth in auth.json. Claude Code auth storage has changed
     across versions, so credentials.db is the legacy primary name while
     .credentials.json is also handled as a fallback.
     """
-    from .config import config
-
-    if config.agent_type == "claude":
+    if _configured_agent_type(agent_type) == AGENT_CLAUDE:
         return "credentials.db"
     return "auth.json"
 
@@ -65,13 +84,16 @@ def _has_auth_file(account_dir: Path) -> bool:
     )
 
 
-def list_account_names() -> list[str]:
+def list_account_names(agent_type: str | None = None) -> list[str]:
     """List saved account snapshot names in stable order."""
-    if not SNAPSHOT_DIR.exists():
+    snapshot_dir, _current_name_file, _account_home_dir = _account_storage_paths(
+        agent_type
+    )
+    if not snapshot_dir.exists():
         return []
     names = [
         path.name
-        for path in SNAPSHOT_DIR.iterdir()
+        for path in snapshot_dir.iterdir()
         if path.is_dir() and _has_auth_file(path)
     ]
     return sorted(names)
@@ -89,30 +111,35 @@ def list_account_homes() -> list[Path]:
     return sorted(homes)
 
 
-def get_current_account_name() -> str | None:
+def get_current_account_name(agent_type: str | None = None) -> str | None:
     """Return the manually selected snapshot name, if any."""
-    if not CURRENT_NAME_FILE.is_file():
+    _snapshot_dir, current_name_file, _account_home_dir = _account_storage_paths(
+        agent_type
+    )
+    if not current_name_file.is_file():
         return None
     try:
-        name = CURRENT_NAME_FILE.read_text(encoding="utf-8").strip()
+        name = current_name_file.read_text(encoding="utf-8").strip()
     except OSError:
         return None
-    return name if name in list_account_names() else None
+    return name if name in list_account_names(agent_type) else None
 
 
-def get_default_account_name() -> str | None:
+def get_default_account_name(agent_type: str | None = None) -> str | None:
     """Return the saved account selected for new sessions, if any.
 
     A missing current selection intentionally means "use the service user's
     default CODEX_HOME". Saving snapshots alone should not silently move new
     sessions away from the primary account.
     """
-    return get_current_account_name()
+    return get_current_account_name(agent_type)
 
 
-def get_next_account_name(current_name: str | None) -> str | None:
+def get_next_account_name(
+    current_name: str | None, agent_type: str | None = None
+) -> str | None:
     """Return the next snapshot name for quota rotation."""
-    names = list_account_names()
+    names = list_account_names(agent_type)
     if not names:
         return None
     if current_name in names:
@@ -120,24 +147,30 @@ def get_next_account_name(current_name: str | None) -> str | None:
         if len(names) == 1:
             return None
         return names[(idx + 1) % len(names)]
-    fallback_current = get_current_account_name()
+    fallback_current = get_current_account_name(agent_type)
     if fallback_current in names:
         return fallback_current
     return None
 
 
-def remember_current_account(name: str) -> None:
+def remember_current_account(name: str, agent_type: str | None = None) -> None:
     """Persist the snapshot name currently used for new sessions."""
     if not name:
         return
-    TELEGRAM_AGENT_BOT_ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
-    CURRENT_NAME_FILE.write_text(f"{name}\n", encoding="utf-8")
+    _snapshot_dir, current_name_file, _account_home_dir = _account_storage_paths(
+        agent_type
+    )
+    current_name_file.parent.mkdir(parents=True, exist_ok=True)
+    current_name_file.write_text(f"{name}\n", encoding="utf-8")
 
 
-def clear_current_account() -> None:
+def clear_current_account(agent_type: str | None = None) -> None:
     """Use the service user's default CODEX_HOME for new sessions."""
     with contextlib.suppress(OSError):
-        CURRENT_NAME_FILE.unlink()
+        _snapshot_dir, current_name_file, _account_home_dir = _account_storage_paths(
+            agent_type
+        )
+        current_name_file.unlink()
 
 
 def _copy_if_different(source: Path, dest: Path) -> None:
@@ -203,17 +236,18 @@ def _disable_agent_update_prompt(agent_type: str, config_file: Path) -> None:
     _disable_codex_update_prompt(config_file)
 
 
-def disable_codex_update_prompt(codex_home: Path | None = None) -> None:
+def disable_codex_update_prompt(
+    codex_home: Path | None = None, agent_type: str | None = None
+) -> None:
     """Disable the agent's startup update prompt for the selected home directory."""
-    from .config import config
-
+    selected_agent = _configured_agent_type(agent_type)
     if codex_home is None:
-        if config.agent_type == "claude":
-            codex_home = agent_auth_dir()
+        if selected_agent == AGENT_CLAUDE:
+            codex_home = agent_auth_dir(selected_agent)
         else:
             env_home = os.getenv("CODEX_HOME")
             codex_home = Path(env_home).expanduser() if env_home else CODEX_DIR
-    _disable_agent_update_prompt(config.agent_type, codex_home / "config.toml")
+    _disable_agent_update_prompt(selected_agent, codex_home / "config.toml")
 
 
 def _claude_dir_for_home(agent_home: Path) -> Path:
@@ -221,20 +255,18 @@ def _claude_dir_for_home(agent_home: Path) -> Path:
     return agent_home if agent_home.name == ".claude" else agent_home / ".claude"
 
 
-def _agent_auth_path(codex_home: Path) -> Path:
+def _agent_auth_path(codex_home: Path, agent_type: str | None = None) -> Path:
     """Return the auth file path for the configured agent type."""
-    from .config import config
-
-    if config.agent_type == "claude":
-        return _claude_dir_for_home(codex_home) / agent_auth_filename()
-    return codex_home / agent_auth_filename()
+    if _configured_agent_type(agent_type) == AGENT_CLAUDE:
+        return _claude_dir_for_home(codex_home) / agent_auth_filename(agent_type)
+    return codex_home / agent_auth_filename(agent_type)
 
 
-def _agent_auth_candidates(codex_home: Path) -> tuple[Path, ...]:
+def _agent_auth_candidates(
+    codex_home: Path, agent_type: str | None = None
+) -> tuple[Path, ...]:
     """Return known auth file locations for the configured agent type."""
-    from .config import config
-
-    if config.agent_type == "claude":
+    if _configured_agent_type(agent_type) == AGENT_CLAUDE:
         claude_home = _claude_dir_for_home(codex_home)
         return (
             claude_home / "credentials.db",
@@ -246,23 +278,26 @@ def _agent_auth_candidates(codex_home: Path) -> tuple[Path, ...]:
 def save_account_snapshot(
     name: str,
     codex_home: Path | None = None,
+    agent_type: str | None = None,
 ) -> Path:
     """Save auth file from the agent home into a named account snapshot."""
-    from .config import config
-
     if not is_valid_account_name(name):
         raise ValueError(f"Invalid account name: {name}")
-    codex_home = codex_home or agent_auth_dir()
-    snapshot_dir = SNAPSHOT_DIR / name
+    selected_agent = _configured_agent_type(agent_type)
+    codex_home = codex_home or agent_auth_dir(selected_agent)
+    snapshot_root, _current_name_file, _account_home_dir = _account_storage_paths(
+        agent_type
+    )
+    snapshot_dir = snapshot_root / name
     snapshot_dir.mkdir(parents=True, exist_ok=True)
 
     source_auth = codex_home / "auth.json"
-    if not source_auth.is_file() and config.agent_type == "codex":
+    if not source_auth.is_file() and selected_agent != AGENT_CLAUDE:
         raise FileNotFoundError(f"Codex auth file not found: {source_auth}")
 
     # Try agent-specific auth filename first, fall back to auth.json
     for candidate in (
-        *_agent_auth_candidates(codex_home),
+        *_agent_auth_candidates(codex_home, selected_agent),
         codex_home / "auth.json",
         codex_home / "credentials.db",
         codex_home / ".credentials.json",
@@ -273,30 +308,39 @@ def save_account_snapshot(
     else:
         raise FileNotFoundError(
             f"No auth file found in {codex_home} "
-            f"(looked for {agent_auth_filename()}, auth.json, credentials.db)"
+            f"(looked for {agent_auth_filename(selected_agent)}, auth.json, credentials.db)"
         )
     return snapshot_dir
 
 
-def prepare_account_home(name: str) -> Path:
+def prepare_account_home(name: str, agent_type: str | None = None) -> Path:
     """Create a dedicated agent home for a named account without requiring auth."""
-    from .config import config
-
     if not is_valid_account_name(name):
         raise ValueError(f"Invalid account name: {name}")
-    account_home = ACCOUNT_HOME_DIR / name
+    selected_agent = _configured_agent_type(agent_type)
+    _snapshot_dir, _current_name_file, account_home_root = _account_storage_paths(
+        agent_type
+    )
+    account_home = account_home_root / name
     account_home.mkdir(parents=True, exist_ok=True)
-    if config.agent_type == "claude":
+    if selected_agent == AGENT_CLAUDE:
         claude_home = _claude_dir_for_home(account_home)
         claude_home.mkdir(parents=True, exist_ok=True)
-        _copy_if_different(CLAUDE_DIR / "settings.json", claude_home / "settings.json")
+        _copy_if_different(
+            agent_auth_dir(selected_agent) / "settings.json",
+            claude_home / "settings.json",
+        )
     else:
-        _copy_if_different(CODEX_DIR / "config.toml", account_home / "config.toml")
-        _copy_if_different(CODEX_DIR / "hooks.json", account_home / "hooks.json")
-        disable_codex_update_prompt(account_home)
+        _copy_if_different(
+            agent_auth_dir(selected_agent) / "config.toml", account_home / "config.toml"
+        )
+        _copy_if_different(
+            agent_auth_dir(selected_agent) / "hooks.json", account_home / "hooks.json"
+        )
+        disable_codex_update_prompt(account_home, selected_agent)
     for child in ("memories", "tmp"):
         (account_home / child).mkdir(parents=True, exist_ok=True)
-    if config.agent_type == "claude":
+    if selected_agent == AGENT_CLAUDE:
         # Claude Code uses its own directory layout under .claude
         (_claude_dir_for_home(account_home) / "projects").mkdir(
             parents=True, exist_ok=True
@@ -304,24 +348,26 @@ def prepare_account_home(name: str) -> Path:
     return account_home
 
 
-def ensure_account_home(name: str) -> Path:
+def ensure_account_home(name: str, agent_type: str | None = None) -> Path:
     """Ensure a dedicated agent home exists for one saved snapshot."""
-    from .config import config
-
-    snapshot_dir = SNAPSHOT_DIR / name
-    auth_filename = agent_auth_filename()
+    selected_agent = _configured_agent_type(agent_type)
+    snapshot_root, _current_name_file, _account_home_dir = _account_storage_paths(
+        agent_type
+    )
+    snapshot_dir = snapshot_root / name
+    auth_filename = agent_auth_filename(selected_agent)
     snapshot_auth = snapshot_dir / auth_filename
     # Fallback: try auth.json for legacy codex snapshots
     fallback_auth = snapshot_dir / "auth.json"
-    account_home = prepare_account_home(name)
+    account_home = prepare_account_home(name, agent_type)
 
-    target_auth = _agent_auth_path(account_home)
-    target_candidates = _agent_auth_candidates(account_home)
+    target_auth = _agent_auth_path(account_home, selected_agent)
+    target_candidates = _agent_auth_candidates(account_home, selected_agent)
     if not any(candidate.is_file() for candidate in target_candidates):
         claude_json_auth = snapshot_dir / ".credentials.json"
         if snapshot_auth.is_file():
             _copy_if_different(snapshot_auth, target_auth)
-        elif claude_json_auth.is_file() and config.agent_type == "claude":
+        elif claude_json_auth.is_file() and selected_agent == AGENT_CLAUDE:
             _copy_if_different(
                 claude_json_auth,
                 _claude_dir_for_home(account_home) / ".credentials.json",
@@ -338,6 +384,6 @@ def ensure_account_home(name: str) -> Path:
         "Prepared agent home for %s at %s (type=%s)",
         name,
         account_home,
-        config.agent_type,
+        selected_agent,
     )
     return account_home

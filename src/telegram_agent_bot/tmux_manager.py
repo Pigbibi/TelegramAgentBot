@@ -912,13 +912,17 @@ class TmuxManager:
                                 cmd = f"{cmd} resume {resume_arg}"
                         if account_name:
                             if profile.agent_type == AGENT_CLAUDE:
-                                account_home = ensure_account_home(account_name)
+                                account_home = ensure_account_home(
+                                    account_name, profile.agent_type
+                                )
                                 cmd = (
                                     f"export HOME={shlex.quote(str(account_home))}; "
                                     f"{cmd}"
                                 )
                             else:
-                                account_home = ensure_account_home(account_name)
+                                account_home = ensure_account_home(
+                                    account_name, profile.agent_type
+                                )
                                 cmd = (
                                     f"export CODEX_HOME={shlex.quote(str(account_home))}; "
                                     f"{cmd}"

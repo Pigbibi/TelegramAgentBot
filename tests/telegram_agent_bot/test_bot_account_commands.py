@@ -67,6 +67,30 @@ def test_agent_login_args_use_claude_auth_login() -> None:
         ]
 
 
+def test_explicit_agent_login_args_ignore_global_agent_type() -> None:
+    from telegram_agent_bot import bot as bot_module
+
+    with (
+        patch.object(bot_module.config, "agent_type", "codex"),
+        patch.object(bot_module.config, "claude_command", "claude"),
+        patch.object(bot_module.config, "codex_cli_command", "codex"),
+        patch(
+            "telegram_agent_bot.bot.shutil.which",
+            side_effect=lambda value: f"/usr/bin/{value}",
+        ),
+    ):
+        assert bot_module._agent_login_args("claude") == [
+            "/usr/bin/claude",
+            "auth",
+            "login",
+        ]
+        assert bot_module._agent_login_args("codex") == [
+            "/usr/bin/codex",
+            "login",
+            "--device-auth",
+        ]
+
+
 @pytest.mark.asyncio
 async def test_agent_account_list_reports_status() -> None:
     update = _make_update()
@@ -108,7 +132,7 @@ async def test_agent_account_use_selects_saved_account() -> None:
 
         await agent_account_command(update, context)
 
-    remember.assert_called_once_with("backup")
+    remember.assert_called_once_with("backup", "codex")
     safe_reply.assert_awaited_once()
     assert (
         "New sessions will use saved account `backup`" in safe_reply.await_args.args[1]

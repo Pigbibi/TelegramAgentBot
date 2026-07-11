@@ -17,6 +17,10 @@ def _base_env(monkeypatch, tmp_path):
     monkeypatch.delenv("CODEX_HOME", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CODEX_COMMAND", raising=False)
+    monkeypatch.delenv("TELEGRAM_AGENT_BOT_CODEX_MODEL", raising=False)
+    monkeypatch.delenv("TELEGRAM_AGENT_BOT_CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("TELEGRAM_AGENT_BOT_CODEX_MODELS", raising=False)
+    monkeypatch.delenv("TELEGRAM_AGENT_BOT_CLAUDE_MODELS", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_ENABLE_ACCOUNT_ROTATION", raising=False)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test:token")
@@ -36,6 +40,13 @@ class TestConfigValid:
         cfg = Config()
         assert cfg.codex_command == "codex"
         assert cfg.codex_bypass_hook_trust is False
+
+    def test_default_models_are_agent_specific(self):
+        cfg = Config()
+        assert cfg.codex_model == "gpt-5.6-luna"
+        assert cfg.codex_models == ("gpt-5.6-luna",)
+        assert cfg.claude_model == "deepseek-v4-flash"
+        assert cfg.claude_models == ("deepseek-v4-flash",)
 
     def test_claude_agent_defaults(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "claude")
