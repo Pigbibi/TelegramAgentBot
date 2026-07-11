@@ -39,6 +39,16 @@ def test_extract_codex_model_ids_uses_app_server_model_field() -> None:
     ) == ["gpt-5.6-luna", "o3"]
 
 
+def test_merge_models_drops_unavailable_default_after_successful_discovery() -> None:
+    from telegram_agent_bot.model_catalog import _merge_models
+
+    assert _merge_models("gpt-5.6-luna", ["gpt-5.5", "gpt-5.4"]) == (
+        "gpt-5.5",
+        "gpt-5.4",
+    )
+    assert _merge_models("gpt-5.6-luna", []) == ("gpt-5.6-luna",)
+
+
 @pytest.mark.asyncio
 async def test_refresh_model_catalog_updates_only_auto_lists(monkeypatch) -> None:
     from telegram_agent_bot import model_catalog
@@ -60,7 +70,6 @@ async def test_refresh_model_catalog_updates_only_auto_lists(monkeypatch) -> Non
 
     assert model_catalog.config.codex_models == ("gpt-5.6-luna", "gpt-5.6-sol")
     assert model_catalog.config.claude_models == (
-        "deepseek-v4-flash",
         "deepseek-v4-pro",
         "sonnet",
         "opus",

@@ -122,7 +122,13 @@ def _merge_models(
     *,
     aliases: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
-    values = [preferred, *discovered, *aliases]
+    # A successful provider catalog is authoritative. Only keep the configured
+    # default when discovery returned nothing, so the picker does not advertise
+    # a model that the current account/build did not report as available.
+    values = ([preferred] if not discovered or preferred in discovered else []) + [
+        *discovered,
+        *aliases,
+    ]
     return tuple(dict.fromkeys(value for value in values if value))
 
 
