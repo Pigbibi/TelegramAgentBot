@@ -248,8 +248,9 @@ be committed.
 | `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` | `~/.telegram-agent-bot/claude.env` | Optional 0600 environment file for Claude Code/DeepSeek; sourced without putting the key in tmux command text |
 | `TELEGRAM_AGENT_BOT_CODEX_MODEL` | `gpt-5.6-luna` | Default Codex model for new topics |
 | `TELEGRAM_AGENT_BOT_CLAUDE_MODEL` | `deepseek-v4-flash` | Default Claude Code model for new topics; override for another provider |
-| `TELEGRAM_AGENT_BOT_CODEX_MODELS` | _(default only)_ | Comma-separated Codex model choices shown in the topic picker |
-| `TELEGRAM_AGENT_BOT_CLAUDE_MODELS` | _(default only)_ | Comma-separated Claude Code model choices shown in the topic picker |
+| `TELEGRAM_AGENT_BOT_CODEX_MODELS` | `auto` | `auto` uses the installed Codex app-server catalog; a comma-separated list pins the choices |
+| `TELEGRAM_AGENT_BOT_CLAUDE_MODELS` | `auto` | `auto` queries the configured Anthropic-compatible provider; a comma-separated list pins the choices |
+| `TELEGRAM_AGENT_BOT_MODEL_DISCOVERY` | `true` | Refresh automatic model choices once at startup; failed discovery falls back to configured defaults |
 | `TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST` | `false` | Append Codex `--dangerously-bypass-hook-trust` for unattended hosts after you have vetted the configured hooks |
 | `TELEGRAM_AGENT_BOT_CODEX_PROJECTS_PATH` | `~/.codex` for Codex, `~/.claude/projects` for Claude Code | Transcript root to scan |
 | `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
@@ -282,6 +283,17 @@ be committed.
 | `AI_TRANSCRIPTION_GOOGLE_MODEL` | `gemini-2.0-flash-lite` | Model for Google Gemini provider |
 
 Telegram formatting uses MarkdownV2 with plain-text fallback when needed.
+
+### Automatic model discovery
+
+When either model list is empty or set to `auto`, the bot refreshes the picker
+once during startup. Codex uses the installed CLI's official `model/list`
+app-server method, which reflects the current Codex account and build. Claude
+Code uses the configured Anthropic-compatible provider's model-list endpoint;
+this supports DeepSeek's Anthropic gateway when its `claude.env` contains the
+provider credentials. If discovery is unavailable, the configured default
+model remains selectable. Set an explicit comma-separated model list when a
+gateway uses custom aliases or when you want a pinned catalog.
 
 ### Claude Code mode
 

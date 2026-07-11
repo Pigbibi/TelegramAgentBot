@@ -168,11 +168,14 @@ class Config:
         self.claude_reasoning_effort = normalize_effort(
             os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_REASONING_EFFORT", "high")
         )
-        self.codex_models = self._parse_models(
-            os.getenv("TELEGRAM_AGENT_BOT_CODEX_MODELS", ""), self.codex_model
-        )
+        self.model_discovery_enabled = os.getenv(
+            "TELEGRAM_AGENT_BOT_MODEL_DISCOVERY", "true"
+        ).strip().lower() not in {"0", "false", "no", "off"}
+        self.codex_models_raw = os.getenv("TELEGRAM_AGENT_BOT_CODEX_MODELS", "")
+        self.claude_models_raw = os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_MODELS", "")
+        self.codex_models = self._parse_models(self.codex_models_raw, self.codex_model)
         self.claude_models = self._parse_models(
-            os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_MODELS", ""), self.claude_model
+            self.claude_models_raw, self.claude_model
         )
         self.codex_bypass_hook_trust = (
             os.getenv("TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST", "").lower()
@@ -359,6 +362,8 @@ class Config:
 
     @staticmethod
     def _parse_models(raw: str, configured_model: str) -> tuple[str, ...]:
+        if raw.strip().lower() == "auto":
+            raw = ""
         models = [
             item.strip() for item in raw.replace("\n", ",").split(",") if item.strip()
         ]

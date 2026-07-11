@@ -199,6 +199,7 @@ from .handlers.message_sender import (
     send_with_fallback,
 )
 from .markdown_v2 import convert_markdown
+from .model_catalog import refresh_model_catalog
 from .handlers.response_builder import build_response_parts
 from .handlers.status_polling import (
     clear_window_working,
@@ -5715,6 +5716,8 @@ async def post_init(application: Application) -> None:
     global _runtime_stopped
 
     _runtime_stopped = False
+
+    await refresh_model_catalog()
 
     await application.bot.delete_my_commands()
 
