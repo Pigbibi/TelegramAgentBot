@@ -2087,6 +2087,8 @@ class SessionManager:
             return [], 0
 
         parsed_entries, _ = TranscriptParser.parse_entries(entries)
+        # Model reasoning is an internal implementation detail and must not be
+        # exposed through Telegram history, even when commentary is enabled.
         all_messages = [
             {
                 "role": e.role,
@@ -2095,6 +2097,7 @@ class SessionManager:
                 "timestamp": e.timestamp,
             }
             for e in parsed_entries
+            if e.content_type != "thinking"
         ]
 
         return all_messages, len(all_messages)

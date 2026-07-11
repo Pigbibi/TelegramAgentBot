@@ -220,6 +220,42 @@ async def test_handle_new_message_renders_encrypted_reasoning_as_status() -> Non
 
 
 @pytest.mark.asyncio
+async def test_handle_new_message_hides_plain_reasoning() -> None:
+    bot = AsyncMock()
+    msg = NewMessage(
+        session_id="local-1",
+        text="The user just asked a question.",
+        is_complete=True,
+        content_type="thinking",
+        source_offset=123,
+    )
+
+    with (
+        patch("telegram_agent_bot.bot.session_manager") as mock_sm,
+        patch(
+            "telegram_agent_bot.bot.enqueue_status_update",
+            new_callable=AsyncMock,
+        ) as enqueue_status_update,
+        patch(
+            "telegram_agent_bot.bot.enqueue_content_message",
+            new_callable=AsyncMock,
+        ) as enqueue_content_message,
+        patch("telegram_agent_bot.bot.build_response_parts") as build_response_parts,
+    ):
+        mock_sm.find_users_for_session = AsyncMock(return_value=[(12345, "@1", 42)])
+        mock_sm.find_users_for_target_session.return_value = []
+
+        from telegram_agent_bot.bot import handle_new_message
+
+        await handle_new_message(msg, bot)
+
+    enqueue_status_update.assert_not_awaited()
+    enqueue_content_message.assert_not_awaited()
+    build_response_parts.assert_not_called()
+    mock_sm.update_user_window_offset.assert_called_once_with(12345, "@1", 123)
+
+
+@pytest.mark.asyncio
 async def test_handle_new_message_renders_wait_tool_use_as_status() -> None:
     bot = AsyncMock()
     msg = NewMessage(

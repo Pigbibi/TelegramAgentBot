@@ -1117,6 +1117,10 @@ async def _check_and_send_status(
     status_text = status_text_for_pane(user_id, thread_id, window_id, pane_text)
     if status_text:
         await _do_send_status_message(bot, user_id, tid, window_id, status_text)
+    else:
+        # Also remove stale non-working footers such as Claude Code's
+        # "Brewed for ..." status after the final answer is delivered.
+        await _do_clear_status_message(bot, user_id, tid)
 
 
 async def enqueue_content_message(

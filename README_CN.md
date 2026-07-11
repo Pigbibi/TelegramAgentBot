@@ -195,7 +195,7 @@ TELEGRAM_AGENT_BOT_CODEX_COMMAND=codex
 TELEGRAM_AGENT_BOT_AUTO_UPDATE=true
 TELEGRAM_AGENT_BOT_CODEX_UPDATE_CHECK=true
 TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE=true
-TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES=true
+TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES=false
 # 可选：Claude Code 模式
 # TELEGRAM_AGENT_BOT_AGENT_TYPE=claude
 # 把上面的 TELEGRAM_AGENT_BOT_CODEX_COMMAND 改成 claude，或删除该行以使用 Claude 默认值。
@@ -261,7 +261,7 @@ TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES=true
 | `TELEGRAM_AGENT_BOT_CODEX_UPDATE_CHECK` | `false` | 在空闲更新循环里检查 Codex CLI 的 npm 新版本 |
 | `TELEGRAM_AGENT_BOT_CODEX_UPDATE_NPM` | `npm` | Codex CLI 检查/更新使用的 npm 命令；明确允许时可设为 `sudo -n npm` |
 | `TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE` | `false` | 空闲且发现新版本时，执行 `npm install -g @openai/codex@latest` |
-| `TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES` | `false` | 是否把 Codex commentary/thinking 转发到 Telegram |
+| `TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES` | `false` | 是否把中间 commentary 转发到 Telegram；模型 reasoning 始终隐藏 |
 | `TELEGRAM_AGENT_BOT_SHOW_TOOL_CALLS` | `true` | 是否转发工具调用通知和输出 |
 | `TELEGRAM_AGENT_BOT_SHOW_BASH_TOOL_CALLS` | `true` | 是否转发 Bash 命令和输出；设为 `false` 只隐藏 Bash |
 | `TELEGRAM_AGENT_BOT_SHOW_HIDDEN_DIRS` | `false` | 目录浏览器里是否显示点目录 |
@@ -565,7 +565,7 @@ topic 绑定以后，直接继续发文字或语音消息就行。
 监控器会轮询 transcript，并可转发：
 
 - 助手回复
-- commentary / thinking 输出
+- 中间 commentary 输出（模型 reasoning 会隐藏）
 - tool use 和 tool result
 - 本地命令输出
 - tmux 里已经公开可见的过程进度，比如 `Explored`、`Ran`、`Searched`、`Searching the web`

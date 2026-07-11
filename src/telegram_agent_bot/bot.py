@@ -5631,20 +5631,23 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         if not is_remote_target and get_interactive_msg_id(user_id, thread_id):
             await clear_interactive_msg(user_id, bot, thread_id)
 
-        # Show encrypted-only reasoning as an ephemeral status bubble, not a
-        # persistent Telegram content message. It will be edited/deleted by the
-        # normal status lifecycle when real output arrives.
-        if (
-            msg.content_type == "thinking"
-            and TranscriptParser.is_encrypted_reasoning_placeholder(msg.text)
-        ):
-            await enqueue_status_update(
-                bot,
-                user_id,
-                wid,
-                "💭 Thinking…\n◦ Working on it…",
-                thread_id=thread_id,
-            )
+        # Keep reasoning out of persistent Telegram content. Encrypted-only
+        # reasoning gets a generic status bubble; terminal polling provides
+        # public progress separately.
+        if msg.content_type == "thinking":
+            # Never expose model reasoning text to Telegram. Keep only a
+            # generic status for encrypted reasoning; terminal polling
+            # provides live public progress updates separately.
+            if TranscriptParser.is_encrypted_reasoning_placeholder(msg.text):
+                await enqueue_status_update(
+                    bot,
+                    user_id,
+                    wid,
+                    "💭 Thinking…\n◦ Working on it…",
+                    thread_id=thread_id,
+                )
+            if not is_remote_target and msg.source_offset > 0:
+                await _mark_transcript_message_delivered(user_id, wid, msg)
             continue
 
         # Runtime write_stdin events are displayed as Wait(background terminal).

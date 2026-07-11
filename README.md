@@ -201,7 +201,7 @@ TELEGRAM_AGENT_BOT_CODEX_COMMAND=codex
 TELEGRAM_AGENT_BOT_AUTO_UPDATE=true
 TELEGRAM_AGENT_BOT_CODEX_UPDATE_CHECK=true
 TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE=true
-TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES=true
+TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES=false
 # Optional Claude Code mode:
 # TELEGRAM_AGENT_BOT_AGENT_TYPE=claude
 # Change TELEGRAM_AGENT_BOT_CODEX_COMMAND above to claude, or remove it to use
@@ -272,7 +272,7 @@ be committed.
 | `TELEGRAM_AGENT_BOT_CODEX_UPDATE_CHECK` | `false` | Check npm for Codex CLI updates during the idle update loop |
 | `TELEGRAM_AGENT_BOT_CODEX_UPDATE_NPM` | `npm` | npm command used for Codex CLI checks/updates; can be `sudo -n npm` if explicitly allowed |
 | `TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE` | `false` | Run `npm install -g @openai/codex@latest` when an idle Codex update exists |
-| `TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES` | `false` | Forward Codex commentary/thinking messages |
+| `TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES` | `false` | Forward intermediary commentary messages; model reasoning is always hidden |
 | `TELEGRAM_AGENT_BOT_SHOW_TOOL_CALLS` | `true` | Forward tool call notifications and outputs |
 | `TELEGRAM_AGENT_BOT_SHOW_BASH_TOOL_CALLS` | `true` | Forward Bash command and output notifications; set `false` to hide Bash only |
 | `TELEGRAM_AGENT_BOT_SHOW_HIDDEN_DIRS` | `false` | Show dot-directories in the directory picker |
@@ -628,7 +628,7 @@ transcript file is kept on disk under the configured transcript root.
 The monitor polls transcript files and can forward:
 
 - assistant replies
-- commentary / thinking output
+- intermediary commentary output (model reasoning is hidden)
 - tool use and tool results
 - local command output
 - public progress updates visible in tmux, such as `Explored`, `Ran`, `Searched`, and `Searching the web`
