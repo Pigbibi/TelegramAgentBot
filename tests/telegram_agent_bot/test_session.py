@@ -257,7 +257,7 @@ class TestSendToWindow:
         ok, message = await mgr.send_to_window("@1", "hi again")
 
         assert ok is False
-        assert "Use /codexlogin" in message
+        assert "Use /agentlogin" in message
         send_keys.assert_not_awaited()
 
     @pytest.mark.asyncio

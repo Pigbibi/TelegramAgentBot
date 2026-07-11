@@ -1,4 +1,4 @@
-# TelegramAgentBot
+# TelegramAgentBot 2.0.0
 
 [English README](README.md)
 
@@ -103,10 +103,10 @@ codex login
 如果你平时有多账号切换，或需要在不 SSH 到服务器的情况下重新登录，可以直接用 Telegram 命令：
 
 ```text
-/codexlogin          # 重新登录默认 agent home
-/codexlogin backup   # 登录并保存一个名为 backup 的账号
-/codexaccount list
-/codexaccount use backup
+/agentlogin          # 重新登录默认 agent home
+/agentlogin backup   # 登录并保存一个名为 backup 的账号
+/agentaccount list
+/agentaccount use backup
 ```
 
 如果 `~/.telegram-agent-bot/.env` 里还是占位值，脚本只会写好 launchd 文件，
@@ -287,7 +287,13 @@ TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES=true
 - bot 创建的 Claude home 通过 `HOME=<account_home>` 隔离，并把 settings/transcripts 放在 `<account_home>/.claude`
 - bot 不依赖 `CLAUDE_HOME`
 
-`/codexlogin` 和 `/codexaccount` 的命令名为了兼容旧版本保留；Claude 模式下会执行 `claude auth login`。Claude Code 订阅/OAuth 凭据可能依赖操作系统或 keychain，启用自动轮换前请先在目标机器验证命名账号切换；写在 `settings.json` 里的 API key 配置会随账号 home 复制。
+使用 `/agentlogin` 和 `/agentaccount` 执行与 provider 无关的账号操作；Claude 模式下会执行 `claude auth login`。Claude Code 订阅/OAuth 凭据可能依赖操作系统或 keychain，启用自动轮换前请先在目标机器验证命名账号切换；写在 `settings.json` 里的 API key 配置会随账号 home 复制。
+
+### 2.0.0 不兼容变更
+
+- 删除 `/codexlogin` 和 `/codexaccount`，改用 `/agentlogin` 和 `/agentaccount`。
+- `fast` 不再是推理档位；选择模型和推理等级后，使用独立的 Claude Code Fast mode 开关。
+- 现有部署需要先升级并迁移 Telegram 命令，再重启服务。
 
 ### 项目根目录
 
@@ -392,11 +398,11 @@ TELEGRAM_AGENT_BOT_CODEX_COMMAND=IS_SANDBOX=1 codex --dangerously-bypass-approva
 Telegram 命令：
 
 ```text
-/codexlogin          # 给默认 agent home 发起登录
-/codexlogin backup   # 登录到隔离账号 home，并保存为 backup
-/codexaccount list
-/codexaccount use backup
-/codexaccount clear  # 回到服务用户默认 agent home
+/agentlogin          # 给默认 agent home 发起登录
+/agentlogin backup   # 登录到隔离账号 home，并保存为 backup
+/agentaccount list
+/agentaccount use backup
+/agentaccount clear  # 回到服务用户默认 agent home
 ```
 
 命名账号保存在 `~/.telegram-agent-bot/accounts/`。切换只影响新创建的 topic；已有 topic 仍绑定原 tmux window。如果希望当前 topic 使用新账号，请先 `/unbind`，再重新发消息创建新 session。Claude 模式下，订阅凭据在部分平台可能不完全跟随 home 复制，启用自动轮换前请先在目标机器验证。
@@ -506,8 +512,8 @@ uv run telegram-agent-bot
 | `/kill` | 杀掉绑定的 tmux 窗口并清理 topic 绑定 |
 | `/unbind` | 解绑 topic，但不杀当前 tmux 窗口 |
 | `/usage` | 打开 Codex 的 usage 界面并回传解析结果；Codex 专用 |
-| `/codexlogin [name]` | 从 Telegram 发起 agent 登录 |
-| `/codexaccount` | 查看、保存、选择或清除 agent 账号 |
+| `/agentlogin [name]` | 从 Telegram 发起 agent 登录 |
+| `/agentaccount` | 查看、保存、选择或清除 agent 账号 |
 
 ### 会转发给 agent 的 slash 命令
 

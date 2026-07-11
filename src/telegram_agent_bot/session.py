@@ -1960,7 +1960,7 @@ class SessionManager:
         if pane_text and extract_auth_error_message(pane_text):
             return (
                 False,
-                "Agent login expired or was revoked. Use /codexlogin to sign "
+                "Agent login expired or was revoked. Use /agentlogin to sign "
                 "in again, then send your message again.",
             )
         if reject_busy and pane_text and not is_codex_input_ready(pane_text):
