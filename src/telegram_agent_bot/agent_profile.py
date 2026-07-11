@@ -1,8 +1,4 @@
-"""Per-session agent launch profiles.
-
-The bot keeps the legacy ``claude`` spelling internally while accepting
-``claudecode`` from user-facing configuration and callbacks.
-"""
+"""Agent launch profiles shared by the Telegram UI and backends."""
 
 from __future__ import annotations
 
@@ -13,8 +9,6 @@ AGENT_CLAUDE = "claude"
 SUPPORTED_AGENT_TYPES = (AGENT_CODEX, AGENT_CLAUDE)
 
 EFFORT_LOW = "low"
-# Backward-compatible alias for older config/tests that used Fast as an effort.
-EFFORT_FAST = EFFORT_LOW
 EFFORT_STANDARD = "medium"
 EFFORT_DEEP = "high"
 EFFORT_MAX = "max"
@@ -30,10 +24,8 @@ def normalize_agent_type(value: str | None, default: str = AGENT_CODEX) -> str:
 
 
 def normalize_effort(value: str | None, default: str = EFFORT_STANDARD) -> str:
-    """Normalize an effort value, accepting ``fast`` as a friendly alias."""
+    """Normalize a reasoning effort value."""
     normalized = (value or default).strip().lower()
-    if normalized == "fast":
-        normalized = EFFORT_FAST
     return normalized if normalized in SUPPORTED_EFFORTS else default
 
 

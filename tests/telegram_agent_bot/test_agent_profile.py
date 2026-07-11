@@ -6,16 +6,22 @@ from telegram_agent_bot.handlers.directory_browser import build_profile_picker
 from telegram_agent_bot.tmux_manager import _agent_command_for_launch
 
 
-def test_claude_code_alias_and_fast_effort_are_normalized():
+def test_claude_code_alias_and_low_effort_are_normalized():
     profile = AgentProfile(
         agent_type="claudecode",
         model="deepseek-v4-pro",
-        reasoning_effort="fast",
+        reasoning_effort="low",
     )
 
     assert profile.agent_type == "claude"
     assert profile.reasoning_effort == "low"
     assert profile.display_name == "Claude Code"
+
+
+def test_fast_is_no_longer_a_reasoning_effort():
+    profile = AgentProfile(agent_type="claude", reasoning_effort="fast")
+
+    assert profile.reasoning_effort == "medium"
 
 
 def test_fast_mode_is_separate_from_reasoning_and_buttons_fit_two_columns():

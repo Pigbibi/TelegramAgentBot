@@ -1,6 +1,6 @@
 [project]
 name = "telegram-agent-bot"
-version = "1.0.0"
+version = "2.0.0"
 description = "Telegram bot for monitoring Codex CLI / Claude Code sessions via tmux"
 readme = "README.md"
 requires-python = ">=3.12"

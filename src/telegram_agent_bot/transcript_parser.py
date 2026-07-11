@@ -96,7 +96,7 @@ class TranscriptParser:
         "refresh_token_reused",
         "token_invalidated",
     )
-    _AUTH_ERROR_HINT = "Use /codexlogin to start an agent device login from Telegram."
+    _AUTH_ERROR_HINT = "Use /agentlogin to start an agent device login from Telegram."
     _ENCRYPTED_REASONING_PLACEHOLDER = "Working on it…"
 
     @classmethod

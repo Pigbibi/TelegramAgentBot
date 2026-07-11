@@ -246,8 +246,8 @@ MEDIA_DOWNLOAD_READ_TIMEOUT_SECONDS = 60.0
 MEDIA_DOWNLOAD_WRITE_TIMEOUT_SECONDS = 30.0
 MEDIA_DOWNLOAD_POOL_TIMEOUT_SECONDS = 10.0
 BACKGROUND_WAIT_TOOL_STATUS_TEXT = "💭 Thinking…\n◦ Working in background terminal…"
-CODEX_AUTH_RECOVERY_MESSAGE = (
-    "Agent login expired or was revoked. Use /codexlogin to sign in again, "
+AGENT_AUTH_RECOVERY_MESSAGE = (
+    "Agent login expired or was revoked. Use /agentlogin to sign in again, "
     "then send your message again."
 )
 
@@ -298,13 +298,13 @@ ESC_COMMAND_DESCRIPTION = f"Interrupt current {PRODUCT_NAME} run"
 INTERRUPT_COMMAND_DESCRIPTION = "Interrupt; optional text sends next"
 USAGE_COMMAND_DESCRIPTION = f"Show {PRODUCT_NAME} usage remaining"
 ACCOUNT_COMMAND_DESCRIPTION = "Manage agent login accounts"
-CODEX_LOGIN_COMMAND_DESCRIPTION = "Start agent device login"
-CODEX_LOGIN_TIMEOUT_SECONDS = 16 * 60
-_CODEX_LOGIN_DEFAULT_KEY = "__default__"
+AGENT_LOGIN_COMMAND_DESCRIPTION = "Start agent device login"
+AGENT_LOGIN_TIMEOUT_SECONDS = 16 * 60
+_AGENT_LOGIN_DEFAULT_KEY = "__default__"
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _DEVICE_LOGIN_URL_RE = re.compile(r"https?://\S+")
 _DEVICE_LOGIN_CODE_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4,}\b")
-_codex_login_tasks: dict[str, asyncio.Task[None]] = {}
+_agent_login_tasks: dict[str, asyncio.Task[None]] = {}
 
 
 async def _safe_send_typing_action(chat: Chat, *, source: str) -> None:
@@ -1280,18 +1280,18 @@ def _login_display_name(account_name: str | None) -> str:
 
 def _codex_auth_recovery_message(_pane_error: str | None = None) -> str:
     """Return the Telegram-facing recovery instruction for Codex auth failures."""
-    return CODEX_AUTH_RECOVERY_MESSAGE
+    return AGENT_AUTH_RECOVERY_MESSAGE
 
 
 def _account_command_usage() -> str:
     agent_label = config.agent_type_display
     return (
         "Usage:\n"
-        "/codexaccount list\n"
-        "/codexaccount use <name>\n"
-        "/codexaccount clear\n"
-        "/codexaccount save <name>\n"
-        f"/codexlogin [name] — login to {agent_label}"
+        "/agentaccount list\n"
+        "/agentaccount use <name>\n"
+        "/agentaccount clear\n"
+        "/agentaccount save <name>\n"
+        f"/agentlogin [name] — login to {agent_label}"
     )
 
 
@@ -1317,11 +1317,11 @@ def _format_account_status() -> str:
             lines.append(f"- `{name}`{suffix}")
     else:
         lines.append("Saved accounts: none")
-    lines.append("Use /codexlogin [name] to refresh login from Telegram.")
+    lines.append("Use /agentlogin [name] to refresh login from Telegram.")
     return "\n".join(lines)
 
 
-async def _wait_for_codex_login_details(
+async def _wait_for_agent_login_details(
     process: asyncio.subprocess.Process,
 ) -> tuple[str | None, str | None]:
     """Read Codex login output until the URL/code pair appears."""
@@ -1345,7 +1345,7 @@ async def _wait_for_codex_login_details(
     return _extract_device_login_details(output)
 
 
-async def _codex_login_worker(
+async def _agent_login_worker(
     *,
     bot: Bot,
     chat_id: int,
@@ -1378,7 +1378,7 @@ async def _codex_login_worker(
             env=env,
         )
 
-        login_url, login_code = await _wait_for_codex_login_details(process)
+        login_url, login_code = await _wait_for_agent_login_details(process)
         if not login_url or not login_code:
             if process.returncode is None:
                 process.terminate()
@@ -1404,14 +1404,14 @@ async def _codex_login_worker(
 
         try:
             return_code = await asyncio.wait_for(
-                process.wait(), timeout=CODEX_LOGIN_TIMEOUT_SECONDS
+                process.wait(), timeout=AGENT_LOGIN_TIMEOUT_SECONDS
             )
         except TimeoutError:
             process.terminate()
             await safe_send(
                 bot,
                 chat_id,
-                "❌ Agent login timed out. Run /codexlogin again when ready.",
+                "❌ Agent login timed out. Run /agentlogin again when ready.",
                 message_thread_id=thread_id,
             )
             return
@@ -1420,7 +1420,7 @@ async def _codex_login_worker(
             await safe_send(
                 bot,
                 chat_id,
-                "❌ Agent login failed or was cancelled. Run /codexlogin again if needed.",
+                "❌ Agent login failed or was cancelled. Run /agentlogin again if needed.",
                 message_thread_id=thread_id,
             )
             return
@@ -1455,10 +1455,10 @@ async def _codex_login_worker(
             message_thread_id=thread_id,
         )
     finally:
-        _codex_login_tasks.pop(login_key, None)
+        _agent_login_tasks.pop(login_key, None)
 
 
-async def codex_login_command(
+async def agent_login_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Start Codex device login from Telegram."""
@@ -1470,7 +1470,7 @@ async def codex_login_command(
 
     args = context.args or []
     if len(args) > 1:
-        await safe_reply(update.message, "Usage: /codexlogin [account-name]")
+        await safe_reply(update.message, "Usage: /agentlogin [account-name]")
         return
 
     account_name = args[0].strip() if args else None
@@ -1481,8 +1481,8 @@ async def codex_login_command(
         )
         return
 
-    login_key = account_name or _CODEX_LOGIN_DEFAULT_KEY
-    existing = _codex_login_tasks.get(login_key)
+    login_key = account_name or _AGENT_LOGIN_DEFAULT_KEY
+    existing = _agent_login_tasks.get(login_key)
     if existing and not existing.done():
         await safe_reply(
             update.message,
@@ -1491,7 +1491,7 @@ async def codex_login_command(
         return
 
     task = asyncio.create_task(
-        _codex_login_worker(
+        _agent_login_worker(
             bot=context.bot,
             chat_id=update.effective_chat.id,
             thread_id=_get_thread_id(update),
@@ -1499,14 +1499,14 @@ async def codex_login_command(
             login_key=login_key,
         )
     )
-    _codex_login_tasks[login_key] = task
+    _agent_login_tasks[login_key] = task
     await safe_reply(
         update.message,
         f"⏳ Starting Codex device login for {_login_display_name(account_name)}...",
     )
 
 
-async def codex_account_command(
+async def agent_account_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Manage saved Codex account snapshots."""
@@ -1549,14 +1549,14 @@ async def codex_account_command(
         except FileNotFoundError:
             await safe_reply(
                 update.message,
-                "❌ Codex auth.json was not found. Use /codexlogin first, "
+                "❌ Agent auth data was not found. Use /agentlogin first, "
                 "or run codex login on this machine.",
             )
             return
         await safe_reply(
             update.message,
             f"✅ Saved current Codex login as account `{account_name}`. "
-            f"Use /codexaccount use {account_name} to select it for new sessions.",
+            f"Use /agentaccount use {account_name} to select it for new sessions.",
         )
         return
 
@@ -1564,7 +1564,7 @@ async def codex_account_command(
     if account_name not in names:
         await safe_reply(
             update.message,
-            f"❌ Account `{account_name}` is not saved yet. Use /codexlogin {account_name} first.",
+            f"❌ Account `{account_name}` is not saved yet. Use /agentlogin {account_name} first.",
         )
         return
 
@@ -3095,8 +3095,8 @@ async def _rotate_thread_after_usage_limit(
             context.bot,
             session_manager.resolve_chat_id(user_id, thread_id),
             "⚠️ This session has hit its usage limit. Automatic account rotation "
-            "is disabled. Use /codexlogin to refresh the current agent login, "
-            "or /codexaccount to choose a saved account. Then /unbind if you "
+            "is disabled. Use /agentlogin to refresh the current agent login, "
+            "or /agentaccount to choose a saved account. Then /unbind if you "
             "want this topic to start a fresh session.",
             message_thread_id=thread_id,
         )
@@ -3110,8 +3110,8 @@ async def _rotate_thread_after_usage_limit(
             session_manager.resolve_chat_id(user_id, thread_id),
             "⚠️ This session has hit its usage limit, but no backup account is "
             "selected for rotation.\n"
-            "Use /codexlogin <name> to add a saved account, then "
-            "/codexaccount use <name> to select it.",
+            "Use /agentlogin <name> to add a saved account, then "
+            "/agentaccount use <name> to select it.",
             message_thread_id=thread_id,
         )
         return True
@@ -5510,12 +5510,12 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             elif config.enable_account_rotation:
                 note += (
                     "\nAutomatic rotation is enabled, but no backup account is "
-                    "selected. Use /codexlogin <name> and /codexaccount use <name>."
+                    "selected. Use /agentlogin <name> and /agentaccount use <name>."
                 )
             else:
                 note += (
-                    "\nAutomatic account rotation is disabled. Use /codexlogin to "
-                    "refresh the current login, or /codexaccount to choose a saved account."
+                    "\nAutomatic account rotation is disabled. Use /agentlogin to "
+                    "refresh the current login, or /agentaccount to choose a saved account."
                 )
             await safe_send(
                 bot,
@@ -5658,8 +5658,8 @@ async def post_init(application: Application) -> None:
         BotCommand("kill", "Kill session and delete topic"),
         BotCommand("unbind", "Unbind topic from session (keeps window running)"),
         BotCommand("usage", USAGE_COMMAND_DESCRIPTION),
-        BotCommand("codexlogin", CODEX_LOGIN_COMMAND_DESCRIPTION),
-        BotCommand("codexaccount", ACCOUNT_COMMAND_DESCRIPTION),
+        BotCommand("agentlogin", AGENT_LOGIN_COMMAND_DESCRIPTION),
+        BotCommand("agentaccount", ACCOUNT_COMMAND_DESCRIPTION),
     ]
     # Add Codex slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -5808,8 +5808,8 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("kill", topic_closed_handler))
     application.add_handler(CommandHandler("unbind", unbind_command))
     application.add_handler(CommandHandler("usage", usage_command))
-    application.add_handler(CommandHandler("codexlogin", codex_login_command))
-    application.add_handler(CommandHandler("codexaccount", codex_account_command))
+    application.add_handler(CommandHandler("agentlogin", agent_login_command))
+    application.add_handler(CommandHandler("agentaccount", agent_account_command))
     application.add_handler(CommandHandler(["agentcmd", "cmd"], agent_command_mode))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window

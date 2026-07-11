@@ -68,7 +68,7 @@ def test_agent_login_args_use_claude_auth_login() -> None:
 
 
 @pytest.mark.asyncio
-async def test_codex_account_list_reports_status() -> None:
+async def test_agent_account_list_reports_status() -> None:
     update = _make_update()
     context = _make_context([])
 
@@ -80,9 +80,9 @@ async def test_codex_account_list_reports_status() -> None:
             "telegram_agent_bot.bot.safe_reply", new_callable=AsyncMock
         ) as safe_reply,
     ):
-        from telegram_agent_bot.bot import codex_account_command
+        from telegram_agent_bot.bot import agent_account_command
 
-        await codex_account_command(update, context)
+        await agent_account_command(update, context)
 
     safe_reply.assert_awaited_once()
     text = safe_reply.await_args.args[1]
@@ -92,7 +92,7 @@ async def test_codex_account_list_reports_status() -> None:
 
 
 @pytest.mark.asyncio
-async def test_codex_account_use_selects_saved_account() -> None:
+async def test_agent_account_use_selects_saved_account() -> None:
     update = _make_update()
     context = _make_context(["use", "backup"])
 
@@ -104,9 +104,9 @@ async def test_codex_account_use_selects_saved_account() -> None:
             "telegram_agent_bot.bot.safe_reply", new_callable=AsyncMock
         ) as safe_reply,
     ):
-        from telegram_agent_bot.bot import codex_account_command
+        from telegram_agent_bot.bot import agent_account_command
 
-        await codex_account_command(update, context)
+        await agent_account_command(update, context)
 
     remember.assert_called_once_with("backup")
     safe_reply.assert_awaited_once()
@@ -116,7 +116,7 @@ async def test_codex_account_use_selects_saved_account() -> None:
 
 
 @pytest.mark.asyncio
-async def test_codex_login_command_rejects_invalid_account_name() -> None:
+async def test_agent_login_command_rejects_invalid_account_name() -> None:
     update = _make_update()
     context = _make_context(["../bad"])
 
@@ -126,9 +126,9 @@ async def test_codex_login_command_rejects_invalid_account_name() -> None:
             "telegram_agent_bot.bot.safe_reply", new_callable=AsyncMock
         ) as safe_reply,
     ):
-        from telegram_agent_bot.bot import codex_login_command
+        from telegram_agent_bot.bot import agent_login_command
 
-        await codex_login_command(update, context)
+        await agent_login_command(update, context)
 
     safe_reply.assert_awaited_once()
     assert "Invalid account name" in safe_reply.await_args.args[1]

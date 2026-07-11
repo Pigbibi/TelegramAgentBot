@@ -367,8 +367,8 @@ async def test_handle_new_message_reports_repeated_local_usage_limit() -> None:
         (
             "⚠️ This session has hit its usage limit."
             "\nThe window is already marked as exhausted."
-            "\nAutomatic account rotation is disabled. Use /codexlogin to "
-            "refresh the current login, or /codexaccount to choose a saved account."
+            "\nAutomatic account rotation is disabled. Use /agentlogin to "
+            "refresh the current login, or /agentaccount to choose a saved account."
         ),
         message_thread_id=42,
     )

@@ -490,7 +490,7 @@ async def test_send_to_window_when_ready_reports_auth_error(monkeypatch):
     )
 
     assert ok is False
-    assert "Use /codexlogin" in message
+    assert "Use /agentlogin" in message
     send_message.assert_not_awaited()
 
 

@@ -1,4 +1,4 @@
-# TelegramAgentBot
+# TelegramAgentBot 2.0.0
 
 [中文文档](README_CN.md)
 
@@ -106,10 +106,10 @@ codex login
 If you use multiple accounts or need to refresh login while away from the server, use Telegram commands:
 
 ```text
-/codexlogin          # refresh the service user's default agent login
-/codexlogin backup   # login and save a named backup account
-/codexaccount list
-/codexaccount use backup
+/agentlogin          # refresh the service user's default agent login
+/agentlogin backup   # login and save a named backup account
+/agentaccount list
+/agentaccount use backup
 ```
 
 If `~/.telegram-agent-bot/.env` still contains placeholder values, the script will write the
@@ -295,11 +295,16 @@ Codex CLI. In this mode:
   settings/transcripts under `<account_home>/.claude`
 - the bot does not rely on `CLAUDE_HOME`
 
-The command names `/codexlogin` and `/codexaccount` are kept for backward
-compatibility. In Claude mode they launch `claude auth login`. Claude Code
+Use `/agentlogin` and `/agentaccount` for provider-neutral account operations. In Claude mode they launch `claude auth login`. Claude Code
 subscription/OAuth credentials can be OS- or keychain-dependent, so verify
 named-account switching on your target host before relying on automatic
 rotation; API-key settings in `settings.json` are copied with the account home.
+
+### 2.0.0 breaking changes
+
+- `/codexlogin` and `/codexaccount` were removed; use `/agentlogin` and `/agentaccount`.
+- `fast` is no longer a reasoning-effort value. Use the Claude Code Fast mode toggle after selecting a model and reasoning level.
+- Upgrade existing deployments and migrate bot commands before restarting them.
 
 ### Project Roots
 
@@ -424,11 +429,11 @@ disabled**. This keeps single-account installs predictable.
 Telegram commands:
 
 ```text
-/codexlogin          # start agent login for the default home
-/codexlogin backup   # login into an isolated account home and save it as backup
-/codexaccount list
-/codexaccount use backup
-/codexaccount clear  # go back to the service user's default agent home
+/agentlogin          # start agent login for the default home
+/agentlogin backup   # login into an isolated account home and save it as backup
+/agentaccount list
+/agentaccount use backup
+/agentaccount clear  # go back to the service user's default agent home
 ```
 
 Named accounts are stored under `~/.telegram-agent-bot/accounts/`. Switching affects newly created topics only; existing topics keep their current tmux window. Use `/unbind` when you want the current topic to start a fresh session with the selected account. In Claude mode, validate named-account switching on your host before enabling rotation because Claude subscription credentials may be stored outside the copied home on some platforms.
@@ -540,8 +545,8 @@ uv run telegram-agent-bot
 | `/kill` | Kill the bound tmux window and clean up the topic binding |
 | `/unbind` | Unbind the topic without killing the running tmux window |
 | `/usage` | Open Codex usage info in the TUI and send the parsed result; Codex-specific |
-| `/codexlogin [name]` | Start agent login from Telegram |
-| `/codexaccount` | List, save, select, or clear saved agent accounts |
+| `/agentlogin [name]` | Start agent login from Telegram |
+| `/agentaccount` | List, save, select, or clear saved agent accounts |
 
 ### Forwarded agent slash commands
 
