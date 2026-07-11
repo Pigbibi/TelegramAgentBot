@@ -38,6 +38,9 @@ class CreateSessionRequest:
     window_name: str = ""
     resume_session_id: str = ""
     account_name: str = ""
+    agent_type: str = ""
+    model: str = ""
+    reasoning_effort: str = ""
 
 
 @dataclass(frozen=True)

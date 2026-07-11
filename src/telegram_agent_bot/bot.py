@@ -88,6 +88,12 @@ from .agent_io import (
     send_agent_message,
     upload_agent_file,
 )
+from .agent_profile import (
+    AGENT_CLAUDE,
+    AgentProfile,
+    normalize_agent_type,
+    normalize_effort,
+)
 from .backends.base import AgentBackend, AgentTarget
 from .backends.browser import AgentBrowser, DirectoryListing
 from .backends.registry import get_configured_backend
@@ -109,6 +115,10 @@ from .handlers.callback_data import (
     CB_DIR_PAGE,
     CB_DIR_SELECT,
     CB_DIR_UP,
+    CB_PROFILE_AGENT,
+    CB_PROFILE_CANCEL,
+    CB_PROFILE_EFFORT,
+    CB_PROFILE_MODEL,
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
     CB_ROOT_CANCEL,
@@ -135,19 +145,28 @@ from .handlers.directory_browser import (
     STATE_BROWSING_DIRECTORY,
     STATE_KEY,
     STATE_SELECTING_ROOT,
+    STATE_SELECTING_AGENT,
+    STATE_SELECTING_PROFILE,
     STATE_SELECTING_SESSION,
     STATE_SELECTING_WINDOW,
     UNBOUND_WINDOWS_KEY,
+    PROFILE_AGENT_KEY,
+    PROFILE_EFFORT_KEY,
+    PROFILE_MODEL_KEY,
+    PROFILE_MODELS_KEY,
     build_backend_root_picker,
     build_directory_browser,
     build_directory_browser_from_listing,
     build_project_root_picker,
     build_session_picker,
     build_window_picker,
+    build_agent_picker,
+    build_profile_picker,
     clear_browse_state,
     clear_root_picker_state,
     clear_session_picker_state,
     clear_window_picker_state,
+    clear_profile_picker_state,
 )
 from .handlers.cleanup import clear_topic_state
 from .handlers.history import send_history
@@ -295,6 +314,7 @@ async def _safe_send_typing_action(chat: Chat, *, source: str) -> None:
 
 # Codex commands shown in bot menu (forwarded via tmux)
 CC_COMMANDS: dict[str, str] = {
+    "agentcmd": "↗ Send a custom agent command",
     "clear": "↗ Clear conversation history",
     "compact": "↗ Compact conversation context",
     "cost": "↗ Show token/cost usage",
@@ -675,6 +695,158 @@ def _build_resume_conflict_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Cancel", callback_data=CB_SESSION_CANCEL),
             ]
         ]
+    )
+
+
+def _profile_models(agent_type: str) -> tuple[str, ...]:
+    """Return configured model choices for one agent type."""
+    normalized = normalize_agent_type(agent_type)
+    return config.claude_models if normalized == AGENT_CLAUDE else config.codex_models
+
+
+def _profile_from_context(user_data: dict | None) -> AgentProfile:
+    """Build the pending topic profile, retaining legacy defaults."""
+    agent_type = (
+        user_data.get(PROFILE_AGENT_KEY, config.agent_type)
+        if user_data
+        else config.agent_type
+    )
+    normalized = normalize_agent_type(agent_type, config.agent_type)
+    default_effort = (
+        config.claude_reasoning_effort
+        if normalized == AGENT_CLAUDE
+        else config.codex_reasoning_effort
+    )
+    effort = (
+        user_data.get(PROFILE_EFFORT_KEY, default_effort)
+        if user_data
+        else default_effort
+    )
+    model = user_data.get(PROFILE_MODEL_KEY, "") if user_data else ""
+    return AgentProfile(
+        agent_type=normalized,
+        model=model if isinstance(model, str) else "",
+        reasoning_effort=normalize_effort(effort, default_effort),
+    )
+
+
+async def _show_agent_profile_picker(
+    target: Any,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    edit: bool = True,
+) -> None:
+    """Show the agent selector before a new topic creates a session."""
+    text, keyboard = build_agent_picker()
+    if context.user_data is not None:
+        context.user_data[STATE_KEY] = STATE_SELECTING_AGENT
+    if edit:
+        await safe_edit(target, text, reply_markup=keyboard)
+    else:
+        await safe_reply(target, text, reply_markup=keyboard)
+
+
+async def _show_agent_profile_settings(
+    target: Any,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    edit: bool = True,
+) -> None:
+    """Show model and reasoning controls for the selected agent."""
+    profile = _profile_from_context(context.user_data)
+    models = _profile_models(profile.agent_type)
+    if context.user_data is not None:
+        context.user_data[STATE_KEY] = STATE_SELECTING_PROFILE
+        context.user_data[PROFILE_MODELS_KEY] = list(models)
+    text, keyboard = build_profile_picker(profile, models)
+    if edit:
+        await safe_edit(target, text, reply_markup=keyboard)
+    else:
+        await safe_reply(target, text, reply_markup=keyboard)
+
+
+def _clear_creation_state(user_data: dict | None) -> None:
+    """Clear all transient topic-creation state."""
+    clear_browse_state(user_data)
+    clear_session_picker_state(user_data)
+    clear_profile_picker_state(user_data)
+    if user_data is not None:
+        for key in (
+            "_pending_thread_id",
+            "_pending_thread_text",
+            "_selected_path",
+            "_selected_backend_id",
+            "_selected_node_id",
+        ):
+            user_data.pop(key, None)
+
+
+async def _continue_creation_with_profile(
+    query: Any,
+    context: ContextTypes.DEFAULT_TYPE,
+    user: Any,
+) -> None:
+    """Find a resumable session or create a new window for the chosen profile."""
+    user_data = context.user_data
+    selected_path = (
+        user_data.get("_selected_path", str(Path.cwd()))
+        if user_data
+        else str(Path.cwd())
+    )
+    backend_id = user_data.get("_selected_backend_id", "") if user_data else ""
+    node_id = user_data.get("_selected_node_id", "") if user_data else ""
+    pending_thread_id = user_data.get("_pending_thread_id") if user_data else None
+
+    profile = _profile_from_context(user_data)
+    await query.answer("Looking for sessions...")
+    await safe_edit(query, "⏳ Looking for existing sessions in this directory...")
+
+    if backend_id:
+        browser = _browser_for_backend_id(backend_id)
+        if browser is None:
+            await safe_edit(query, "Backend browser unavailable. Please retry.")
+            return
+        try:
+            sessions = _filter_resumable_sessions(
+                await browser.list_sessions(node_id, selected_path)
+            )
+        except Exception:
+            logger.exception(
+                "Backend session lookup failed: backend=%s node=%s path=%s",
+                backend_id,
+                node_id,
+                selected_path,
+            )
+            await safe_edit(query, "Unable to read sessions from backend.")
+            return
+    else:
+        sessions = _filter_resumable_sessions(
+            await session_manager.list_sessions_for_directory(selected_path)
+        )
+
+    if sessions:
+        if user_data is not None:
+            user_data[STATE_KEY] = STATE_SELECTING_SESSION
+            user_data[SESSIONS_KEY] = sessions
+        text, keyboard = build_session_picker(sessions)
+        await safe_edit(query, text, reply_markup=keyboard)
+        return
+
+    create_kwargs: dict[str, Any] = {
+        "answer_callback": False,
+        "agent_type": profile.agent_type,
+        "model": profile.model,
+        "reasoning_effort": profile.reasoning_effort,
+    }
+    if node_id:
+        create_kwargs["node_id"] = node_id
+    await _create_and_bind_window(
+        query,
+        context,
+        user,
+        selected_path,
+        pending_thread_id,
+        **create_kwargs,
     )
 
 
@@ -1841,12 +2013,18 @@ async def _create_agent_local_window(
     window_name: str = "",
     resume_session_id: str = "",
     account_name: str = "",
+    agent_type: str = "",
+    model: str = "",
+    reasoning_effort: str = "",
 ) -> tuple[bool, str, str, str, AgentTarget | None]:
     success, message, display_name, window_id, target = await _create_agent_target(
         cwd=cwd,
         window_name=window_name,
         resume_session_id=resume_session_id,
         account_name=account_name,
+        agent_type=agent_type,
+        model=model,
+        reasoning_effort=reasoning_effort,
     )
     if success and not window_id:
         return (
@@ -1866,6 +2044,9 @@ async def _create_agent_target(
     window_name: str = "",
     resume_session_id: str = "",
     account_name: str = "",
+    agent_type: str = "",
+    model: str = "",
+    reasoning_effort: str = "",
 ) -> tuple[bool, str, str, str, AgentTarget | None]:
     create_kwargs = {
         "cwd": cwd,
@@ -1873,6 +2054,12 @@ async def _create_agent_target(
         "resume_session_id": resume_session_id,
         "account_name": account_name,
     }
+    if agent_type:
+        create_kwargs["agent_type"] = agent_type
+    if model:
+        create_kwargs["model"] = model
+    if reasoning_effort:
+        create_kwargs["reasoning_effort"] = reasoning_effort
     if node_id:
         create_kwargs["node_id"] = node_id
     result = await create_agent_session(**create_kwargs)
@@ -2118,6 +2305,52 @@ async def forward_command_handler(
         # proactive detection needed here — the poller handles it.
     else:
         await safe_reply(update.message, f"❌ {result.message}")
+
+
+async def agent_command_mode(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Forward an arbitrary agent slash command through one stable bot command.
+
+    Examples: ``/agentcmd /review`` and ``/cmd compact``.
+    """
+    user = update.effective_user
+    message = update.message
+    if not user or not is_user_allowed(user.id) or not message:
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await safe_reply(message, "Usage: /agentcmd /command [arguments]")
+        return
+
+    command_text = parts[1].strip()
+    if not command_text.startswith("/"):
+        command_text = "/" + command_text
+    command_text = _normalize_forward_command_text(command_text)
+    thread_id = _get_thread_id(update)
+    wid = session_manager.resolve_window_for_thread(user.id, thread_id)
+    target = session_manager.resolve_target_for_thread(user.id, thread_id)
+    if not wid and not target:
+        await safe_reply(message, "❌ No session bound to this topic.")
+        return
+    if wid:
+        success, result_message, queued = await _send_or_queue_agent_input(
+            context.bot, user.id, thread_id, wid, command_text
+        )
+        if not success:
+            await safe_reply(message, f"❌ {result_message}")
+            return
+        action = "Queued" if queued else "Sent"
+        await safe_reply(message, f"⚡ {action}: {command_text}")
+        return
+
+    result = await send_agent_message(user.id, thread_id, "", command_text)
+    if result is None or not result.ok:
+        await safe_reply(
+            message, f"❌ {result.message if result else 'No session bound'}"
+        )
+        return
+    await safe_reply(message, f"⚡ Sent: {command_text}")
 
 
 async def unsupported_content_handler(
@@ -3725,6 +3958,9 @@ async def _create_and_bind_window(
     pending_thread_id: int | None,
     resume_session_id: str | None = None,
     account_name: str | None = None,
+    agent_type: str = "",
+    model: str = "",
+    reasoning_effort: str = "",
     node_id: str = "",
     answer_callback: bool = True,
 ) -> None:
@@ -3737,7 +3973,22 @@ async def _create_and_bind_window(
     assert isinstance(query, CallbackQuery)
     assert isinstance(user, User)
 
-    launch_account = account_name or get_default_account_name()
+    normalized_agent = normalize_agent_type(agent_type or config.agent_type)
+    profile = AgentProfile(
+        agent_type=normalized_agent,
+        model=model,
+        reasoning_effort=reasoning_effort
+        or (
+            config.claude_reasoning_effort
+            if normalized_agent == AGENT_CLAUDE
+            else config.codex_reasoning_effort
+        ),
+    )
+    # Account snapshots are agent-specific. Do not apply a Codex snapshot to a
+    # Claude topic (or vice versa) when both agents are enabled per topic.
+    launch_account = account_name or (
+        get_default_account_name() if profile.agent_type == config.agent_type else None
+    )
     (
         success,
         message,
@@ -3749,6 +4000,9 @@ async def _create_and_bind_window(
         node_id=node_id,
         resume_session_id=resume_session_id or "",
         account_name=launch_account or "",
+        agent_type=profile.agent_type,
+        model=profile.model,
+        reasoning_effort=profile.reasoning_effort,
     )
     if success:
         if launch_account:
@@ -3838,6 +4092,9 @@ async def _create_and_bind_window(
             cwd=str(selected_path),
             window_name=created_wname,
             account_name=launch_account or "",
+            agent_type=profile.agent_type,
+            model=profile.model,
+            reasoning_effort=profile.reasoning_effort,
         )
         if resume_session_id:
             # A resumed Codex window continues writing to the original JSONL.
@@ -4281,6 +4538,67 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
 
+    # Per-topic agent/profile picker
+    elif data.startswith(CB_PROFILE_AGENT):
+        pending_tid = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
+        if pending_tid is not None and _get_thread_id(update) != pending_tid:
+            await query.answer("Stale picker (topic mismatch)", show_alert=True)
+            return
+        agent_type = normalize_agent_type(data[len(CB_PROFILE_AGENT) :])
+        models = _profile_models(agent_type)
+        if context.user_data is not None:
+            context.user_data[PROFILE_AGENT_KEY] = agent_type
+            context.user_data[PROFILE_MODEL_KEY] = models[0] if models else ""
+            context.user_data[PROFILE_EFFORT_KEY] = (
+                config.claude_reasoning_effort
+                if agent_type == AGENT_CLAUDE
+                else config.codex_reasoning_effort
+            )
+        await _show_agent_profile_settings(query, context)
+        await query.answer()
+
+    elif data.startswith(CB_PROFILE_MODEL):
+        models = (
+            context.user_data.get(PROFILE_MODELS_KEY, []) if context.user_data else []
+        )
+        try:
+            model_index = int(data[len(CB_PROFILE_MODEL) :])
+        except ValueError:
+            await query.answer("Invalid model", show_alert=True)
+            return
+        if model_index < 0 or model_index >= len(models):
+            await query.answer("Model list changed", show_alert=True)
+            return
+        if context.user_data is not None:
+            context.user_data[PROFILE_MODEL_KEY] = models[model_index]
+        await _show_agent_profile_settings(query, context)
+        await query.answer("Model selected")
+
+    elif data.startswith(CB_PROFILE_EFFORT):
+        pending_tid = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
+        if pending_tid is not None and _get_thread_id(update) != pending_tid:
+            await query.answer("Stale picker (topic mismatch)", show_alert=True)
+            return
+        effort = normalize_effort(data[len(CB_PROFILE_EFFORT) :])
+        if context.user_data is not None:
+            context.user_data[PROFILE_EFFORT_KEY] = effort
+        await _continue_creation_with_profile(query, context, user)
+
+    elif data == CB_PROFILE_CANCEL:
+        pending_tid = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
+        if pending_tid is not None and _get_thread_id(update) != pending_tid:
+            await query.answer("Stale picker (topic mismatch)", show_alert=True)
+            return
+        _clear_creation_state(context.user_data)
+        await safe_edit(query, "Cancelled")
+        await query.answer("Cancelled")
+
     # Directory browser handlers
     elif data.startswith(CB_DIR_SELECT):
         # Validate: callback must come from the same topic that started browsing
@@ -4492,71 +4810,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("Stale browser (topic mismatch)", show_alert=True)
             return
 
-        callback_answered = False
-        try:
-            await query.answer("Looking for sessions...")
-            callback_answered = True
-        except BadRequest as exc:
-            logger.debug(
-                "Directory confirm callback expired before acknowledgement: %s",
-                exc,
-            )
-
-        await safe_edit(
-            query,
-            "⏳ Looking for existing sessions in this directory...",
-        )
-
+        if context.user_data is not None:
+            context.user_data["_pending_thread_id"] = pending_thread_id
+            context.user_data["_selected_path"] = selected_path
+            context.user_data["_selected_backend_id"] = backend_id
+            context.user_data["_selected_node_id"] = node_id
         clear_browse_state(context.user_data)
-
-        # Check for existing sessions in this directory
-        if backend_id:
-            browser = _browser_for_backend_id(backend_id)
-            if browser is None:
-                await safe_edit(query, "Backend browser unavailable. Please retry.")
-                return
-            try:
-                sessions = _filter_resumable_sessions(
-                    await browser.list_sessions(node_id, selected_path)
-                )
-            except Exception:
-                logger.exception(
-                    "Backend session lookup failed: backend=%s node=%s path=%s",
-                    backend_id,
-                    node_id,
-                    selected_path,
-                )
-                await safe_edit(query, "Unable to read sessions from backend.")
-                return
-        else:
-            sessions = _filter_resumable_sessions(
-                await session_manager.list_sessions_for_directory(selected_path)
-            )
-        if sessions:
-            # Show session picker — store state for later
-            if context.user_data is not None:
-                context.user_data[STATE_KEY] = STATE_SELECTING_SESSION
-                context.user_data[SESSIONS_KEY] = sessions
-                context.user_data["_selected_path"] = selected_path
-                if backend_id:
-                    context.user_data["_selected_backend_id"] = backend_id
-                    context.user_data["_selected_node_id"] = node_id
-            text, keyboard = build_session_picker(sessions)
-            await safe_edit(query, text, reply_markup=keyboard)
-            return
-
-        # No existing sessions — create new window directly
-        create_kwargs: dict[str, Any] = {"answer_callback": not callback_answered}
-        if node_id:
-            create_kwargs["node_id"] = node_id
-        await _create_and_bind_window(
-            query,
-            context,
-            user,
-            selected_path,
-            pending_thread_id,
-            **create_kwargs,
-        )
+        await query.answer("Choose agent")
+        await _show_agent_profile_picker(query, context)
 
     elif data == CB_DIR_CANCEL:
         pending_tid = (
@@ -4631,13 +4892,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         selected_node_id = (
             context.user_data.get("_selected_node_id", "") if context.user_data else ""
         )
+        profile = _profile_from_context(context.user_data)
         clear_session_picker_state(context.user_data)
         if context.user_data is not None:
             context.user_data.pop("_selected_path", None)
             context.user_data.pop("_selected_backend_id", None)
             context.user_data.pop("_selected_node_id", None)
 
-        create_kwargs = {"resume_session_id": session.session_id}
+        create_kwargs: dict[str, Any] = {
+            "resume_session_id": session.session_id,
+            "agent_type": profile.agent_type,
+            "model": profile.model,
+            "reasoning_effort": profile.reasoning_effort,
+        }
         if selected_node_id:
             create_kwargs["node_id"] = selected_node_id
         await _create_and_bind_window(
@@ -4666,13 +4933,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         selected_node_id = (
             context.user_data.get("_selected_node_id", "") if context.user_data else ""
         )
+        profile = _profile_from_context(context.user_data)
         clear_session_picker_state(context.user_data)
         if context.user_data is not None:
             context.user_data.pop("_selected_path", None)
             context.user_data.pop("_selected_backend_id", None)
             context.user_data.pop("_selected_node_id", None)
 
-        create_kwargs = {}
+        create_kwargs: dict[str, Any] = {
+            "agent_type": profile.agent_type,
+            "model": profile.model,
+            "reasoning_effort": profile.reasoning_effort,
+        }
         if selected_node_id:
             create_kwargs["node_id"] = selected_node_id
         await _create_and_bind_window(
@@ -4698,6 +4970,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data.pop("_selected_path", None)
             context.user_data.pop("_selected_backend_id", None)
             context.user_data.pop("_selected_node_id", None)
+            context.user_data.pop(PROFILE_AGENT_KEY, None)
+            context.user_data.pop(PROFILE_MODEL_KEY, None)
+            context.user_data.pop(PROFILE_EFFORT_KEY, None)
+            context.user_data.pop(PROFILE_MODELS_KEY, None)
         await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
 
@@ -5435,6 +5711,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("codexlogin", codex_login_command))
     application.add_handler(CommandHandler("codexaccount", codex_account_command))
+    application.add_handler(CommandHandler(["agentcmd", "cmd"], agent_command_mode))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
     application.add_handler(

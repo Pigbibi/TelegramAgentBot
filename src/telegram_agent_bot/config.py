@@ -16,6 +16,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .utils import app_dir
+from .agent_profile import (
+    AGENT_CLAUDE,
+    AGENT_CODEX,
+    EFFORT_STANDARD,
+    normalize_agent_type,
+    normalize_effort,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +31,8 @@ SENSITIVE_ENV_VARS = {
     "TELEGRAM_BOT_TOKEN",
     "ALLOWED_USERS",
     "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "DEEPSEEK_API_KEY",
     "AI_TRANSCRIPTION_OPENAI_API_KEY",
     "AI_TRANSCRIPTION_GOOGLE_API_KEY",
 }
@@ -108,16 +117,19 @@ class Config:
 
         # Agent type: "codex" (default) or "claude". Controls which CLI is launched,
         # where transcripts are stored, and which update mechanism is used.
-        self.agent_type = (
-            os.getenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "codex").strip().lower()
-            or "codex"
-        )
-        if self.agent_type not in ("codex", "claude"):
+        raw_agent_type = os.getenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", AGENT_CODEX)
+        normalized_raw_agent_type = raw_agent_type.strip().lower().replace("-", "")
+        self.agent_type = normalize_agent_type(normalized_raw_agent_type)
+        if (normalized_raw_agent_type or AGENT_CODEX) not in (
+            AGENT_CODEX,
+            AGENT_CLAUDE,
+            "claudecode",
+        ):
             logger.warning(
                 "Unknown agent_type %r, falling back to 'codex'",
-                self.agent_type,
+                raw_agent_type,
             )
-            self.agent_type = "codex"
+            self.agent_type = AGENT_CODEX
         self.agent_type_display = (
             "Codex" if self.agent_type == "codex" else "Claude Code"
         )
@@ -129,13 +141,34 @@ class Config:
         )
         self.tmux_main_window_name = "__main__"
 
-        # Command to run in new windows. Default depends on agent_type:
-        #   codex  → "codex"
-        #   claude → "claude"
-        # Can always be overridden via TELEGRAM_AGENT_BOT_CODEX_COMMAND.
-        _default_command = "claude" if self.agent_type == "claude" else "codex"
+        # Keep codex_command as the legacy global-mode value. The explicit
+        # codex_cli_command lets mixed per-topic mode launch Codex even when
+        # the global default is Claude Code.
+        self.codex_cli_command = os.getenv("TELEGRAM_AGENT_BOT_CODEX_COMMAND", "codex")
+        _default_command = "claude" if self.agent_type == AGENT_CLAUDE else "codex"
         self.codex_command = os.getenv(
             "TELEGRAM_AGENT_BOT_CODEX_COMMAND", _default_command
+        )
+        self.codex_model = os.getenv("TELEGRAM_AGENT_BOT_CODEX_MODEL", "").strip()
+        self.claude_command = os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_COMMAND", "claude")
+        self.claude_model = os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_MODEL", "").strip()
+        claude_env_file = os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE", "")
+        self.claude_env_file = (
+            Path(claude_env_file).expanduser()
+            if claude_env_file
+            else self.config_dir / "claude.env"
+        )
+        self.codex_reasoning_effort = normalize_effort(
+            os.getenv("TELEGRAM_AGENT_BOT_CODEX_REASONING_EFFORT", EFFORT_STANDARD)
+        )
+        self.claude_reasoning_effort = normalize_effort(
+            os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_REASONING_EFFORT", "high")
+        )
+        self.codex_models = self._parse_models(
+            os.getenv("TELEGRAM_AGENT_BOT_CODEX_MODELS", ""), self.codex_model
+        )
+        self.claude_models = self._parse_models(
+            os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_MODELS", ""), self.claude_model
         )
         self.codex_bypass_hook_trust = (
             os.getenv("TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST", "").lower()
@@ -319,6 +352,15 @@ class Config:
     def is_user_allowed(self, user_id: int) -> bool:
         """Check if a user is in the allowed list."""
         return user_id in self.allowed_users
+
+    @staticmethod
+    def _parse_models(raw: str, configured_model: str) -> tuple[str, ...]:
+        models = [
+            item.strip() for item in raw.replace("\n", ",").split(",") if item.strip()
+        ]
+        if configured_model and configured_model not in models:
+            models.insert(0, configured_model)
+        return tuple(dict.fromkeys(models))
 
 
 config = Config()

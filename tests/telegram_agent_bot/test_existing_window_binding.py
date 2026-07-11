@@ -428,7 +428,7 @@ class TestExistingWindowBinding:
         assert context.user_data[BROWSE_DIRS_KEY] == ["repo"]
 
     @pytest.mark.asyncio
-    async def test_remote_directory_confirm_creates_session_on_selected_node(self):
+    async def test_remote_directory_confirm_preserves_selected_node_for_profile(self):
         backend = RemoteBrowserBackend()
         update, query = _make_callback_update(CB_DIR_CONFIRM)
         context = _make_context()
@@ -445,24 +445,13 @@ class TestExistingWindowBinding:
             patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
             patch("telegram_agent_bot.bot._get_thread_id", return_value=42),
             patch("telegram_agent_bot.bot.safe_edit", new_callable=AsyncMock),
-            patch(
-                "telegram_agent_bot.bot._create_and_bind_window",
-                new_callable=AsyncMock,
-            ) as create_and_bind,
         ):
             from telegram_agent_bot.bot import callback_handler
 
             await callback_handler(update, context)
 
-        create_and_bind.assert_awaited_once_with(
-            query,
-            context,
-            update.effective_user,
-            "/Users/me/Projects/repo",
-            42,
-            node_id="macbook",
-            answer_callback=False,
-        )
+        assert context.user_data["_selected_path"] == "/Users/me/Projects/repo"
+        assert context.user_data["_selected_node_id"] == "macbook"
 
     @pytest.mark.asyncio
     async def test_directory_confirm_falls_back_to_callback_topic_when_pending_missing(
@@ -480,22 +469,15 @@ class TestExistingWindowBinding:
         with (
             patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
             patch("telegram_agent_bot.bot._get_thread_id", return_value=42),
-            patch("telegram_agent_bot.bot.session_manager") as mock_sm,
+            patch("telegram_agent_bot.bot.session_manager"),
             patch("telegram_agent_bot.bot.safe_edit", new_callable=AsyncMock),
-            patch(
-                "telegram_agent_bot.bot._create_and_bind_window",
-                new_callable=AsyncMock,
-            ) as create_and_bind,
         ):
-            mock_sm.list_sessions_for_directory = AsyncMock(return_value=[])
-
             from telegram_agent_bot.bot import callback_handler
 
             await callback_handler(update, context)
 
-        create_and_bind.assert_awaited_once()
-        assert create_and_bind.await_args.args[4] == 42
-        assert create_and_bind.await_args.kwargs["answer_callback"] is False
+        assert context.user_data["_pending_thread_id"] == 42
+        assert context.user_data["_selected_path"] == str(selected_path)
 
     @pytest.mark.asyncio
     async def test_window_picker_rejects_untracked_window(self):

@@ -5,8 +5,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from telegram_agent_bot.backends.base import AgentTarget, CreateSessionResult
-from telegram_agent_bot.handlers.callback_data import CB_DIR_CONFIRM, CB_SESSION_SELECT
-from telegram_agent_bot.handlers.directory_browser import BROWSE_PATH_KEY, SESSIONS_KEY
+from telegram_agent_bot.handlers.callback_data import (
+    CB_DIR_CONFIRM,
+    CB_PROFILE_EFFORT,
+    CB_SESSION_SELECT,
+)
+from telegram_agent_bot.handlers.directory_browser import (
+    BROWSE_PATH_KEY,
+    PROFILE_AGENT_KEY,
+    PROFILE_MODEL_KEY,
+    PROFILE_MODELS_KEY,
+    SESSIONS_KEY,
+)
 from telegram_agent_bot.session import CodexSession
 
 
@@ -38,8 +48,8 @@ def _make_context():
 
 class TestSessionPickerIsolation:
     @pytest.mark.asyncio
-    async def test_dir_confirm_skips_active_sessions_and_creates_new_window(self):
-        """When only already-active sessions exist, directory confirm starts fresh."""
+    async def test_dir_confirm_shows_agent_picker_before_session_lookup(self):
+        """Directory confirmation now selects an agent before scanning sessions."""
         update, query = _make_callback_update(CB_DIR_CONFIRM)
         context = _make_context()
         context.user_data = {
@@ -47,12 +57,30 @@ class TestSessionPickerIsolation:
             "_pending_thread_id": 42,
             "_pending_thread_text": "hello",
         }
-        active_session = CodexSession(
-            session_id="session-a",
-            summary="Existing chat",
-            message_count=12,
-            file_path="/tmp/project/session-a.jsonl",
-        )
+        with (
+            patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_agent_bot.bot._get_thread_id", return_value=42),
+            patch("telegram_agent_bot.bot.session_manager"),
+            patch("telegram_agent_bot.bot.safe_edit", new_callable=AsyncMock),
+        ):
+            from telegram_agent_bot.bot import callback_handler
+
+            await callback_handler(update, context)
+
+        assert query.answer.await_args_list[0].args == ("Choose agent",)
+        assert context.user_data["_selected_path"] == "/tmp/project"
+
+    @pytest.mark.asyncio
+    async def test_profile_effort_creates_claude_session_with_selected_settings(self):
+        update, query = _make_callback_update(f"{CB_PROFILE_EFFORT}low")
+        context = _make_context()
+        context.user_data = {
+            "_pending_thread_id": 42,
+            "_selected_path": "/tmp/project",
+            PROFILE_AGENT_KEY: "claude",
+            PROFILE_MODEL_KEY: "deepseek-v4-pro",
+            PROFILE_MODELS_KEY: ["deepseek-v4-pro"],
+        }
 
         with (
             patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
@@ -61,27 +89,25 @@ class TestSessionPickerIsolation:
             patch(
                 "telegram_agent_bot.bot._create_and_bind_window", new_callable=AsyncMock
             ) as create,
-            patch("telegram_agent_bot.bot.build_session_picker") as build_picker,
             patch("telegram_agent_bot.bot.safe_edit", new_callable=AsyncMock),
         ):
-            mock_sm.list_sessions_for_directory = AsyncMock(
-                return_value=[active_session]
-            )
-            mock_sm.has_bound_thread_for_session.return_value = True
+            mock_sm.list_sessions_for_directory = AsyncMock(return_value=[])
 
             from telegram_agent_bot.bot import callback_handler
 
             await callback_handler(update, context)
 
-        create.assert_called_once_with(
+        create.assert_awaited_once_with(
             query,
             context,
             update.effective_user,
             "/tmp/project",
             42,
             answer_callback=False,
+            agent_type="claude",
+            model="deepseek-v4-pro",
+            reasoning_effort="low",
         )
-        build_picker.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_dir_confirm_acknowledges_callback_before_long_session_scan(self):
@@ -96,33 +122,16 @@ class TestSessionPickerIsolation:
         with (
             patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
             patch("telegram_agent_bot.bot._get_thread_id", return_value=42),
-            patch("telegram_agent_bot.bot.session_manager") as mock_sm,
-            patch(
-                "telegram_agent_bot.bot._create_and_bind_window", new_callable=AsyncMock
-            ) as create,
-            patch(
-                "telegram_agent_bot.bot.safe_edit", new_callable=AsyncMock
-            ) as safe_edit,
+            patch("telegram_agent_bot.bot.session_manager"),
+            patch("telegram_agent_bot.bot.safe_edit", new_callable=AsyncMock),
         ):
-            mock_sm.list_sessions_for_directory = AsyncMock(return_value=[])
-
             from telegram_agent_bot.bot import callback_handler
 
             await callback_handler(update, context)
 
         assert query.answer.await_count == 1
-        assert query.answer.await_args_list[0].args == ("Looking for sessions...",)
-        safe_edit.assert_any_await(
-            query, "⏳ Looking for existing sessions in this directory..."
-        )
-        create.assert_called_once_with(
-            query,
-            context,
-            update.effective_user,
-            "/tmp/project",
-            42,
-            answer_callback=False,
-        )
+        assert query.answer.await_args_list[0].args == ("Choose agent",)
+        assert context.user_data["_selected_path"] == "/tmp/project"
 
     @pytest.mark.asyncio
     async def test_session_select_rejects_session_already_active_elsewhere(self):

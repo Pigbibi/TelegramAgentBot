@@ -11,7 +11,7 @@ Control Codex CLI or Claude Code sessions remotely through Telegram while keepin
 
 TelegramAgentBot is a Telegram controller for live Codex CLI / Claude Code sessions (`TELEGRAM_AGENT_BOT_AGENT_TYPE`):
 
-- `codex` is the default command for new tmux windows; set `TELEGRAM_AGENT_BOT_AGENT_TYPE=claude` to run Claude Code
+- New topics can choose `Codex` or `Claude Code`, then choose a configured model and reasoning level. `TELEGRAM_AGENT_BOT_AGENT_TYPE` remains the default.
 - transcript parsing and monitoring target `~/.codex` for Codex, or `~/.claude/projects` for Claude Code
 - Telegram delivery and topic isolation are hardened for long-running agent sessions
 - tmux stays the source of truth, so you can return to the same terminal session on desktop
@@ -244,6 +244,7 @@ be committed.
 | `TELEGRAM_AGENT_BOT_BACKEND_PLUGINS` | _(none)_ | Comma-separated Python modules that register optional agent backends |
 | `TELEGRAM_AGENT_BOT_TMUX_SESSION_NAME` | `telegram-agent-bot` | tmux session name used by the bot |
 | `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | `codex` for Codex, `claude` for Claude Code | Command used when creating a new window |
+| `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` | `~/.telegram-agent-bot/claude.env` | Optional 0600 environment file for Claude Code/DeepSeek; sourced without putting the key in tmux command text |
 | `TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST` | `false` | Append Codex `--dangerously-bypass-hook-trust` for unattended hosts after you have vetted the configured hooks |
 | `TELEGRAM_AGENT_BOT_CODEX_PROJECTS_PATH` | `~/.codex` for Codex, `~/.claude/projects` for Claude Code | Transcript root to scan |
 | `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
@@ -549,6 +550,7 @@ uv run telegram-agent-bot
 | `/compact` | Compact context |
 | `/cost` | Show token/cost usage |
 | `/goal` | Set or update the session goal |
+| `/agentcmd` / `/cmd` | Forward any agent slash command, e.g. `/agentcmd /review` |
 | `/help` | Show Codex help |
 | `/memory` | Edit AGENTS.md |
 | `/model` | Switch the model |

@@ -103,7 +103,7 @@ plutil -lint "$PLIST_PATH" >/dev/null
 
 cd "$REPO_DIR"
 uv sync
-uv run telegram-agent-bot hook --install
+uv run telegram-agent-bot hook --install-all
 
 token_line="$(grep -E '^TELEGRAM_BOT_TOKEN=' "$ENV_PATH" || true)"
 user_line="$(grep -E '^ALLOWED_USERS=' "$ENV_PATH" || true)"

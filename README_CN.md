@@ -11,7 +11,7 @@
 
 TelegramAgentBot 是一个通过 Telegram 远程控制 Codex CLI / Claude Code 会话的工具：
 
-- 新建窗口默认直接跑 `codex`；设置 `TELEGRAM_AGENT_BOT_AGENT_TYPE=claude` 后可改为 Claude Code
+- 创建新 topic 时可以选择 `Codex` 或 `Claude Code`，并选择模型与 `Fast/Standard/Deep/Max` 推理档位；全局 `TELEGRAM_AGENT_BOT_AGENT_TYPE` 仍作为默认值
 - 会话监控默认面向 Codex 的 `~/.codex`，Claude Code 模式下使用 `~/.claude/projects`
 - Telegram 转发、topic 隔离、清理流程按长时间跑 agent 的方式做了加固
 - 保留 tmux-first 的用法，手机和桌面都围绕同一个真实终端会话工作
@@ -237,6 +237,10 @@ TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES=true
 | `TELEGRAM_AGENT_BOT_BACKEND_PLUGINS` | _(空)_ | 可选 backend 插件模块，多个用逗号分隔 |
 | `TELEGRAM_AGENT_BOT_TMUX_SESSION_NAME` | `telegram-agent-bot` | bot 使用的 tmux session 名称 |
 | `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | Codex 为 `codex`，Claude Code 为 `claude` | 创建新窗口时运行的命令 |
+| `TELEGRAM_AGENT_BOT_CLAUDE_COMMAND` | `claude` | Claude Code 创建命令 |
+| `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` | `~/.telegram-agent-bot/claude.env` | Claude Code/DeepSeek 环境文件；文件应为 `600`，不会把 key 写入 tmux 命令 |
+| `TELEGRAM_AGENT_BOT_CODEX_MODELS` / `TELEGRAM_AGENT_BOT_CLAUDE_MODELS` | _(空)_ | Telegram 创建会话时显示的可选模型，逗号分隔 |
+| `TELEGRAM_AGENT_BOT_CODEX_REASONING_EFFORT` / `TELEGRAM_AGENT_BOT_CLAUDE_REASONING_EFFORT` | `medium` / `high` | 未在 Telegram picker 中另选时的默认推理档位 |
 | `TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST` | `false` | 在无人值守机器上确认 hooks 配置可信后，给 Codex 自动追加 `--dangerously-bypass-hook-trust` |
 | `TELEGRAM_AGENT_BOT_CODEX_PROJECTS_PATH` | Codex 为 `~/.codex`，Claude Code 为 `~/.claude/projects` | transcript 扫描根目录 |
 | `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | 创建新会话时默认展示的目录 |
@@ -273,6 +277,9 @@ TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES=true
 ### Claude Code 模式
 
 设置 `TELEGRAM_AGENT_BOT_AGENT_TYPE=claude` 后，bot 会管理 Claude Code 而不是 Codex CLI：
+
+如果使用 DeepSeek 的 Anthropic-compatible API，可参考
+`docs/claude-deepseek.env.example` 创建 `~/.telegram-agent-bot/claude.env`，再给文件设置 `chmod 600`。Claude Code 创建命令会在启动前 source 该文件，真实 token 不会进入仓库或日志。
 
 - 新窗口默认运行 `claude`，除非用 `TELEGRAM_AGENT_BOT_CODEX_COMMAND` 覆盖；如果 `.env` 里已有 `TELEGRAM_AGENT_BOT_CODEX_COMMAND=codex`，需要改成 `claude` 或删除该行
 - `telegram-agent-bot hook --install` 会把 SessionStart hook 写入 `~/.claude/settings.json`
@@ -510,6 +517,7 @@ uv run telegram-agent-bot
 | `/compact` | 压缩上下文 |
 | `/cost` | 查看 token / cost |
 | `/goal` | 设置或更新当前会话目标 |
+| `/agentcmd` / `/cmd` | 通用 agent 指令入口，例如 `/agentcmd /review` |
 | `/help` | 查看 Codex 帮助 |
 | `/memory` | 编辑 AGENTS.md |
 | `/model` | 切换模型 |
