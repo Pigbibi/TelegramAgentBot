@@ -256,6 +256,40 @@ async def test_handle_new_message_hides_plain_reasoning() -> None:
 
 
 @pytest.mark.asyncio
+async def test_clean_mode_hides_tool_notifications() -> None:
+    bot = AsyncMock()
+    msg = NewMessage(
+        session_id="local-1",
+        text="**Read**(README.md)",
+        is_complete=True,
+        content_type="tool_use",
+        tool_use_id="call_read",
+        tool_name="Read",
+        source_offset=123,
+    )
+
+    with (
+        patch("telegram_agent_bot.bot.session_manager") as mock_sm,
+        patch(
+            "telegram_agent_bot.bot.enqueue_content_message",
+            new_callable=AsyncMock,
+        ) as enqueue_content_message,
+        patch("telegram_agent_bot.bot.build_response_parts") as build_response_parts,
+    ):
+        mock_sm.find_users_for_session = AsyncMock(return_value=[(12345, "@1", 42)])
+        mock_sm.find_users_for_target_session.return_value = []
+        mock_sm.is_trace_mode.return_value = False
+
+        from telegram_agent_bot.bot import handle_new_message
+
+        await handle_new_message(msg, bot)
+
+    enqueue_content_message.assert_not_awaited()
+    build_response_parts.assert_not_called()
+    mock_sm.update_user_window_offset.assert_called_once_with(12345, "@1", 123)
+
+
+@pytest.mark.asyncio
 async def test_handle_new_message_renders_wait_tool_use_as_status() -> None:
     bot = AsyncMock()
     msg = NewMessage(

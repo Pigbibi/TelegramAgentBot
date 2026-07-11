@@ -23,6 +23,7 @@ from .agent_profile import (
     normalize_agent_type,
     normalize_effort,
 )
+from .output_mode import normalize_output_mode
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +285,12 @@ class Config:
         # When False, only text responses, thinking, and interactive prompts are sent
         self.show_tool_calls = (
             os.getenv("TELEGRAM_AGENT_BOT_SHOW_TOOL_CALLS", "true").lower() != "false"
+        )
+
+        # Per-topic output visibility. Clean mode is the safe default; Trace
+        # mode may show public tool summaries when explicitly selected.
+        self.output_mode_default = normalize_output_mode(
+            os.getenv("TELEGRAM_AGENT_BOT_OUTPUT_MODE", "clean")
         )
 
         # Show Bash command and output notifications while keeping other tools visible

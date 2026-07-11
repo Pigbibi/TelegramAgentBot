@@ -196,6 +196,7 @@ TELEGRAM_AGENT_BOT_AUTO_UPDATE=true
 TELEGRAM_AGENT_BOT_CODEX_UPDATE_CHECK=true
 TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE=true
 TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES=false
+TELEGRAM_AGENT_BOT_OUTPUT_MODE=clean
 # 可选：Claude Code 模式
 # TELEGRAM_AGENT_BOT_AGENT_TYPE=claude
 # 把上面的 TELEGRAM_AGENT_BOT_CODEX_COMMAND 改成 claude，或删除该行以使用 Claude 默认值。
@@ -263,6 +264,7 @@ TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES=false
 | `TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE` | `false` | 空闲且发现新版本时，执行 `npm install -g @openai/codex@latest` |
 | `TELEGRAM_AGENT_BOT_SHOW_COMMENTARY_MESSAGES` | `false` | 是否把中间 commentary 转发到 Telegram；模型 reasoning 始终隐藏 |
 | `TELEGRAM_AGENT_BOT_SHOW_TOOL_CALLS` | `true` | 是否转发工具调用通知和输出 |
+| `TELEGRAM_AGENT_BOT_OUTPUT_MODE` | `clean` | Topic 默认输出模式；`clean` 隐藏工具输出，`trace` 显示公开工具摘要 |
 | `TELEGRAM_AGENT_BOT_SHOW_BASH_TOOL_CALLS` | `true` | 是否转发 Bash 命令和输出；设为 `false` 只隐藏 Bash |
 | `TELEGRAM_AGENT_BOT_SHOW_HIDDEN_DIRS` | `false` | 目录浏览器里是否显示点目录 |
 | `AI_TRANSCRIPTION_PROVIDERS` | `openai` | 按顺序尝试的转录提供商 ID（`openai`, `google`），一个失败自动换下一个 |
@@ -507,6 +509,7 @@ uv run telegram-agent-bot
 | --- | --- |
 | `/start` | 显示欢迎信息 |
 | `/history` | 查看当前 topic 的消息历史 |
+| `/mode [clean|trace]` | 选择当前 topic 的清爽模式或公开工具追踪模式 |
 | `/screenshot` | 抓取当前终端截图 |
 | `/esc`, `/interrupt` | 给 agent 发送 Escape |
 | `/kill` | 杀掉绑定的 tmux 窗口并清理 topic 绑定 |

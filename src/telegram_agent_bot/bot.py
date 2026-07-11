@@ -123,6 +123,7 @@ from .handlers.callback_data import (
     CB_PROFILE_EFFORT,
     CB_PROFILE_FAST,
     CB_PROFILE_MODEL,
+    CB_OUTPUT_MODE,
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
     CB_ROOT_CANCEL,
@@ -175,6 +176,12 @@ from .handlers.directory_browser import (
 )
 from .handlers.cleanup import clear_topic_state
 from .handlers.history import send_history
+from .output_mode import (
+    OUTPUT_MODE_CLEAN,
+    OUTPUT_MODE_TRACE,
+    normalize_output_mode,
+    output_mode_label,
+)
 from .handlers.interactive_ui import (
     INTERACTIVE_TOOL_NAMES,
     clear_interactive_mode,
@@ -863,6 +870,59 @@ async def _continue_creation_with_profile(
 # --- Command handlers ---
 
 
+def _output_mode_keyboard(mode: str) -> InlineKeyboardMarkup:
+    normalized = normalize_output_mode(mode)
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    f"{'✅ ' if normalized == OUTPUT_MODE_CLEAN else ''}Clean",
+                    callback_data=f"{CB_OUTPUT_MODE}{OUTPUT_MODE_CLEAN}",
+                ),
+                InlineKeyboardButton(
+                    f"{'✅ ' if normalized == OUTPUT_MODE_TRACE else ''}Trace",
+                    callback_data=f"{CB_OUTPUT_MODE}{OUTPUT_MODE_TRACE}",
+                ),
+            ]
+        ]
+    )
+
+
+def _output_mode_text(mode: str) -> str:
+    normalized = normalize_output_mode(mode)
+    if normalized == OUTPUT_MODE_CLEAN:
+        detail = "只显示最终回答、错误和必要的交互确认。"
+    else:
+        detail = "额外显示公开工具摘要；模型 reasoning 始终隐藏。"
+    return f"Output mode: *{output_mode_label(normalized)}*\n\n{detail}"
+
+
+async def output_mode_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Show or update the per-topic Telegram output mode."""
+    del context
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id) or not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    parts = (update.message.text or "").split(maxsplit=1)
+    if len(parts) > 1 and parts[1].strip().lower() in {"clean", "trace"}:
+        mode = session_manager.set_output_mode(
+            user.id, thread_id, parts[1].strip().lower()
+        )
+        await safe_reply(update.message, f"✅ {_output_mode_text(mode)}")
+        return
+
+    mode = session_manager.get_output_mode(user.id, thread_id)
+    await safe_reply(
+        update.message,
+        _output_mode_text(mode),
+        reply_markup=_output_mode_keyboard(mode),
+    )
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -900,7 +960,11 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
-    await send_history(update.message, wid)
+    await send_history(
+        update.message,
+        wid,
+        output_mode=session_manager.get_output_mode(user.id, thread_id),
+    )
 
 
 async def screenshot_command(
@@ -4605,6 +4669,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 edit=True,
                 start_byte=start_byte,
                 end_byte=end_byte,
+                output_mode=session_manager.get_output_mode(user.id, cb_thread_id),
                 # Don't pass user_id for pagination - offset update only on initial view
                 # This prevents offset from going backwards if new messages arrive while paging
             )
@@ -4774,6 +4839,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         _clear_creation_state(context.user_data)
         await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
+
+    elif data.startswith(CB_OUTPUT_MODE):
+        mode = normalize_output_mode(data[len(CB_OUTPUT_MODE) :])
+        thread_id = _get_thread_id(update)
+        selected = session_manager.set_output_mode(user.id, thread_id, mode)
+        await safe_edit(
+            query,
+            _output_mode_text(selected),
+            reply_markup=_output_mode_keyboard(selected),
+        )
+        await query.answer(f"Output mode: {output_mode_label(selected)}")
 
     # Directory browser handlers
     elif data.startswith(CB_DIR_SELECT):
@@ -5667,6 +5743,16 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 await _mark_transcript_message_delivered(user_id, wid, msg)
             continue
 
+        # Clean mode keeps the topic focused on the final answer. Background
+        # waits above remain visible as a generic status, while other tool and
+        # local-command entries are omitted and still advance the read offset.
+        if not session_manager.is_trace_mode(
+            user_id, thread_id
+        ) and msg.content_type in ("tool_use", "tool_result", "local_command"):
+            if not is_remote_target and msg.source_offset > 0:
+                await _mark_transcript_message_delivered(user_id, wid, msg)
+            continue
+
         # Skip tool call notifications when TELEGRAM_AGENT_BOT_SHOW_TOOL_CALLS=false
         if not config.show_tool_calls and msg.content_type in (
             "tool_use",
@@ -5737,6 +5823,7 @@ async def post_init(application: Application) -> None:
     bot_commands = [
         BotCommand("start", "Show welcome message"),
         BotCommand("history", "Message history for this topic"),
+        BotCommand("mode", "Choose clean or trace output"),
         BotCommand("screenshot", "Terminal screenshot with control keys"),
         BotCommand("esc", ESC_COMMAND_DESCRIPTION),
         BotCommand("interrupt", INTERRUPT_COMMAND_DESCRIPTION),
@@ -5891,6 +5978,7 @@ def create_bot() -> Application:
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("history", history_command))
+    application.add_handler(CommandHandler("mode", output_mode_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
     application.add_handler(CommandHandler("interrupt", interrupt_command))

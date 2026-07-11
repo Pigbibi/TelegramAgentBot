@@ -62,5 +62,8 @@ CB_PROFILE_FAST = "ap:fast:"  # ap:fast:on|off
 CB_PROFILE_CONFIRM = "ap:confirm"
 CB_PROFILE_CANCEL = "ap:cancel"
 
+# Per-topic output visibility mode
+CB_OUTPUT_MODE = "om:"  # om:clean|trace
+
 # Screenshot control keys
 CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>

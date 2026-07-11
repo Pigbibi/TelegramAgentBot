@@ -38,6 +38,7 @@ from .account_manager import ACCOUNT_HOME_DIR, list_account_homes
 from .agent_profile import normalize_agent_type
 from .backends.base import AgentTarget
 from .config import config
+from .output_mode import normalize_output_mode
 from .terminal_parser import (
     extract_auth_error_message,
     is_codex_input_ready,
@@ -251,6 +252,8 @@ class SessionManager:
     # History: originally added in 5afc111, erroneously removed in 26cb81f,
     # restored in PR #23.
     group_chat_ids: dict[str, int] = field(default_factory=dict)
+    # "user_id:thread_id" -> output mode (clean|trace)
+    thread_output_modes: dict[str, str] = field(default_factory=dict)
     # Closed sessions that should be hidden from the resume picker by default.
     hidden_session_ids: set[str] = field(default_factory=set)
     # Sessions that were ever managed through a Telegram topic.
@@ -314,6 +317,7 @@ class SessionManager:
             },
             "window_display_names": self.window_display_names,
             "group_chat_ids": self.group_chat_ids,
+            "thread_output_modes": self.thread_output_modes,
             "hidden_session_ids": sorted(self.hidden_session_ids),
             "topic_managed_session_ids": sorted(self.topic_managed_session_ids),
         }
@@ -358,6 +362,11 @@ class SessionManager:
                 self.group_chat_ids = {
                     k: int(v) for k, v in state.get("group_chat_ids", {}).items()
                 }
+                self.thread_output_modes = {
+                    str(key): normalize_output_mode(value)
+                    for key, value in state.get("thread_output_modes", {}).items()
+                    if isinstance(key, str) and isinstance(value, str)
+                }
                 self.hidden_session_ids = {
                     _canonical_session_id(session_id)
                     for session_id in state.get("hidden_session_ids", [])
@@ -399,6 +408,7 @@ class SessionManager:
                 self.thread_targets = {}
                 self.window_display_names = {}
                 self.group_chat_ids = {}
+                self.thread_output_modes = {}
                 self.hidden_session_ids = set()
                 self.topic_managed_session_ids = set()
                 pass
@@ -810,6 +820,36 @@ class SessionManager:
                 user_id,
                 thread_id,
             )
+
+    @staticmethod
+    def _thread_state_key(user_id: int, thread_id: int | None) -> str:
+        return f"{user_id}:{thread_id or 0}"
+
+    def get_output_mode(self, user_id: int, thread_id: int | None) -> str:
+        """Return the persisted output mode for one Telegram topic."""
+        key = self._thread_state_key(user_id, thread_id)
+        return normalize_output_mode(
+            self.thread_output_modes.get(key), config.output_mode_default
+        )
+
+    def set_output_mode(self, user_id: int, thread_id: int | None, mode: str) -> str:
+        """Persist and return a normalized output mode for one topic."""
+        normalized = normalize_output_mode(mode, config.output_mode_default)
+        self.thread_output_modes[self._thread_state_key(user_id, thread_id)] = (
+            normalized
+        )
+        self._save_state()
+        logger.info(
+            "Set output mode: user=%d thread=%s mode=%s",
+            user_id,
+            thread_id,
+            normalized,
+        )
+        return normalized
+
+    def is_trace_mode(self, user_id: int, thread_id: int | None) -> bool:
+        """Return whether a topic explicitly enables public trace output."""
+        return self.get_output_mode(user_id, thread_id) == "trace"
 
     def resolve_chat_id(self, user_id: int, thread_id: int | None = None) -> int:
         """Resolve the correct chat_id for sending messages.
@@ -1694,6 +1734,9 @@ class SessionManager:
                 del targets[thread_id]
                 if not targets:
                     del self.thread_targets[user_id]
+                self.thread_output_modes.pop(
+                    self._thread_state_key(user_id, thread_id), None
+                )
                 self._save_state()
             return None
         window_id = bindings.pop(thread_id)
@@ -1703,6 +1746,7 @@ class SessionManager:
             del targets[thread_id]
             if not targets:
                 del self.thread_targets[user_id]
+        self.thread_output_modes.pop(self._thread_state_key(user_id, thread_id), None)
         self._save_state()
         logger.info(
             "Unbound thread %d (was %s) for user %d",
