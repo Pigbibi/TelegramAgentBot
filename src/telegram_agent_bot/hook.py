@@ -449,6 +449,22 @@ def _install_hook() -> int:
     return 0
 
 
+def _install_all_hooks() -> int:
+    """Install tracking hooks for both CLIs used by mixed Telegram topics."""
+    original = os.environ.get("TELEGRAM_AGENT_BOT_AGENT_TYPE")
+    result = 0
+    try:
+        for agent_type in ("codex", "claude"):
+            os.environ["TELEGRAM_AGENT_BOT_AGENT_TYPE"] = agent_type
+            result = max(result, _install_hook())
+    finally:
+        if original is None:
+            os.environ.pop("TELEGRAM_AGENT_BOT_AGENT_TYPE", None)
+        else:
+            os.environ["TELEGRAM_AGENT_BOT_AGENT_TYPE"] = original
+    return result
+
+
 def hook_main() -> None:
     """Process a Codex hook event from stdin, or install the hook."""
     # Configure logging for the hook subprocess (main.py logging doesn't apply here)
@@ -467,6 +483,11 @@ def hook_main() -> None:
         action="store_true",
         help="Install the SessionStart hook in the active agent home",
     )
+    parser.add_argument(
+        "--install-all",
+        action="store_true",
+        help="Install SessionStart hooks for both Codex and Claude Code",
+    )
     # Parse only known args to avoid conflicts with stdin JSON
     args, _ = parser.parse_known_args(sys.argv[2:])
 
@@ -474,6 +495,10 @@ def hook_main() -> None:
         logger.info("Hook install requested")
         _load_env_for_install()
         sys.exit(_install_hook())
+    if args.install_all:
+        logger.info("Installing hooks for Codex and Claude Code")
+        _load_env_for_install()
+        sys.exit(_install_all_hooks())
 
     # Normal hook processing: read JSON from stdin
     logger.debug("Processing hook event from stdin")
@@ -580,6 +605,7 @@ def hook_main() -> None:
                     "session_id": session_id,
                     "cwd": cwd,
                     "window_name": window_name,
+                    "agent_type": _agent_type(),
                 }
 
                 # Clean up old-format key ("session:window_name") if it exists.

@@ -210,6 +210,7 @@ class TestHookMainValidation:
                 "session_id": "rollout-2026-04-03T08-30-00-019d4610-438c-7c52-bf97-bc6f02747399",
                 "cwd": "/tmp",
                 "window_name": "demo",
+                "agent_type": "codex",
             }
         }
 

@@ -54,5 +54,11 @@ CB_SESSION_SELECT = "rs:sel:"  # rs:sel:<index>
 CB_SESSION_NEW = "rs:new"  # start a new session
 CB_SESSION_CANCEL = "rs:cancel"  # cancel
 
+# Per-topic agent profile selection
+CB_PROFILE_AGENT = "ap:agent:"  # ap:agent:codex|claude
+CB_PROFILE_MODEL = "ap:model:"  # ap:model:<index>
+CB_PROFILE_EFFORT = "ap:effort:"  # ap:effort:<level>
+CB_PROFILE_CANCEL = "ap:cancel"
+
 # Screenshot control keys
 CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>

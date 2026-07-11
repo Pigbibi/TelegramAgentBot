@@ -25,6 +25,12 @@ from pathlib import Path
 import libtmux
 
 from .account_manager import disable_codex_update_prompt, ensure_account_home
+from .agent_profile import (
+    AGENT_CLAUDE,
+    AGENT_CODEX,
+    AgentProfile,
+    normalize_agent_type,
+)
 from .config import SENSITIVE_ENV_VARS, config
 
 logger = logging.getLogger(__name__)
@@ -74,12 +80,37 @@ def _first_command_executable(parts: list[str]) -> str:
     return ""
 
 
-def _agent_command_for_launch() -> str:
+def _agent_command_for_launch(
+    profile: AgentProfile | None = None,
+    *,
+    command_override: str | None = None,
+    export_agent_type: bool = False,
+) -> str:
     """Return the configured agent command with optional hook-trust bypass.
 
     Supports both Codex and Claude Code CLIs.
     """
-    cmd = config.codex_command
+    profile = profile or AgentProfile(agent_type=config.agent_type)
+    codex_command = getattr(config, "codex_cli_command", config.codex_command)
+    cmd = command_override or (
+        config.claude_command if profile.agent_type == AGENT_CLAUDE else codex_command
+    )
+    if profile.model:
+        cmd = f"{cmd} --model {shlex.quote(profile.model)}"
+    if profile.agent_type == AGENT_CLAUDE and profile.reasoning_effort:
+        cmd = f"{cmd} --effort {shlex.quote(profile.reasoning_effort)}"
+    elif profile.reasoning_effort:
+        effort = (
+            "xhigh" if profile.reasoning_effort == "max" else profile.reasoning_effort
+        )
+        if profile.agent_type == AGENT_CODEX:
+            cmd = f'{cmd} -c model_reasoning_effort="{effort}"'
+    if profile.agent_type == AGENT_CLAUDE:
+        env_file = getattr(config, "claude_env_file", None)
+        if isinstance(env_file, Path) and env_file.is_file():
+            cmd = f"set -a; . {shlex.quote(str(env_file))}; set +a; {cmd}"
+    if export_agent_type:
+        cmd = f"export TELEGRAM_AGENT_BOT_AGENT_TYPE={profile.agent_type}; {cmd}"
     if not getattr(config, "codex_bypass_hook_trust", False):
         return cmd
     try:
@@ -92,7 +123,7 @@ def _agent_command_for_launch() -> str:
     first_exe = _first_command_executable(parts)
     # This flag is Codex-specific; Claude Code uses a different permission flag
     # with broader semantics, so do not inject it for Claude mode.
-    if config.agent_type == "claude" or first_exe != "codex":
+    if profile.agent_type == AGENT_CLAUDE or first_exe != "codex":
         return cmd
     return f"{cmd} {_HOOK_TRUST_BYPASS_FLAG}"
 
@@ -805,6 +836,9 @@ class TmuxManager:
         start_codex: bool = True,
         resume_session_id: str | None = None,
         account_name: str | None = None,
+        agent_type: str | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> tuple[bool, str, str, str]:
         """Create a new tmux window and optionally start Codex.
 
@@ -817,6 +851,13 @@ class TmuxManager:
         Returns:
             Tuple of (success, message, window_name, window_id)
         """
+        profile = AgentProfile(
+            agent_type=normalize_agent_type(agent_type, config.agent_type),
+            model=(model or "").strip(),
+            reasoning_effort=reasoning_effort or "",
+        )
+        command_override = config.codex_command if agent_type is None else None
+
         # Validate directory first
         path = Path(work_dir).expanduser().resolve()
         if not path.exists():
@@ -855,16 +896,20 @@ class TmuxManager:
                         disable_codex_update_prompt()
                     pane = window.active_pane
                     if pane:
-                        cmd = _agent_command_for_launch()
+                        cmd = _agent_command_for_launch(
+                            profile,
+                            command_override=command_override,
+                            export_agent_type=agent_type is not None,
+                        )
                         if resume_session_id:
                             resume_target = _resume_target_id(resume_session_id)
                             resume_arg = shlex.quote(resume_target)
-                            if config.agent_type == "claude":
+                            if profile.agent_type == AGENT_CLAUDE:
                                 cmd = f"{cmd} --resume {resume_arg}"
                             else:
                                 cmd = f"{cmd} resume {resume_arg}"
                         if account_name:
-                            if config.agent_type == "claude":
+                            if profile.agent_type == AGENT_CLAUDE:
                                 account_home = ensure_account_home(account_name)
                                 cmd = (
                                     f"export HOME={shlex.quote(str(account_home))}; "

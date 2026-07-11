@@ -22,6 +22,16 @@ from pathlib import Path
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..backends.browser import BrowserRoot, DirectoryListing
+from ..agent_profile import (
+    AGENT_CLAUDE,
+    AGENT_CODEX,
+    AgentProfile,
+    EFFORT_DEEP,
+    EFFORT_FAST,
+    EFFORT_MAX,
+    EFFORT_STANDARD,
+    agent_display_name,
+)
 from ..session import CodexSession
 
 from ..config import ProjectRoot, config
@@ -36,6 +46,10 @@ from .callback_data import (
     CB_SESSION_CANCEL,
     CB_SESSION_NEW,
     CB_SESSION_SELECT,
+    CB_PROFILE_AGENT,
+    CB_PROFILE_CANCEL,
+    CB_PROFILE_EFFORT,
+    CB_PROFILE_MODEL,
     CB_WIN_BIND,
     CB_WIN_CANCEL,
     CB_WIN_NEW,
@@ -59,7 +73,13 @@ BROWSE_PAGE_KEY = "browse_page"
 BROWSE_DIRS_KEY = "browse_dirs"  # Cache of subdirs for current path
 UNBOUND_WINDOWS_KEY = "unbound_windows"  # Cache of (name, cwd) tuples
 STATE_SELECTING_SESSION = "selecting_session"
+STATE_SELECTING_AGENT = "selecting_agent"
+STATE_SELECTING_PROFILE = "selecting_profile"
 SESSIONS_KEY = "cached_sessions"  # Cache of CodexSession list
+PROFILE_AGENT_KEY = "profile_agent"
+PROFILE_MODEL_KEY = "profile_model"
+PROFILE_EFFORT_KEY = "profile_effort"
+PROFILE_MODELS_KEY = "profile_models"
 
 
 def clear_browse_state(user_data: dict | None) -> None:
@@ -95,6 +115,81 @@ def clear_session_picker_state(user_data: dict | None) -> None:
     if user_data is not None:
         user_data.pop(STATE_KEY, None)
         user_data.pop(SESSIONS_KEY, None)
+
+
+def clear_profile_picker_state(user_data: dict | None) -> None:
+    """Clear per-topic agent profile selection state."""
+    if user_data is not None:
+        user_data.pop(STATE_KEY, None)
+        for key in (
+            PROFILE_AGENT_KEY,
+            PROFILE_MODEL_KEY,
+            PROFILE_EFFORT_KEY,
+            PROFILE_MODELS_KEY,
+        ):
+            user_data.pop(key, None)
+
+
+def build_agent_picker() -> tuple[str, InlineKeyboardMarkup]:
+    """Build the first step of the per-topic agent picker."""
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🟢 Codex", callback_data=f"{CB_PROFILE_AGENT}{AGENT_CODEX}"
+                ),
+                InlineKeyboardButton(
+                    "🟣 Claude Code",
+                    callback_data=f"{CB_PROFILE_AGENT}{AGENT_CLAUDE}",
+                ),
+            ],
+            [InlineKeyboardButton("Cancel", callback_data=CB_PROFILE_CANCEL)],
+        ]
+    )
+    return "*Choose Agent*\n\nSelect the CLI for this Telegram topic.", keyboard
+
+
+def build_profile_picker(
+    profile: AgentProfile,
+    models: Sequence[str],
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build model and reasoning-effort controls for a selected agent."""
+    model_label = profile.model or "CLI default"
+    lines = [
+        f"*{agent_display_name(profile.agent_type)} session settings*",
+        f"Model: `{model_label}`",
+        f"Reasoning: `{profile.effort_label}`",
+        "\nChoose a model and reasoning level:",
+    ]
+    buttons: list[list[InlineKeyboardButton]] = []
+    for index, model in enumerate(models):
+        label = model[:22] + "…" if len(model) > 23 else model
+        prefix = "✅ " if model == profile.model else ""
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"{prefix}{label}", callback_data=f"{CB_PROFILE_MODEL}{index}"
+                )
+            ]
+        )
+
+    effort_options = (
+        (EFFORT_FAST, "⚡ Fast"),
+        (EFFORT_STANDARD, "⚖ Standard"),
+        (EFFORT_DEEP, "🧠 Deep"),
+        (EFFORT_MAX, "🚀 Max"),
+    )
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                f"{'✅ ' if profile.reasoning_effort == value else ''}{label}",
+                callback_data=f"{CB_PROFILE_EFFORT}{value}",
+            )
+            for value, label in effort_options
+        ]
+    )
+    buttons.append([InlineKeyboardButton("Cancel", callback_data=CB_PROFILE_CANCEL)])
+    return "\n".join(lines), InlineKeyboardMarkup(buttons)
 
 
 def build_project_root_picker(

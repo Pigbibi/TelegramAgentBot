@@ -90,12 +90,23 @@ class LocalTmuxBackend:
         """Create or resume a local tmux-backed Codex session."""
         from ..tmux_manager import tmux_manager
 
-        success, message, window_name, window_id = await tmux_manager.create_window(
-            request.cwd,
-            window_name=request.window_name or None,
-            resume_session_id=request.resume_session_id or None,
-            account_name=request.account_name or None,
-        )
+        if not any((request.agent_type, request.model, request.reasoning_effort)):
+            success, message, window_name, window_id = await tmux_manager.create_window(
+                request.cwd,
+                window_name=request.window_name or None,
+                resume_session_id=request.resume_session_id or None,
+                account_name=request.account_name or None,
+            )
+        else:
+            success, message, window_name, window_id = await tmux_manager.create_window(
+                request.cwd,
+                window_name=request.window_name or None,
+                resume_session_id=request.resume_session_id or None,
+                account_name=request.account_name or None,
+                agent_type=request.agent_type or None,
+                model=request.model or None,
+                reasoning_effort=request.reasoning_effort or None,
+            )
         target = self.target_from_window(window_id) if success and window_id else None
         return CreateSessionResult(
             ok=success,

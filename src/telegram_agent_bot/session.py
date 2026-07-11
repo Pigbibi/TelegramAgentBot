@@ -35,6 +35,7 @@ from typing import Any
 import aiofiles
 
 from .account_manager import ACCOUNT_HOME_DIR, list_account_homes
+from .agent_profile import normalize_agent_type
 from .backends.base import AgentTarget
 from .config import config
 from .terminal_parser import (
@@ -67,20 +68,20 @@ _UUID_SUFFIX_RE = re.compile(
 
 
 def _iter_transcript_roots(preferred_account_name: str = "") -> list[Path]:
-    """Return transcript roots to search, preferring one account home when known."""
+    """Return Codex and Claude transcript roots to support mixed topics."""
 
-    def account_transcript_root(account_home: Path) -> Path:
-        if config.agent_type == "claude":
-            return account_home / ".claude" / "projects"
-        return account_home
+    def account_transcript_roots(account_home: Path) -> tuple[Path, Path]:
+        return (account_home, account_home / ".claude" / "projects")
 
     candidates: list[Path] = []
     if preferred_account_name:
-        candidates.append(
-            account_transcript_root(ACCOUNT_HOME_DIR / preferred_account_name)
+        candidates.extend(
+            account_transcript_roots(ACCOUNT_HOME_DIR / preferred_account_name)
         )
     candidates.append(config.codex_projects_path)
-    candidates.extend(account_transcript_root(home) for home in list_account_homes())
+    candidates.extend((Path.home() / ".claude" / "projects", Path.home() / ".codex"))
+    for home in list_account_homes():
+        candidates.extend(account_transcript_roots(home))
 
     seen: set[str] = set()
     roots: list[Path] = []
@@ -164,6 +165,9 @@ class WindowState:
     account_name: str = ""
     usage_limit_exceeded: bool = False
     launch_started_at: float = 0.0
+    agent_type: str = ""
+    model: str = ""
+    reasoning_effort: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -178,6 +182,12 @@ class WindowState:
             d["usage_limit_exceeded"] = True
         if self.launch_started_at:
             d["launch_started_at"] = self.launch_started_at
+        if self.agent_type:
+            d["agent_type"] = normalize_agent_type(self.agent_type)
+        if self.model:
+            d["model"] = self.model
+        if self.reasoning_effort:
+            d["reasoning_effort"] = self.reasoning_effort
         return d
 
     @classmethod
@@ -189,6 +199,11 @@ class WindowState:
             account_name=data.get("account_name", ""),
             usage_limit_exceeded=bool(data.get("usage_limit_exceeded", False)),
             launch_started_at=float(data.get("launch_started_at", 0.0) or 0.0),
+            agent_type=normalize_agent_type(data.get("agent_type", ""), default="")
+            if data.get("agent_type")
+            else "",
+            model=str(data.get("model") or ""),
+            reasoning_effort=str(data.get("reasoning_effort") or ""),
         )
 
 
@@ -976,6 +991,7 @@ class SessionManager:
             new_sid = info.get("session_id", "")
             new_cwd = info.get("cwd", "")
             new_wname = info.get("window_name", "")
+            new_agent_type = info.get("agent_type", "")
             if not new_sid:
                 continue
             state = self.get_window_state(window_id)
@@ -1022,6 +1038,9 @@ class SessionManager:
                 changed = True
             if state.launch_started_at:
                 state.launch_started_at = 0.0
+                changed = True
+            if new_agent_type and state.agent_type != new_agent_type:
+                state.agent_type = normalize_agent_type(new_agent_type)
                 changed = True
             # Update display name
             if new_wname:
@@ -1087,6 +1106,9 @@ class SessionManager:
         state.session_id = ""
         state.cwd = ""
         state.usage_limit_exceeded = False
+        state.agent_type = ""
+        state.model = ""
+        state.reasoning_effort = ""
         self._save_state()
         logger.info("Cleared session for window_id %s", window_id)
 
@@ -1097,6 +1119,9 @@ class SessionManager:
         cwd: str,
         window_name: str = "",
         account_name: str = "",
+        agent_type: str = "",
+        model: str = "",
+        reasoning_effort: str = "",
     ) -> None:
         """Persist metadata for a freshly created tmux window."""
         state = self.get_window_state(window_id)
@@ -1105,6 +1130,9 @@ class SessionManager:
         state.window_name = window_name
         state.account_name = account_name
         state.usage_limit_exceeded = False
+        state.agent_type = normalize_agent_type(agent_type) if agent_type else ""
+        state.model = model
+        state.reasoning_effort = reasoning_effort
         state.launch_started_at = time.time()
         if window_name:
             self.window_display_names[window_id] = window_name
@@ -1192,8 +1220,12 @@ class SessionManager:
             return False
         try:
             resolved = file_path.resolve()
-            root = config.codex_projects_path.expanduser().resolve()
-            return resolved.is_relative_to(root)
+            roots = (
+                config.codex_projects_path.expanduser().resolve(),
+                (Path.home() / ".codex").resolve(),
+                (Path.home() / ".claude" / "projects").resolve(),
+            )
+            return any(resolved.is_relative_to(root) for root in roots)
         except OSError:
             return False
 
@@ -1263,6 +1295,7 @@ class SessionManager:
         window_name: str = "",
         *,
         persist_session_map: bool = False,
+        agent_type: str = "",
     ) -> None:
         """Bind a discovered transcript session to an existing tmux window."""
         state = self.get_window_state(window_id)
@@ -1270,6 +1303,8 @@ class SessionManager:
         state.cwd = cwd
         state.usage_limit_exceeded = False
         state.launch_started_at = 0.0
+        if agent_type:
+            state.agent_type = normalize_agent_type(agent_type)
         canonical_id = _canonical_session_id(session_id)
         if canonical_id:
             self.hidden_session_ids.discard(canonical_id)
@@ -1310,6 +1345,9 @@ class SessionManager:
             "cwd": cwd,
             "window_name": window_name or self.get_display_name(window_id),
         }
+        state = self.get_window_state(window_id)
+        if state.agent_type:
+            session_map[key]["agent_type"] = normalize_agent_type(state.agent_type)
         atomic_write_json(config.session_map_file, session_map)
         logger.info("Updated session_map entry for window_id %s", window_id)
 
