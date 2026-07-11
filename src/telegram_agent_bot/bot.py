@@ -1794,7 +1794,7 @@ async def _drop_expired_agent_input(
             user_id,
             thread_id,
             f"{expired} queued input(s) expired after waiting {wait_display}s "
-            "for Codex to become ready",
+            "for the agent to become ready",
         )
 
 
@@ -1829,7 +1829,7 @@ async def _queue_agent_input_after_interrupt(
         _ensure_agent_input_drain_task(bot, key)
         return (
             True,
-            f"Interrupt requested; queued message until Codex is ready ({depth}/{limit})",
+            f"Interrupt requested; queued message until the agent is ready ({depth}/{limit})",
         )
 
 
@@ -1840,7 +1840,7 @@ async def _send_or_queue_agent_input(
     window_id: str,
     text: str,
 ) -> tuple[bool, str, bool]:
-    """Send to Codex directly unless a pending interactive UI needs bot-side ordering."""
+    """Send directly unless a pending interactive UI needs bot-side ordering."""
     key = _agent_input_key(user_id, thread_id, window_id)
     result: tuple[bool, str, bool]
     async with _agent_input_lock(key):
@@ -1857,7 +1857,11 @@ async def _send_or_queue_agent_input(
                 )
             else:
                 _ensure_agent_input_drain_task(bot, key)
-                result = True, f"Queued until Codex is ready ({depth}/{limit})", True
+                result = (
+                    True,
+                    f"Queued until the agent is ready ({depth}/{limit})",
+                    True,
+                )
             return result
 
         capture = await capture_agent_output(user_id, thread_id, window_id)
@@ -1890,7 +1894,7 @@ async def _send_or_queue_agent_input(
                 if not queued:
                     result = (
                         False,
-                        "Codex is waiting for an interactive choice and the input "
+                        "The agent is waiting for an interactive choice and the input "
                         "queue is full "
                         f"({limit} pending). Wait for it to finish or use /interrupt.",
                         False,
@@ -3287,7 +3291,7 @@ async def _maybe_confirm_startup_trust_prompt(
     if content is None:
         return False, ""
     if content.name != "DirectoryTrust":
-        return False, f"Codex is waiting for interactive input: {content.name}"
+        return False, f"Agent is waiting for interactive input: {content.name}"
     logger.info("Auto-confirming Codex directory trust prompt in window %s", window_id)
     if await tmux_manager.send_control_key(window_id, "Enter"):
         return True, "Confirmed Codex directory trust prompt"
@@ -3300,12 +3304,17 @@ async def _send_to_window_when_codex_ready(
     window_id: str,
     text: str,
     *,
-    timeout: float = 60.0,
+    timeout: float | None = None,
     interval: float = 0.5,
     auto_confirm_startup_trust: bool = False,
 ) -> tuple[bool, str]:
     """Send text once the new Codex TUI is ready to accept input."""
-    deadline = asyncio.get_event_loop().time() + timeout
+    startup_timeout = (
+        timeout
+        if timeout is not None
+        else getattr(config, "agent_startup_timeout_seconds", 180.0)
+    )
+    deadline = asyncio.get_event_loop().time() + startup_timeout
     last_message = ""
     while asyncio.get_event_loop().time() < deadline:
         capture = await capture_agent_output(user_id, thread_id, window_id)
@@ -3330,7 +3339,7 @@ async def _send_to_window_when_codex_ready(
                     continue
                 if trust_message.startswith("Failed to confirm"):
                     return False, trust_message
-            last_message = f"Codex is waiting for interactive input: {interactive.name}"
+            last_message = f"Agent is waiting for interactive input: {interactive.name}"
             await asyncio.sleep(interval)
             continue
         if not is_codex_input_ready(pane_text or ""):
@@ -3338,7 +3347,7 @@ async def _send_to_window_when_codex_ready(
             if status:
                 last_message = f"Agent is still busy: {status}"
             else:
-                last_message = "Codex UI is not ready for input"
+                last_message = "Agent UI is not ready for input"
             await asyncio.sleep(interval)
             continue
         send_ok, send_msg = await _send_message_to_agent(

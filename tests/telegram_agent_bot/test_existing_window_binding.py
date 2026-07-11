@@ -832,14 +832,14 @@ class TestExistingWindowBinding:
             patch(
                 "telegram_agent_bot.bot._send_to_window_when_codex_ready",
                 new_callable=AsyncMock,
-                return_value=(False, "Timed out waiting for Codex to become ready"),
+                return_value=(False, "Timed out waiting for the agent to become ready"),
             ) as send_when_ready,
             patch(
                 "telegram_agent_bot.bot._queue_agent_input_after_interrupt",
                 new_callable=AsyncMock,
                 return_value=(
                     True,
-                    "Interrupt requested; queued message until Codex is ready (1/20)",
+                    "Interrupt requested; queued message until the agent is ready (1/20)",
                 ),
             ) as queue_after_interrupt,
             patch(
@@ -895,7 +895,7 @@ class TestExistingWindowBinding:
         mark_working.assert_awaited_once_with(context.bot, 12345, "@1", 42)
         safe_reply.assert_awaited_once_with(
             update.message,
-            "⎋ Interrupt requested; queued message until Codex is ready (1/20)",
+            "⎋ Interrupt requested; queued message until the agent is ready (1/20)",
         )
 
     @pytest.mark.asyncio
