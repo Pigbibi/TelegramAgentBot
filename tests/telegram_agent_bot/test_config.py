@@ -23,6 +23,9 @@ def _base_env(monkeypatch, tmp_path):
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CLAUDE_MODELS", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_ENABLE_ACCOUNT_ROTATION", raising=False)
+    monkeypatch.delenv(
+        "TELEGRAM_AGENT_BOT_AGENT_STARTUP_TIMEOUT_SECONDS", raising=False
+    )
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test:token")
     monkeypatch.setenv("ALLOWED_USERS", "12345")
     monkeypatch.setenv("TELEGRAM_AGENT_BOT_DIR", str(tmp_path))
@@ -47,6 +50,10 @@ class TestConfigValid:
         assert cfg.codex_models == ("gpt-5.4-mini",)
         assert cfg.claude_model == "deepseek-v4-flash"
         assert cfg.claude_models == ("deepseek-v4-flash",)
+
+    def test_agent_startup_timeout_defaults_to_three_minutes(self):
+        cfg = Config()
+        assert cfg.agent_startup_timeout_seconds == 180.0
 
     def test_claude_agent_defaults(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "claude")

@@ -261,6 +261,7 @@ be committed.
 | `TELEGRAM_AGENT_BOT_STATUS_REPOST_INTERVAL` | `60.0` | Re-send long-running `Thinking` status after this many seconds so Telegram topics visibly stay active; set `0` to only edit in place |
 | `TELEGRAM_AGENT_BOT_AGENT_INPUT_QUEUE_MAX_SIZE` | `20` | Maximum bot-held inputs per session while Codex shows an interactive prompt; regular busy-state inputs are sent to Codex directly |
 | `TELEGRAM_AGENT_BOT_AGENT_INPUT_QUEUE_MAX_WAIT_SECONDS` | `1800` | Drop bot-held inputs after this many seconds if Codex never becomes ready; set `0` to disable expiry |
+| `TELEGRAM_AGENT_BOT_AGENT_STARTUP_TIMEOUT_SECONDS` | `180` | Maximum wait for a newly launched agent UI before reporting a pending-message failure |
 | `TELEGRAM_AGENT_BOT_AUTO_UPDATE` | `false` | On startup, check and fast-forward git source installs |
 | `TELEGRAM_AGENT_BOT_UPDATE_INTERVAL_SECONDS` | `86400` | Minimum seconds between automatic update checks |
 | `TELEGRAM_AGENT_BOT_UPDATE_REQUIRE_IDLE` | `true` | Apply automatic updates only when no Codex pane is active |

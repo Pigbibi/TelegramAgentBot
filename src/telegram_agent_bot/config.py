@@ -256,6 +256,15 @@ class Config:
                 )
             ),
         )
+        self.agent_startup_timeout_seconds = max(
+            30.0,
+            float(
+                os.getenv(
+                    "TELEGRAM_AGENT_BOT_AGENT_STARTUP_TIMEOUT_SECONDS",
+                    "180",
+                )
+            ),
+        )
 
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix

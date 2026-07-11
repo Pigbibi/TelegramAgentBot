@@ -37,7 +37,9 @@ async def test_queue_agent_input_after_interrupt_queues_and_starts_drain(monkeyp
     )
 
     assert ok is True
-    assert message == "Interrupt requested; queued message until Codex is ready (1/20)"
+    assert (
+        message == "Interrupt requested; queued message until the agent is ready (1/20)"
+    )
     assert [
         item.text for item in bot_module._agent_input_queues[(12345, 42, "@1")]
     ] == ["replacement prompt"]
@@ -415,6 +417,32 @@ async def test_send_to_window_when_ready_sends_with_visible_idle_prompt(monkeypa
 
     assert (ok, message) == (True, "Sent")
     send_message.assert_awaited_once_with(12345, 42, "@1", "queued prompt")
+
+
+@pytest.mark.asyncio
+async def test_send_to_window_when_ready_uses_configured_startup_timeout(monkeypatch):
+    capture = SimpleNamespace(
+        text="starting agent",
+        missing=False,
+    )
+    monkeypatch.setattr(
+        bot_module, "capture_agent_output", AsyncMock(return_value=capture)
+    )
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", AsyncMock())
+    monkeypatch.setattr(bot_module.config, "agent_startup_timeout_seconds", 30.0)
+    monkeypatch.setattr(bot_module.asyncio, "sleep", AsyncMock())
+    clock = iter((0.0, 0.0, 31.0))
+    monkeypatch.setattr(
+        bot_module.asyncio,
+        "get_event_loop",
+        lambda: SimpleNamespace(time=lambda: next(clock, 31.0)),
+    )
+
+    ok, message = await bot_module._send_to_window_when_codex_ready(
+        12345, 42, "@1", "queued prompt"
+    )
+
+    assert (ok, message) == (False, "Agent UI is not ready for input")
 
 
 @pytest.mark.asyncio
