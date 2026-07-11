@@ -163,11 +163,7 @@ def build_profile_picker(
         f"*{agent_display_name(profile.agent_type)} settings*",
         f"Model: `{model_label}`",
         f"Reasoning: `{profile.effort_label}`",
-        (
-            f"Fast mode: `{profile.fast_label}`"
-            if profile.agent_type == AGENT_CLAUDE
-            else "Fast mode: `Not available for Codex CLI`"
-        ),
+        f"Fast mode: `{profile.fast_label}`",
         "\nChoose model and reasoning, then create:",
     ]
     buttons: list[list[InlineKeyboardButton]] = []
@@ -198,15 +194,14 @@ def build_profile_picker(
                 for value, label in effort_options[index : index + 2]
             ]
         )
-    if profile.agent_type == AGENT_CLAUDE:
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    f"⚡ Fast: {profile.fast_label}",
-                    callback_data=f"{CB_PROFILE_FAST}{'off' if profile.fast_mode else 'on'}",
-                )
-            ]
-        )
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                f"⚡ Fast: {profile.fast_label}",
+                callback_data=f"{CB_PROFILE_FAST}{'off' if profile.fast_mode else 'on'}",
+            )
+        ]
+    )
     buttons.append(
         [InlineKeyboardButton("✅ Create session", callback_data=CB_PROFILE_CONFIRM)]
     )
