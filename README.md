@@ -5,6 +5,15 @@
 > TelegramAgentBot controls live Codex CLI / Claude Code sessions over Telegram.
 > The CLI/package name is `telegram-agent-bot`.
 
+
+## 中文概览
+
+这是一个通过 Telegram 远程控制 Codex CLI / Claude Code 会话的机器人，底层以 tmux 会话为事实来源。
+
+## English Overview
+
+This repository provides a Telegram controller for live Codex CLI / Claude Code sessions, with tmux as the source of truth.
+
 Control Codex CLI or Claude Code sessions remotely through Telegram while keeping tmux as the source of truth. This lets you monitor, answer, interrupt, resume, and clean up real terminal sessions from your phone without switching to a separate SDK session.
 
 ## What it does
