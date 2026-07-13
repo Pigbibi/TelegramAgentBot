@@ -1,5 +1,7 @@
 # Agent Backend Plugins
 
+This page explains how to split TelegramAgentBot remote agent backends into standalone plugins and which interfaces they must implement.
+
 TelegramAgentBot keeps the default single-machine path on the built-in `local`
 backend. A real multi-node setup should live in a separate installable backend
 plugin so normal tmux usage stays simple and rollback-safe.

@@ -1,5 +1,7 @@
 # VPS Cleanup Timer
 
+This page explains which VPS cleanup targets TelegramAgentBot may remove and which paths are protected.
+
 TelegramAgentBot hosts often accumulate GitHub Actions runner workspaces,
 language package caches, browser test artifacts, and old temporary files. This
 cleanup helper keeps the bot runtime intact while reclaiming rebuildable files.

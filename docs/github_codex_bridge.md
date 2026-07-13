@@ -1,5 +1,7 @@
 # GitHub -> Codex bridge
 
+This page explains how to poll GitHub issues and inject them into a live Codex tmux session.
+
 This bridge polls GitHub issues and injects a structured task into a tmux
 window where Codex is already running.
 
