@@ -340,10 +340,10 @@ class TestReadNewLinesOffsetRecovery:
         assert messages[0].content_type == "usage_limit"
         assert "usage limit" in messages[0].text.lower()
 
-    async def test_token_count_zero_balance_exhausted_emits_usage_limit(
+    async def test_token_count_zero_extra_credit_balance_is_not_usage_limit(
         self, monitor, tmp_path
     ):
-        """A token_count event with zero credits should be surfaced as usage limit."""
+        """Zero optional credits do not mean the subscription quota is exhausted."""
         jsonl_file = tmp_path / "session.jsonl"
         event = {
             "type": "event_msg",
@@ -358,7 +358,10 @@ class TestReadNewLinesOffsetRecovery:
                         "unlimited": False,
                         "balance": "0",
                     },
-                    "primary": None,
+                    "primary": {
+                        "used_percent": 26.0,
+                        "window_minutes": 10080,
+                    },
                     "secondary": None,
                     "individual_limit": None,
                     "plan_type": None,
@@ -385,9 +388,7 @@ class TestReadNewLinesOffsetRecovery:
 
         messages = await monitor.check_for_updates(set())
 
-        assert len(messages) == 1
-        assert messages[0].content_type == "usage_limit"
-        assert "usage limit" in messages[0].text.lower()
+        assert messages == []
 
     @pytest.mark.asyncio
     async def test_generic_error_event_emits_assistant_message(self, monitor, tmp_path):

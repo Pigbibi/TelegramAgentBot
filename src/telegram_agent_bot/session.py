@@ -2030,13 +2030,6 @@ class SessionManager:
             if payload.get("type") == "token_count":
                 rate_limits = payload.get("rate_limits")
                 if isinstance(rate_limits, dict):
-                    credits = rate_limits.get("credits")
-                    if isinstance(credits, dict):
-                        if credits.get("has_credits") is False and str(
-                            credits.get("balance")
-                        ).strip() in {"0", "0.0"}:
-                            return True
-
                     rate_limit_reached_type = rate_limits.get("rate_limit_reached_type")
                     if (
                         isinstance(rate_limit_reached_type, str)
