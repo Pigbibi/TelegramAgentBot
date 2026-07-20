@@ -109,6 +109,7 @@ from .handlers.callback_data import (
     CB_ASK_RIGHT,
     CB_ASK_SPACE,
     CB_ASK_TAB,
+    CB_ASK_TRUST,
     CB_ASK_UP,
     CB_CODEX_UPDATE_APPLY,
     CB_CODEX_UPDATE_DISMISS,
@@ -5495,6 +5496,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer(message, show_alert=True)
             return
         await query.answer("⇥ Tab")
+
+    # Hook trust UI: Codex uses the literal "t" key to trust configured hooks.
+    elif data.startswith(CB_ASK_TRUST):
+        window_id = data[len(CB_ASK_TRUST) :]
+        thread_id = _get_thread_id(update)
+        ok, message = await _send_control_to_agent(user.id, thread_id, window_id, "t")
+        if ok:
+            await asyncio.sleep(0.5)
+            await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
+        elif message:
+            await query.answer(message, show_alert=True)
+            return
+        await query.answer("Trusted hooks")
 
     # Interactive UI: refresh display
     elif data.startswith(CB_ASK_REFRESH):
