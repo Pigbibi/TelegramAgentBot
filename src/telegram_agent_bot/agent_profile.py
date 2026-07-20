@@ -11,8 +11,33 @@ SUPPORTED_AGENT_TYPES = (AGENT_CODEX, AGENT_CLAUDE)
 EFFORT_LOW = "low"
 EFFORT_STANDARD = "medium"
 EFFORT_DEEP = "high"
+EFFORT_EXTRA_HIGH = "xhigh"
 EFFORT_MAX = "max"
-SUPPORTED_EFFORTS = (EFFORT_LOW, EFFORT_STANDARD, EFFORT_DEEP, EFFORT_MAX)
+EFFORT_ULTRA = "ultra"
+EFFORT_MINIMAL = "minimal"
+EFFORT_NONE = "none"
+SUPPORTED_EFFORTS = (
+    EFFORT_NONE,
+    EFFORT_MINIMAL,
+    EFFORT_LOW,
+    EFFORT_STANDARD,
+    EFFORT_DEEP,
+    EFFORT_EXTRA_HIGH,
+    EFFORT_MAX,
+    EFFORT_ULTRA,
+)
+DEFAULT_CODEX_EFFORTS = (
+    EFFORT_LOW,
+    EFFORT_STANDARD,
+    EFFORT_DEEP,
+    EFFORT_EXTRA_HIGH,
+)
+DEFAULT_CLAUDE_EFFORTS = (
+    EFFORT_LOW,
+    EFFORT_STANDARD,
+    EFFORT_DEEP,
+    EFFORT_MAX,
+)
 
 
 def normalize_agent_type(value: str | None, default: str = AGENT_CODEX) -> str:
@@ -27,6 +52,20 @@ def normalize_effort(value: str | None, default: str = EFFORT_STANDARD) -> str:
     """Normalize a reasoning effort value."""
     normalized = (value or default).strip().lower()
     return normalized if normalized in SUPPORTED_EFFORTS else default
+
+
+def effort_display_label(effort: str) -> str:
+    """Return the user-facing label for a reasoning effort value."""
+    return {
+        EFFORT_NONE: "None",
+        EFFORT_MINIMAL: "Minimal",
+        EFFORT_LOW: "Low",
+        EFFORT_STANDARD: "Standard",
+        EFFORT_DEEP: "Deep",
+        EFFORT_EXTRA_HIGH: "Extra High",
+        EFFORT_MAX: "Max",
+        EFFORT_ULTRA: "Ultra",
+    }.get(effort, effort)
 
 
 def agent_display_name(agent_type: str) -> str:
@@ -60,12 +99,7 @@ class AgentProfile:
 
     @property
     def effort_label(self) -> str:
-        return {
-            EFFORT_LOW: "Low",
-            EFFORT_STANDARD: "Standard",
-            EFFORT_DEEP: "Deep",
-            EFFORT_MAX: "Max",
-        }.get(self.reasoning_effort, "Default")
+        return effort_display_label(self.reasoning_effort)
 
     @property
     def fast_label(self) -> str:

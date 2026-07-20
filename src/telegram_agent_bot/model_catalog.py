@@ -14,6 +14,7 @@ import os
 import re
 import shlex
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -21,6 +22,12 @@ import httpx
 from dotenv import dotenv_values
 
 from .config import config
+from .agent_profile import (
+    AGENT_CLAUDE,
+    AGENT_CODEX,
+    normalize_agent_type,
+    normalize_effort,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +44,15 @@ _CODEX_EXCLUDED_PARTS = (
     "transcribe",
     "tts",
 )
+
+
+@dataclass(frozen=True)
+class CodexModelInfo:
+    """Model metadata reported by the installed Codex CLI."""
+
+    model: str
+    supported_efforts: tuple[str, ...] | None = None
+    default_effort: str = ""
 
 
 def _load_provider_env() -> dict[str, str]:
@@ -102,18 +118,59 @@ def _extract_model_ids(payload: object) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
-def _extract_codex_model_ids(payload: object) -> list[str]:
-    """Extract model slugs from the Codex app-server model/list response."""
+def _extract_codex_models(payload: object) -> list[CodexModelInfo]:
+    """Extract models and reasoning metadata from app-server ``model/list``."""
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
         return []
-    ids: list[str] = []
+    models: list[CodexModelInfo] = []
     for item in payload["data"]:
         if not isinstance(item, dict):
             continue
         model_id = item.get("model") or item.get("id")
-        if isinstance(model_id, str) and _MODEL_ID_RE.fullmatch(model_id):
-            ids.append(model_id)
-    return list(dict.fromkeys(ids))
+        if not isinstance(model_id, str) or not _MODEL_ID_RE.fullmatch(model_id):
+            continue
+
+        if "supportedReasoningEfforts" in item:
+            raw_levels = item["supportedReasoningEfforts"]
+        else:
+            raw_levels = item.get("supported_reasoning_levels")
+        efforts: list[str] = []
+        if isinstance(raw_levels, list):
+            for level in raw_levels:
+                raw_effort = (
+                    level.get("reasoningEffort") or level.get("effort")
+                    if isinstance(level, dict)
+                    else level
+                )
+                if isinstance(raw_effort, str):
+                    effort = normalize_effort(raw_effort, "")
+                    if effort:
+                        efforts.append(effort)
+
+        raw_default = item.get("defaultReasoningEffort") or item.get(
+            "default_reasoning_level"
+        )
+        default_effort = (
+            normalize_effort(raw_default, "") if isinstance(raw_default, str) else ""
+        )
+        supported_efforts = (
+            tuple(dict.fromkeys(efforts)) if isinstance(raw_levels, list) else None
+        )
+        if not supported_efforts or default_effort not in supported_efforts:
+            default_effort = ""
+        models.append(
+            CodexModelInfo(
+                model=model_id,
+                supported_efforts=supported_efforts,
+                default_effort=default_effort,
+            )
+        )
+    return list(dict.fromkeys(models))
+
+
+def _extract_codex_model_ids(payload: object) -> list[str]:
+    """Extract model slugs from the Codex app-server model/list response."""
+    return [item.model for item in _extract_codex_models(payload)]
 
 
 def _merge_models(
@@ -159,10 +216,11 @@ async def _fetch_model_ids(
         return []
 
 
-async def _discover_codex_models(values: dict[str, str]) -> list[str]:
-    app_server_ids = await _discover_codex_app_server_models()
-    if app_server_ids:
-        return _codex_model_ids(app_server_ids)
+async def _discover_codex_models(values: dict[str, str]) -> list[CodexModelInfo]:
+    app_server_models = await _discover_codex_app_server_models()
+    if app_server_models:
+        allowed = set(_codex_model_ids([item.model for item in app_server_models]))
+        return [item for item in app_server_models if item.model in allowed]
 
     if not values.get("OPENAI_API_KEY", "").strip():
         return []
@@ -172,10 +230,10 @@ async def _discover_codex_models(values: dict[str, str]) -> list[str]:
         _provider_headers(values, provider="openai"),
         provider="OpenAI",
     )
-    return _codex_model_ids(ids)
+    return [CodexModelInfo(model_id) for model_id in _codex_model_ids(ids)]
 
 
-async def _discover_codex_app_server_models() -> list[str]:
+async def _discover_codex_app_server_models() -> list[CodexModelInfo]:
     """Ask the installed Codex CLI for models available to its current account."""
     try:
         command_parts = shlex.split(config.codex_cli_command)
@@ -245,7 +303,7 @@ async def _discover_codex_app_server_models() -> list[str]:
             except json.JSONDecodeError:
                 continue
             if isinstance(message, dict) and message.get("id") == 2:
-                return _extract_codex_model_ids(message.get("result"))
+                return _extract_codex_models(message.get("result"))
     except (OSError, asyncio.TimeoutError):
         logger.debug("Codex app-server model discovery unavailable", exc_info=True)
     finally:
@@ -278,28 +336,52 @@ def _auto_requested(raw: str) -> bool:
     return not raw.strip() or raw.strip().lower() == "auto"
 
 
-async def refresh_model_catalog() -> None:
-    """Refresh auto-configured model choices once during application startup."""
+async def refresh_model_catalog(agent_type: str | None = None) -> None:
+    """Refresh auto-configured model choices and Codex effort metadata."""
     if not config.model_discovery_enabled:
         return
 
     values = _load_provider_env()
+    selected_agent = normalize_agent_type(agent_type) if agent_type else None
     codex_task = (
         _discover_codex_models(values)
-        if _auto_requested(config.codex_models_raw)
+        if selected_agent in (None, AGENT_CODEX)
         else None
     )
     claude_task = (
         _discover_claude_models(values)
-        if _auto_requested(config.claude_models_raw)
+        if selected_agent in (None, AGENT_CLAUDE)
+        and _auto_requested(config.claude_models_raw)
         else None
     )
 
-    if codex_task is not None:
-        config.codex_models = _merge_models(config.codex_model, await codex_task)
-    if claude_task is not None:
+    codex_models: list[CodexModelInfo] = []
+    claude_models: list[str] = []
+    if codex_task is not None and claude_task is not None:
+        codex_models, claude_models = await asyncio.gather(codex_task, claude_task)
+    elif codex_task is not None:
+        codex_models = await codex_task
+    elif claude_task is not None:
+        claude_models = await claude_task
+
+    if codex_models:
+        if _auto_requested(config.codex_models_raw):
+            config.codex_models = _merge_models(
+                config.codex_model, [item.model for item in codex_models]
+            )
+        config.codex_model_efforts = {
+            item.model: item.supported_efforts
+            for item in codex_models
+            if item.supported_efforts is not None
+        }
+        config.codex_model_default_efforts = {
+            item.model: item.default_effort
+            for item in codex_models
+            if item.default_effort
+        }
+    if claude_models:
         config.claude_models = _merge_models(
-            config.claude_model, await claude_task, aliases=_CLAUDE_ALIASES
+            config.claude_model, claude_models, aliases=_CLAUDE_ALIASES
         )
 
     logger.info(

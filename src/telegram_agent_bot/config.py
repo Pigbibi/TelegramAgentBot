@@ -175,6 +175,8 @@ class Config:
         self.codex_models_raw = os.getenv("TELEGRAM_AGENT_BOT_CODEX_MODELS", "")
         self.claude_models_raw = os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_MODELS", "")
         self.codex_models = self._parse_models(self.codex_models_raw, self.codex_model)
+        self.codex_model_efforts: dict[str, tuple[str, ...]] = {}
+        self.codex_model_default_efforts: dict[str, str] = {}
         self.claude_models = self._parse_models(
             self.claude_models_raw, self.claude_model
         )

@@ -254,7 +254,7 @@ be committed.
 | `TELEGRAM_AGENT_BOT_CLAUDE_MODEL` | `deepseek-v4-flash` | Default Claude Code model for new topics; override for another provider |
 | `TELEGRAM_AGENT_BOT_CODEX_MODELS` | `auto` | `auto` uses the installed Codex app-server catalog; a comma-separated list pins the choices |
 | `TELEGRAM_AGENT_BOT_CLAUDE_MODELS` | `auto` | `auto` queries the configured Anthropic-compatible provider; a comma-separated list pins the choices |
-| `TELEGRAM_AGENT_BOT_MODEL_DISCOVERY` | `true` | Refresh automatic model choices once at startup; failed discovery falls back to configured defaults |
+| `TELEGRAM_AGENT_BOT_MODEL_DISCOVERY` | `true` | Refresh automatic model choices at startup and when an agent is selected; failed discovery keeps the last catalog/defaults |
 | `TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST` | `false` | Append Codex `--dangerously-bypass-hook-trust` for unattended hosts after you have vetted the configured hooks |
 | `TELEGRAM_AGENT_BOT_CODEX_PROJECTS_PATH` | `~/.codex` for Codex, `~/.claude/projects` for Claude Code | Transcript root to scan |
 | `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Default directory shown when creating a new session |
@@ -293,8 +293,11 @@ Telegram formatting uses MarkdownV2 with plain-text fallback when needed.
 ### Automatic model discovery
 
 When either model list is empty or set to `auto`, the bot refreshes the picker
-once during startup. Codex uses the installed CLI's official `model/list`
-app-server method, which reflects the current Codex account and build. Claude
+during startup and when that agent is selected. Codex uses the installed CLI's
+official `model/list` app-server method, which reflects the current Codex
+account and build. The Codex picker also uses each model's reported reasoning
+efforts, so levels such as Extra High, Max, and Ultra appear only when that
+model supports them. Claude
 Code uses the configured Anthropic-compatible provider's model-list endpoint;
 this supports DeepSeek's Anthropic gateway when its `claude.env` contains the
 provider credentials. If discovery is unavailable, the configured default

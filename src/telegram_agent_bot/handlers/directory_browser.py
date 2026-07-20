@@ -26,11 +26,10 @@ from ..agent_profile import (
     AGENT_CLAUDE,
     AGENT_CODEX,
     AgentProfile,
-    EFFORT_DEEP,
-    EFFORT_LOW,
-    EFFORT_MAX,
-    EFFORT_STANDARD,
+    DEFAULT_CLAUDE_EFFORTS,
+    DEFAULT_CODEX_EFFORTS,
     agent_display_name,
+    effort_display_label,
 )
 from ..session import CodexSession
 
@@ -156,6 +155,7 @@ def build_agent_picker() -> tuple[str, InlineKeyboardMarkup]:
 def build_profile_picker(
     profile: AgentProfile,
     models: Sequence[str],
+    effort_values: Sequence[str] | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build model and reasoning-effort controls for a selected agent."""
     model_label = profile.model or "CLI default"
@@ -178,11 +178,20 @@ def build_profile_picker(
             ]
         )
 
-    effort_options = (
-        (EFFORT_LOW, "Low"),
-        (EFFORT_STANDARD, "Standard"),
-        (EFFORT_DEEP, "Deep"),
-        (EFFORT_MAX, "Max"),
+    effort_options = tuple(
+        (
+            value,
+            effort_display_label(value),
+        )
+        for value in (
+            effort_values
+            if effort_values is not None
+            else (
+                DEFAULT_CLAUDE_EFFORTS
+                if profile.agent_type == AGENT_CLAUDE
+                else DEFAULT_CODEX_EFFORTS
+            )
+        )
     )
     for index in range(0, len(effort_options), 2):
         buttons.append(
