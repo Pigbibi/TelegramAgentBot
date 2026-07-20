@@ -577,7 +577,7 @@ class TestWindowState:
         assert mgr.mark_window_usage_limit_exceeded("@1", False) is True
         assert mgr.get_window_state("@1").usage_limit_exceeded is False
 
-    def test_file_has_usage_limit_detects_zero_balance_token_count(
+    def test_file_has_usage_limit_ignores_zero_extra_credit_balance(
         self, tmp_path: Path
     ) -> None:
         file_path = tmp_path / "session.jsonl"
@@ -599,7 +599,10 @@ class TestWindowState:
                                         "unlimited": False,
                                         "balance": "0",
                                     },
-                                    "primary": None,
+                                    "primary": {
+                                        "used_percent": 26.0,
+                                        "window_minutes": 10080,
+                                    },
                                     "secondary": None,
                                     "individual_limit": None,
                                     "plan_type": None,
@@ -610,6 +613,24 @@ class TestWindowState:
                     ),
                 ]
             ),
+            encoding="utf-8",
+        )
+
+        assert SessionManager._file_has_usage_limit_exceeded(file_path) is False
+
+    def test_file_has_usage_limit_detects_reached_type(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "session.jsonl"
+        file_path.write_text(
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "rate_limits": {"rate_limit_reached_type": "primary"},
+                    },
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
 
