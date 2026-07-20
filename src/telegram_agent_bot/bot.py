@@ -733,6 +733,8 @@ def _resolve_profile_effort(agent_type: str, model: str, requested: str) -> str:
     """Keep a supported effort or fall back to the model/provider default."""
     normalized = normalize_agent_type(agent_type)
     supported = _profile_effort_values(normalized, model)
+    if not supported:
+        return ""
     selected = normalize_effort(requested, "")
     if selected in supported:
         return selected

@@ -67,6 +67,26 @@ def test_extract_codex_models_includes_reasoning_metadata() -> None:
     ]
 
 
+def test_extract_codex_models_distinguishes_empty_and_missing_effort_metadata() -> None:
+    from telegram_agent_bot import model_catalog
+    from telegram_agent_bot.model_catalog import _extract_codex_models
+
+    assert _extract_codex_models(
+        {
+            "data": [
+                {
+                    "model": "gpt-no-reasoning",
+                    "supportedReasoningEfforts": [],
+                },
+                {"model": "gpt-unknown-reasoning"},
+            ]
+        }
+    ) == [
+        model_catalog.CodexModelInfo("gpt-no-reasoning", (), ""),
+        model_catalog.CodexModelInfo("gpt-unknown-reasoning", None, ""),
+    ]
+
+
 def test_merge_models_drops_unavailable_default_after_successful_discovery() -> None:
     from telegram_agent_bot.model_catalog import _merge_models
 
@@ -123,6 +143,33 @@ async def test_refresh_model_catalog_updates_only_auto_lists(monkeypatch) -> Non
     }
     codex_discovery.assert_awaited_once()
     claude_discovery.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_refresh_model_catalog_preserves_explicitly_empty_efforts(
+    monkeypatch,
+) -> None:
+    from telegram_agent_bot import model_catalog
+
+    monkeypatch.setattr(model_catalog.config, "model_discovery_enabled", True)
+    monkeypatch.setattr(model_catalog.config, "codex_models_raw", "auto")
+    monkeypatch.setattr(model_catalog.config, "codex_model", "gpt-no-reasoning")
+    monkeypatch.setattr(model_catalog.config, "codex_model_efforts", {})
+    monkeypatch.setattr(model_catalog.config, "codex_model_default_efforts", {})
+    monkeypatch.setattr(
+        model_catalog,
+        "_discover_codex_models",
+        AsyncMock(
+            return_value=[
+                model_catalog.CodexModelInfo("gpt-no-reasoning", (), ""),
+                model_catalog.CodexModelInfo("gpt-unknown-reasoning", None, ""),
+            ]
+        ),
+    )
+
+    await model_catalog.refresh_model_catalog("codex")
+
+    assert model_catalog.config.codex_model_efforts == {"gpt-no-reasoning": ()}
 
 
 @pytest.mark.asyncio

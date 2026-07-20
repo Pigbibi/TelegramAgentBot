@@ -172,3 +172,18 @@ def test_model_effort_resolution_falls_back_when_selection_is_unsupported():
     ):
         assert _resolve_profile_effort("codex", "gpt-5.6-sol", "ultra") == "ultra"
         assert _resolve_profile_effort("codex", "gpt-5.6-luna", "ultra") == "medium"
+
+
+def test_explicitly_empty_model_efforts_disable_reasoning_override():
+    from telegram_agent_bot.bot import (
+        _profile_effort_values,
+        _resolve_profile_effort,
+    )
+
+    with patch.object(
+        config,
+        "codex_model_efforts",
+        {"gpt-no-reasoning": ()},
+    ):
+        assert _profile_effort_values("codex", "gpt-no-reasoning") == ()
+        assert _resolve_profile_effort("codex", "gpt-no-reasoning", "medium") == ""

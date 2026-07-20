@@ -51,7 +51,7 @@ class CodexModelInfo:
     """Model metadata reported by the installed Codex CLI."""
 
     model: str
-    supported_efforts: tuple[str, ...] = ()
+    supported_efforts: tuple[str, ...] | None = None
     default_effort: str = ""
 
 
@@ -130,9 +130,10 @@ def _extract_codex_models(payload: object) -> list[CodexModelInfo]:
         if not isinstance(model_id, str) or not _MODEL_ID_RE.fullmatch(model_id):
             continue
 
-        raw_levels = item.get("supportedReasoningEfforts") or item.get(
-            "supported_reasoning_levels"
-        )
+        if "supportedReasoningEfforts" in item:
+            raw_levels = item["supportedReasoningEfforts"]
+        else:
+            raw_levels = item.get("supported_reasoning_levels")
         efforts: list[str] = []
         if isinstance(raw_levels, list):
             for level in raw_levels:
@@ -152,8 +153,10 @@ def _extract_codex_models(payload: object) -> list[CodexModelInfo]:
         default_effort = (
             normalize_effort(raw_default, "") if isinstance(raw_default, str) else ""
         )
-        supported_efforts = tuple(dict.fromkeys(efforts))
-        if default_effort not in supported_efforts:
+        supported_efforts = (
+            tuple(dict.fromkeys(efforts)) if isinstance(raw_levels, list) else None
+        )
+        if not supported_efforts or default_effort not in supported_efforts:
             default_effort = ""
         models.append(
             CodexModelInfo(
@@ -369,7 +372,7 @@ async def refresh_model_catalog(agent_type: str | None = None) -> None:
         config.codex_model_efforts = {
             item.model: item.supported_efforts
             for item in codex_models
-            if item.supported_efforts
+            if item.supported_efforts is not None
         }
         config.codex_model_default_efforts = {
             item.model: item.default_effort
