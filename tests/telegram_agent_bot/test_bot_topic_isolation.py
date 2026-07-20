@@ -8,7 +8,9 @@ from telegram_agent_bot.backends.base import AgentTarget, CreateSessionResult
 from telegram_agent_bot.handlers.callback_data import (
     CB_ASK_TRUST,
     CB_DIR_CONFIRM,
+    CB_PROFILE_AGENT,
     CB_PROFILE_CONFIRM,
+    CB_PROFILE_EFFORT,
     CB_SESSION_SELECT,
 )
 from telegram_agent_bot.handlers.directory_browser import (
@@ -76,6 +78,68 @@ async def test_hook_trust_callback_sends_t_key():
     send_control.assert_awaited_once_with(12345, 42, "@4", "t")
     refresh_ui.assert_awaited_once_with(context.bot, 12345, "@4", 42)
     query.answer.assert_awaited_once_with("Trusted hooks")
+
+
+@pytest.mark.asyncio
+async def test_codex_profile_selection_refreshes_model_catalog():
+    update, query = _make_callback_update(f"{CB_PROFILE_AGENT}codex")
+    context = _make_context()
+
+    with (
+        patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
+        patch("telegram_agent_bot.bot._get_thread_id", return_value=42),
+        patch("telegram_agent_bot.bot.session_manager"),
+        patch(
+            "telegram_agent_bot.bot.refresh_model_catalog", new_callable=AsyncMock
+        ) as refresh,
+        patch(
+            "telegram_agent_bot.bot._profile_models",
+            return_value=("gpt-5.6-sol", "gpt-5.6-luna"),
+        ),
+        patch(
+            "telegram_agent_bot.bot._show_agent_profile_settings",
+            new_callable=AsyncMock,
+        ) as show_settings,
+    ):
+        from telegram_agent_bot.bot import callback_handler
+
+        await callback_handler(update, context)
+
+    refresh.assert_awaited_once_with("codex")
+    assert context.user_data[PROFILE_MODEL_KEY] == "gpt-5.6-sol"
+    show_settings.assert_awaited_once_with(query, context)
+
+
+@pytest.mark.asyncio
+async def test_profile_rejects_effort_not_supported_by_selected_model():
+    update, query = _make_callback_update(f"{CB_PROFILE_EFFORT}ultra")
+    context = _make_context()
+    context.user_data = {
+        PROFILE_AGENT_KEY: "codex",
+        PROFILE_MODEL_KEY: "gpt-5.6-luna",
+    }
+
+    with (
+        patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
+        patch("telegram_agent_bot.bot._get_thread_id", return_value=42),
+        patch("telegram_agent_bot.bot.session_manager"),
+        patch(
+            "telegram_agent_bot.bot.config.codex_model_efforts",
+            {"gpt-5.6-luna": ("low", "medium", "high", "xhigh", "max")},
+        ),
+        patch(
+            "telegram_agent_bot.bot._show_agent_profile_settings",
+            new_callable=AsyncMock,
+        ) as show_settings,
+    ):
+        from telegram_agent_bot.bot import callback_handler
+
+        await callback_handler(update, context)
+
+    query.answer.assert_awaited_once_with(
+        "Reasoning level unavailable", show_alert=True
+    )
+    show_settings.assert_not_awaited()
 
 
 class TestSessionPickerIsolation:

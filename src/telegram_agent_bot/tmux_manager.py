@@ -100,11 +100,8 @@ def _agent_command_for_launch(
     if profile.agent_type == AGENT_CLAUDE and profile.reasoning_effort:
         cmd = f"{cmd} --effort {shlex.quote(profile.reasoning_effort)}"
     elif profile.reasoning_effort:
-        effort = (
-            "xhigh" if profile.reasoning_effort == "max" else profile.reasoning_effort
-        )
         if profile.agent_type == AGENT_CODEX:
-            cmd = f'{cmd} -c model_reasoning_effort="{effort}"'
+            cmd = f'{cmd} -c model_reasoning_effort="{profile.reasoning_effort}"'
     if profile.agent_type == AGENT_CLAUDE:
         env_file = getattr(config, "claude_env_file", None)
         if isinstance(env_file, Path) and env_file.is_file():

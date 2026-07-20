@@ -240,7 +240,7 @@ TELEGRAM_AGENT_BOT_OUTPUT_MODE=clean
 | `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | Codex 为 `codex`，Claude Code 为 `claude` | 创建新窗口时运行的命令 |
 | `TELEGRAM_AGENT_BOT_CLAUDE_COMMAND` | `claude` | Claude Code 创建命令 |
 | `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` | `~/.telegram-agent-bot/claude.env` | Claude Code/DeepSeek 环境文件；文件应为 `600`，不会把 key 写入 tmux 命令 |
-| `TELEGRAM_AGENT_BOT_CODEX_MODELS` / `TELEGRAM_AGENT_BOT_CLAUDE_MODELS` | _(空)_ | Telegram 创建会话时显示的可选模型，逗号分隔 |
+| `TELEGRAM_AGENT_BOT_CODEX_MODELS` / `TELEGRAM_AGENT_BOT_CLAUDE_MODELS` | `auto` | 启动和选择 agent 时动态刷新模型；也可用逗号分隔列表固定选项。Codex 推理档位按所选模型的目录元数据展示 |
 | `TELEGRAM_AGENT_BOT_CODEX_REASONING_EFFORT` / `TELEGRAM_AGENT_BOT_CLAUDE_REASONING_EFFORT` | `medium` / `high` | 未在 Telegram picker 中另选时的默认推理档位 |
 | `TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST` | `false` | 在无人值守机器上确认 hooks 配置可信后，给 Codex 自动追加 `--dangerously-bypass-hook-trust` |
 | `TELEGRAM_AGENT_BOT_CODEX_PROJECTS_PATH` | Codex 为 `~/.codex`，Claude Code 为 `~/.claude/projects` | transcript 扫描根目录 |

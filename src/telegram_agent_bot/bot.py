@@ -92,6 +92,8 @@ from .agent_profile import (
     AGENT_CLAUDE,
     AGENT_CODEX,
     AgentProfile,
+    DEFAULT_CLAUDE_EFFORTS,
+    DEFAULT_CODEX_EFFORTS,
     agent_display_name,
     normalize_agent_type,
     normalize_effort,
@@ -719,6 +721,32 @@ def _profile_models(agent_type: str) -> tuple[str, ...]:
     return config.claude_models if normalized == AGENT_CLAUDE else config.codex_models
 
 
+def _profile_effort_values(agent_type: str, model: str) -> tuple[str, ...]:
+    """Return reasoning efforts supported by the selected agent/model."""
+    normalized = normalize_agent_type(agent_type)
+    if normalized == AGENT_CLAUDE:
+        return DEFAULT_CLAUDE_EFFORTS
+    return config.codex_model_efforts.get(model, DEFAULT_CODEX_EFFORTS)
+
+
+def _resolve_profile_effort(agent_type: str, model: str, requested: str) -> str:
+    """Keep a supported effort or fall back to the model/provider default."""
+    normalized = normalize_agent_type(agent_type)
+    supported = _profile_effort_values(normalized, model)
+    selected = normalize_effort(requested, "")
+    if selected in supported:
+        return selected
+
+    candidates = []
+    if normalized == AGENT_CODEX:
+        candidates.append(config.codex_model_default_efforts.get(model, ""))
+        candidates.append(config.codex_reasoning_effort)
+    else:
+        candidates.append(config.claude_reasoning_effort)
+    candidates.extend(("medium", supported[0] if supported else ""))
+    return next((value for value in candidates if value in supported), "medium")
+
+
 def _profile_from_context(user_data: dict | None) -> AgentProfile:
     """Build the pending topic profile, retaining legacy defaults."""
     agent_type = (
@@ -732,7 +760,7 @@ def _profile_from_context(user_data: dict | None) -> AgentProfile:
         if normalized == AGENT_CLAUDE
         else config.codex_reasoning_effort
     )
-    effort = (
+    requested_effort = (
         user_data.get(PROFILE_EFFORT_KEY, default_effort)
         if user_data
         else default_effort
@@ -742,7 +770,11 @@ def _profile_from_context(user_data: dict | None) -> AgentProfile:
     return AgentProfile(
         agent_type=normalized,
         model=model if isinstance(model, str) else "",
-        reasoning_effort=normalize_effort(effort, default_effort),
+        reasoning_effort=_resolve_profile_effort(
+            normalized,
+            model if isinstance(model, str) else "",
+            requested_effort if isinstance(requested_effort, str) else default_effort,
+        ),
         fast_mode=bool(fast_mode),
     )
 
@@ -775,7 +807,11 @@ async def _show_agent_profile_settings(
     if context.user_data is not None:
         context.user_data[STATE_KEY] = STATE_SELECTING_PROFILE
         context.user_data[PROFILE_MODELS_KEY] = list(models)
-    text, keyboard = build_profile_picker(profile, models)
+    text, keyboard = build_profile_picker(
+        profile,
+        models,
+        effort_values=_profile_effort_values(profile.agent_type, profile.model),
+    )
     if edit:
         await safe_edit(target, text, reply_markup=keyboard)
     else:
@@ -4765,15 +4801,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("Stale picker (topic mismatch)", show_alert=True)
             return
         agent_type = normalize_agent_type(data[len(CB_PROFILE_AGENT) :])
+        await refresh_model_catalog(agent_type)
         models = _profile_models(agent_type)
+        model = models[0] if models else ""
+        configured_effort = (
+            config.claude_reasoning_effort
+            if agent_type == AGENT_CLAUDE
+            else config.codex_reasoning_effort
+        )
         if context.user_data is not None:
             context.user_data[PROFILE_AGENT_KEY] = agent_type
-            context.user_data[PROFILE_MODEL_KEY] = models[0] if models else ""
+            context.user_data[PROFILE_MODEL_KEY] = model
             context.user_data[PROFILE_FAST_MODE_KEY] = False
-            context.user_data[PROFILE_EFFORT_KEY] = (
-                config.claude_reasoning_effort
-                if agent_type == AGENT_CLAUDE
-                else config.codex_reasoning_effort
+            context.user_data[PROFILE_EFFORT_KEY] = _resolve_profile_effort(
+                agent_type,
+                model,
+                configured_effort,
             )
         await _show_agent_profile_settings(query, context)
         await query.answer()
@@ -4791,7 +4834,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("Model list changed", show_alert=True)
             return
         if context.user_data is not None:
-            context.user_data[PROFILE_MODEL_KEY] = models[model_index]
+            model = models[model_index]
+            agent_type = normalize_agent_type(
+                context.user_data.get(PROFILE_AGENT_KEY, config.agent_type)
+            )
+            current_effort = context.user_data.get(
+                PROFILE_EFFORT_KEY,
+                config.claude_reasoning_effort
+                if agent_type == AGENT_CLAUDE
+                else config.codex_reasoning_effort,
+            )
+            context.user_data[PROFILE_MODEL_KEY] = model
+            context.user_data[PROFILE_EFFORT_KEY] = _resolve_profile_effort(
+                agent_type,
+                model,
+                current_effort if isinstance(current_effort, str) else "",
+            )
         await _show_agent_profile_settings(query, context)
         await query.answer("Model selected")
 
@@ -4802,7 +4860,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if pending_tid is not None and _get_thread_id(update) != pending_tid:
             await query.answer("Stale picker (topic mismatch)", show_alert=True)
             return
-        effort = normalize_effort(data[len(CB_PROFILE_EFFORT) :])
+        raw_effort = data[len(CB_PROFILE_EFFORT) :]
+        effort = normalize_effort(raw_effort, "")
+        agent_type = normalize_agent_type(
+            context.user_data.get(PROFILE_AGENT_KEY, config.agent_type)
+            if context.user_data
+            else config.agent_type
+        )
+        model = (
+            context.user_data.get(PROFILE_MODEL_KEY, "") if context.user_data else ""
+        )
+        if effort not in _profile_effort_values(
+            agent_type, model if isinstance(model, str) else ""
+        ):
+            await query.answer("Reasoning level unavailable", show_alert=True)
+            return
         if context.user_data is not None:
             context.user_data[PROFILE_EFFORT_KEY] = effort
         await _show_agent_profile_settings(query, context)
