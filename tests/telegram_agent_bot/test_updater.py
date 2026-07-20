@@ -295,6 +295,88 @@ def test_codex_update_supports_wrapped_npm_command(tmp_path: Path) -> None:
     ) in runner.calls
 
 
+def test_codex_update_uses_prefix_from_executable(tmp_path: Path) -> None:
+    prefix = tmp_path / "usr-local"
+    package_dir = prefix / "lib/node_modules/@openai/codex"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        '{"name":"@openai/codex","version":"0.125.0"}', encoding="utf-8"
+    )
+    bin_dir = prefix / "bin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.symlink_to(package_dir / "bin/codex.js")
+
+    runner = FakeRunner(
+        {
+            (str(codex), "--version"): "codex-cli 0.125.0\n",
+            (
+                "sudo",
+                "-n",
+                "npm",
+                "view",
+                "@openai/codex",
+                "version",
+            ): "0.126.0\n",
+            (
+                "sudo",
+                "-n",
+                "npm",
+                "list",
+                "-g",
+                "--depth=0",
+                "@openai/codex",
+                "--json",
+            ): CommandResult(args=(), returncode=1),
+            (
+                "sudo",
+                "-n",
+                "npm",
+                "--prefix",
+                str(prefix),
+                "list",
+                "-g",
+                "--depth=0",
+                "@openai/codex",
+                "--json",
+            ): '{"dependencies":{"@openai/codex":{"version":"0.125.0"}}}\n',
+            (
+                "sudo",
+                "-n",
+                "npm",
+                "--prefix",
+                str(prefix),
+                "install",
+                "-g",
+                "@openai/codex@latest",
+            ): "",
+        }
+    )
+
+    result = check_codex_update(
+        CodexUpdateSettings(
+            codex_executable=str(codex),
+            npm_executable="sudo -n npm",
+            package="@openai/codex",
+        ),
+        apply_update=True,
+        runner=runner,
+        cwd=tmp_path,
+    )
+
+    assert result.updated is True
+    assert (
+        "sudo",
+        "-n",
+        "npm",
+        "--prefix",
+        str(prefix),
+        "install",
+        "-g",
+        "@openai/codex@latest",
+    ) in runner.calls
+
+
 @pytest.mark.asyncio
 async def test_codex_update_notifier_called_for_manual_update() -> None:
     result = CodexUpdateResult(

@@ -522,8 +522,9 @@ def _npm_global_package_installed(
     settings: CodexUpdateSettings,
     runner: CommandRunner,
     cwd: Path,
+    npm_command: Sequence[str] | None = None,
 ) -> bool:
-    npm_command = _split_command(settings.npm_executable)
+    npm_command = list(npm_command or _split_command(settings.npm_executable))
     if not npm_command:
         return False
     result = runner(
@@ -546,6 +547,49 @@ def _npm_global_package_installed(
         return False
     dependencies = payload.get("dependencies")
     return isinstance(dependencies, dict) and settings.package in dependencies
+
+
+def _npm_prefix_from_executable(settings: CodexUpdateSettings) -> Path | None:
+    """Infer an npm prefix when the executable resolves inside node_modules."""
+    if not settings.codex_executable:
+        return None
+
+    executable = Path(settings.codex_executable).expanduser().resolve(strict=False)
+    for package_dir in executable.parents:
+        package_json = package_dir / "package.json"
+        if not package_json.is_file():
+            continue
+        try:
+            payload = json.loads(package_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if payload.get("name") != settings.package:
+            continue
+        node_modules = next(
+            (parent for parent in package_dir.parents if parent.name == "node_modules"),
+            None,
+        )
+        if node_modules is not None and node_modules.parent.name == "lib":
+            return node_modules.parent.parent
+    return None
+
+
+def _npm_install_command(
+    settings: CodexUpdateSettings,
+    runner: CommandRunner,
+    cwd: Path,
+) -> list[str] | None:
+    npm_command = _split_command(settings.npm_executable)
+    if _npm_global_package_installed(settings, runner, cwd, npm_command):
+        return npm_command
+
+    prefix = _npm_prefix_from_executable(settings)
+    if prefix is None:
+        return None
+    prefixed_command = [*npm_command, "--prefix", str(prefix)]
+    if _npm_global_package_installed(settings, runner, cwd, prefixed_command):
+        return prefixed_command
+    return None
 
 
 def _agent_display_name(settings: CodexUpdateSettings) -> str:
@@ -644,7 +688,8 @@ def check_codex_update(
                 ),
             )
 
-        if not _npm_global_package_installed(settings, runner, work_dir):
+        install_command = _npm_install_command(settings, runner, work_dir)
+        if install_command is None:
             return CodexUpdateResult(
                 checked=True,
                 supported=False,
@@ -661,7 +706,7 @@ def check_codex_update(
 
         _run_checked(
             runner,
-            [*npm_command, "install", "-g", f"{settings.package}@latest"],
+            [*install_command, "install", "-g", f"{settings.package}@latest"],
             work_dir,
             settings.update_timeout_seconds,
         )
