@@ -6,6 +6,7 @@ import pytest
 
 from telegram_agent_bot.backends.base import AgentTarget, CreateSessionResult
 from telegram_agent_bot.handlers.callback_data import (
+    CB_ASK_TRUST,
     CB_DIR_CONFIRM,
     CB_PROFILE_CONFIRM,
     CB_SESSION_SELECT,
@@ -46,6 +47,35 @@ def _make_context():
     context.bot = AsyncMock()
     context.user_data = {}
     return context
+
+
+@pytest.mark.asyncio
+async def test_hook_trust_callback_sends_t_key():
+    update, query = _make_callback_update(f"{CB_ASK_TRUST}@4")
+    context = _make_context()
+
+    with (
+        patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
+        patch("telegram_agent_bot.bot._get_thread_id", return_value=42),
+        patch("telegram_agent_bot.bot.session_manager"),
+        patch(
+            "telegram_agent_bot.bot._send_control_to_agent",
+            new_callable=AsyncMock,
+            return_value=(True, "Sent"),
+        ) as send_control,
+        patch(
+            "telegram_agent_bot.bot.handle_interactive_ui",
+            new_callable=AsyncMock,
+        ) as refresh_ui,
+        patch("telegram_agent_bot.bot.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        from telegram_agent_bot.bot import callback_handler
+
+        await callback_handler(update, context)
+
+    send_control.assert_awaited_once_with(12345, 42, "@4", "t")
+    refresh_ui.assert_awaited_once_with(context.bot, 12345, "@4", 42)
+    query.answer.assert_awaited_once_with("Trusted hooks")
 
 
 class TestSessionPickerIsolation:

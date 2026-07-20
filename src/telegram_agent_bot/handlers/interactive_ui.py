@@ -30,6 +30,7 @@ from .callback_data import (
     CB_ASK_RIGHT,
     CB_ASK_SPACE,
     CB_ASK_TAB,
+    CB_ASK_TRUST,
     CB_ASK_UP,
 )
 from .message_sender import NO_LINK_PREVIEW
@@ -86,6 +87,30 @@ def _build_interactive_keyboard(
     ``ui_name`` controls the layout: ``RestoreCheckpoint`` omits ←/→ keys
     since only vertical selection is needed.
     """
+    if ui_name == "HookTrust":
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "✅ Trust all hooks",
+                        callback_data=f"{CB_ASK_TRUST}{window_id}"[:64],
+                    ),
+                    InlineKeyboardButton(
+                        "🔎 Review",
+                        callback_data=f"{CB_ASK_ENTER}{window_id}"[:64],
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⎋ Esc", callback_data=f"{CB_ASK_ESC}{window_id}"[:64]
+                    ),
+                    InlineKeyboardButton(
+                        "🔄", callback_data=f"{CB_ASK_REFRESH}{window_id}"[:64]
+                    ),
+                ],
+            ]
+        )
+
     vertical_only = ui_name == "RestoreCheckpoint"
 
     rows: list[list[InlineKeyboardButton]] = []

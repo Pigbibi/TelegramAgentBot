@@ -18,6 +18,7 @@ from telegram_agent_bot.handlers.callback_data import (
     CB_ASK_RIGHT,
     CB_ASK_SPACE,
     CB_ASK_TAB,
+    CB_ASK_TRUST,
     CB_ASK_UP,
 )
 
@@ -122,3 +123,13 @@ class TestKeyboardLayoutForSettings:
         assert any(CB_ASK_RIGHT in d for d in all_cb_data if d)
         assert any(CB_ASK_ESC in d for d in all_cb_data if d)
         assert any(CB_ASK_ENTER in d for d in all_cb_data if d)
+
+
+class TestKeyboardLayoutForHookTrust:
+    def test_hook_trust_keyboard_exposes_trust_action(self):
+        keyboard = _build_interactive_keyboard("@5", ui_name="HookTrust")
+        buttons = [button for row in keyboard.inline_keyboard for button in row]
+
+        assert any(button.callback_data == f"{CB_ASK_TRUST}@5" for button in buttons)
+        assert any(button.callback_data == f"{CB_ASK_ENTER}@5" for button in buttons)
+        assert any(button.callback_data == f"{CB_ASK_ESC}@5" for button in buttons)
