@@ -44,6 +44,11 @@ target-version = ["py312"]
 [tool.ruff]
 target-version = "py312"
 
+[tool.ruff.lint]
+# Keep the pre-0.16 default rules explicit so Ruff upgrades do not silently
+# broaden the project's lint policy and break CI on unrelated legacy code.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 addopts = ["-p", "no:libtmux"]
 testpaths = ["tests"]

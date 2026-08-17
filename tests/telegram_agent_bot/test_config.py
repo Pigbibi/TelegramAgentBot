@@ -26,6 +26,7 @@ def _base_env(monkeypatch, tmp_path):
     monkeypatch.delenv(
         "TELEGRAM_AGENT_BOT_AGENT_STARTUP_TIMEOUT_SECONDS", raising=False
     )
+    monkeypatch.delenv("TELEGRAM_AGENT_BOT_MAX_CONCURRENT_UPDATES", raising=False)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test:token")
     monkeypatch.setenv("ALLOWED_USERS", "12345")
     monkeypatch.setenv("TELEGRAM_AGENT_BOT_DIR", str(tmp_path))
@@ -54,6 +55,15 @@ class TestConfigValid:
     def test_agent_startup_timeout_defaults_to_three_minutes(self):
         cfg = Config()
         assert cfg.agent_startup_timeout_seconds == 180.0
+
+    def test_telegram_updates_default_to_sixteen_concurrent_topics(self):
+        cfg = Config()
+        assert cfg.telegram_max_concurrent_updates == 16
+
+    def test_telegram_update_concurrency_can_be_configured(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_MAX_CONCURRENT_UPDATES", "4")
+        cfg = Config()
+        assert cfg.telegram_max_concurrent_updates == 4
 
     def test_claude_agent_defaults(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "claude")

@@ -232,6 +232,7 @@ from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .transcribe import TranscriptionError, close_client as close_transcribe_client
 from .transcribe import transcribe_voice
+from .update_processor import TopicUpdateProcessor
 from .updater import (
     CodexUpdateResult,
     check_codex_update,
@@ -6038,6 +6039,9 @@ async def post_shutdown(application: Application) -> None:
 def create_bot() -> Application:
     application = (
         Application.builder()
+        .concurrent_updates(
+            TopicUpdateProcessor(config.telegram_max_concurrent_updates)
+        )
         .token(config.telegram_bot_token)
         .request(
             _build_request(

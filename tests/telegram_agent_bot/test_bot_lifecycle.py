@@ -6,6 +6,7 @@ import pytest
 from telegram.ext import CommandHandler
 
 from telegram_agent_bot import bot as bot_module
+from telegram_agent_bot.update_processor import TopicUpdateProcessor
 
 
 @pytest.mark.asyncio
@@ -80,6 +81,7 @@ def test_create_bot_registers_post_stop_before_shutdown():
 
     assert application.post_stop is bot_module.post_stop
     assert application.post_shutdown is bot_module.post_shutdown
+    assert isinstance(application.update_processor, TopicUpdateProcessor)
 
 
 def test_create_bot_registers_kill_command_before_forwarder():

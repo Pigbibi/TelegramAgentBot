@@ -769,7 +769,7 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run_mock.call_count, 2)
         self.assertEqual(pending_mock.call_count, 5)
 
-    async def test_send_keys_returns_false_when_retry_leaves_prompt_pending(
+    async def test_send_keys_defers_pending_prompt_confirmation_to_transcript(
         self,
     ) -> None:
         pane = _SendKeysDummyPane()
@@ -801,7 +801,7 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
         ):
             ok = await manager.send_keys("@9", "hello")
 
-        self.assertFalse(ok)
+        self.assertTrue(ok)
         self.assertEqual(run_mock.call_count, 2)
 
     def test_paste_buffer_literal_uses_tmux_bracketed_paste(self) -> None:
