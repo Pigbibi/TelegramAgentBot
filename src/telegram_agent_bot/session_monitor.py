@@ -501,6 +501,11 @@ class SessionMonitor:
         user_window_offsets = getattr(session_manager, "user_window_offsets", {})
         if not isinstance(user_window_offsets, dict):
             return 0
+        user_window_offset_sessions = getattr(
+            session_manager, "user_window_offset_sessions", {}
+        )
+        if not isinstance(user_window_offset_sessions, dict):
+            return 0
 
         offsets: list[int] = []
         for user_id, _thread_id, window_id in session_manager.iter_thread_bindings():
@@ -509,6 +514,14 @@ class SessionMonitor:
                 continue
             user_offsets = user_window_offsets.get(user_id, {})
             if not isinstance(user_offsets, dict):
+                continue
+            user_sessions = user_window_offset_sessions.get(user_id, {})
+            if not isinstance(user_sessions, dict):
+                continue
+            recorded_session_id = user_sessions.get(window_id)
+            if not isinstance(recorded_session_id, str) or not _session_ids_match(
+                recorded_session_id, session_id
+            ):
                 continue
             offset = user_offsets.get(window_id)
             if isinstance(offset, int) and 0 < offset <= file_size:

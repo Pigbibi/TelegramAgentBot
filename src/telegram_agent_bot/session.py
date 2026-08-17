@@ -231,6 +231,7 @@ class SessionManager:
 
     window_states: window_id -> WindowState (session_id, cwd, window_name)
     user_window_offsets: user_id -> {window_id -> byte_offset}
+    user_window_offset_sessions: user_id -> {window_id -> session_id}
     thread_bindings: user_id -> {thread_id -> window_id}
     thread_targets: user_id -> {thread_id -> AgentTarget}
     window_display_names: window_id -> window_name (for display)
@@ -239,6 +240,7 @@ class SessionManager:
 
     window_states: dict[str, WindowState] = field(default_factory=dict)
     user_window_offsets: dict[int, dict[str, int]] = field(default_factory=dict)
+    user_window_offset_sessions: dict[int, dict[str, str]] = field(default_factory=dict)
     thread_bindings: dict[int, dict[int, str]] = field(default_factory=dict)
     thread_targets: dict[int, dict[int, AgentTarget]] = field(default_factory=dict)
     # window_id -> display name (window_name)
@@ -304,6 +306,10 @@ class SessionManager:
             "user_window_offsets": {
                 str(uid): offsets for uid, offsets in self.user_window_offsets.items()
             },
+            "user_window_offset_sessions": {
+                str(uid): sessions
+                for uid, sessions in self.user_window_offset_sessions.items()
+            },
             "thread_bindings": {
                 str(uid): {str(tid): wid for tid, wid in bindings.items()}
                 for uid, bindings in self.thread_bindings.items()
@@ -344,6 +350,17 @@ class SessionManager:
                 self.user_window_offsets = {
                     int(uid): offsets
                     for uid, offsets in state.get("user_window_offsets", {}).items()
+                }
+                self.user_window_offset_sessions = {
+                    int(uid): {
+                        str(window_id): str(session_id)
+                        for window_id, session_id in sessions.items()
+                        if isinstance(session_id, str) and session_id
+                    }
+                    for uid, sessions in state.get(
+                        "user_window_offset_sessions", {}
+                    ).items()
+                    if isinstance(sessions, dict)
                 }
                 self.thread_bindings = {
                     int(uid): {int(tid): wid for tid, wid in bindings.items()}
@@ -404,6 +421,7 @@ class SessionManager:
                 logger.warning("Failed to load state: %s", e)
                 self.window_states = {}
                 self.user_window_offsets = {}
+                self.user_window_offset_sessions = {}
                 self.thread_bindings = {}
                 self.thread_targets = {}
                 self.window_display_names = {}
@@ -667,31 +685,69 @@ class SessionManager:
             del self.group_chat_ids[key]
             changed = True
 
-        # --- Migrate user_window_offsets ---
+        # --- Migrate user_window_offsets and their session identities ---
+        offset_key_remaps: dict[tuple[int, str], str] = {}
         for uid, offsets in self.user_window_offsets.items():
             new_offsets: dict[str, int] = {}
             for key, offset in offsets.items():
+                new_key = ""
                 if self._is_window_id(key):
                     if key in live_ids:
-                        new_offsets[key] = offset
+                        new_key = key
                     else:
                         display = self.window_display_names.get(key, key)
                         new_id = live_by_name.get(display)
                         if new_id:
-                            new_offsets[new_id] = offset
+                            new_key = new_id
                             changed = True
                         elif key in valid_window_ids:
-                            new_offsets[key] = offset
+                            new_key = key
                         else:
                             changed = True
                 else:
                     new_id = live_by_name.get(key)
                     if new_id:
-                        new_offsets[new_id] = offset
+                        new_key = new_id
                         changed = True
                     else:
                         changed = True
+                if new_key:
+                    new_offsets[new_key] = offset
+                    offset_key_remaps[(uid, key)] = new_key
             self.user_window_offsets[uid] = new_offsets
+
+        migrated_offset_sessions: dict[int, dict[str, str]] = {}
+        for uid, sessions in self.user_window_offset_sessions.items():
+            new_sessions: dict[str, str] = {}
+            for key, session_id in sessions.items():
+                new_key = offset_key_remaps.get((uid, key), "")
+                if not new_key and key in self.user_window_offsets.get(uid, {}):
+                    new_key = key
+                if new_key:
+                    new_sessions[new_key] = session_id
+                else:
+                    changed = True
+            if new_sessions:
+                migrated_offset_sessions[uid] = new_sessions
+        self.user_window_offset_sessions = migrated_offset_sessions
+
+        # Backfill legacy offsets once, using the persisted window/session
+        # association from the same state snapshot. Future window reuse updates
+        # the identity alongside the offset and can no longer inherit it.
+        for uid, offsets in self.user_window_offsets.items():
+            sessions = self.user_window_offset_sessions.setdefault(uid, {})
+            for window_id in offsets:
+                if window_id in sessions:
+                    continue
+                state = self.window_states.get(window_id)
+                if state and state.session_id:
+                    sessions[window_id] = state.session_id
+                    changed = True
+        self.user_window_offset_sessions = {
+            uid: sessions
+            for uid, sessions in self.user_window_offset_sessions.items()
+            if sessions
+        }
 
         if changed:
             self._save_state()
@@ -1298,6 +1354,17 @@ class SessionManager:
         for user_id in empty_offset_users:
             del self.user_window_offsets[user_id]
 
+        empty_offset_session_users: list[int] = []
+        for user_id, sessions in self.user_window_offset_sessions.items():
+            if window_id in sessions:
+                sessions.pop(window_id, None)
+                changed = True
+            if not sessions:
+                empty_offset_session_users.append(user_id)
+
+        for user_id in empty_offset_session_users:
+            del self.user_window_offset_sessions[user_id]
+
         empty_binding_users: list[int] = []
         for user_id, bindings in self.thread_bindings.items():
             stale_thread_ids = [
@@ -1677,12 +1744,24 @@ class SessionManager:
     # --- User window offset management ---
 
     def update_user_window_offset(
-        self, user_id: int, window_id: str, offset: int
+        self,
+        user_id: int,
+        window_id: str,
+        offset: int,
+        session_id: str = "",
     ) -> None:
         """Update the user's last read offset for a window."""
         if user_id not in self.user_window_offsets:
             self.user_window_offsets[user_id] = {}
         self.user_window_offsets[user_id][window_id] = offset
+        recorded_session_id = session_id
+        if not recorded_session_id:
+            state = self.window_states.get(window_id)
+            recorded_session_id = state.session_id if state else ""
+        if recorded_session_id:
+            self.user_window_offset_sessions.setdefault(user_id, {})[window_id] = (
+                recorded_session_id
+            )
         self._save_state()
 
     # --- Thread binding management ---
@@ -1933,6 +2012,9 @@ class SessionManager:
             for offsets in self.user_window_offsets.values():
                 for window_id in cleared_windows:
                     offsets.pop(window_id, None)
+            for sessions in self.user_window_offset_sessions.values():
+                for window_id in cleared_windows:
+                    sessions.pop(window_id, None)
             self._save_state()
 
         return cleared_windows

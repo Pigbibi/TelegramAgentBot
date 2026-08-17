@@ -89,7 +89,9 @@ async def test_handle_new_message_uses_source_offset_for_delivered_local_message
 
         await handle_new_message(msg, bot)
 
-    mock_sm.update_user_window_offset.assert_called_once_with(12345, "@1", 123)
+    mock_sm.update_user_window_offset.assert_called_once_with(
+        12345, "@1", 123, "local-1"
+    )
     mock_sm.resolve_session_for_window.assert_not_awaited()
 
 
@@ -123,6 +125,10 @@ async def test_handle_new_message_skips_already_delivered_local_recipient() -> N
             11111: {"@1": 123},
             22222: {"@1": 100},
         }
+        mock_sm.user_window_offset_sessions = {
+            11111: {"@1": "local-1"},
+            22222: {"@1": "local-1"},
+        }
         mock_sm.resolve_session_for_window = AsyncMock()
 
         from telegram_agent_bot.bot import handle_new_message
@@ -143,7 +149,9 @@ async def test_handle_new_message_skips_already_delivered_local_recipient() -> N
         image_data=None,
         wait_until_sent=True,
     )
-    mock_sm.update_user_window_offset.assert_called_once_with(22222, "@1", 123)
+    mock_sm.update_user_window_offset.assert_called_once_with(
+        22222, "@1", 123, "local-1"
+    )
     mock_sm.resolve_session_for_window.assert_not_awaited()
 
 
@@ -252,7 +260,9 @@ async def test_handle_new_message_hides_plain_reasoning() -> None:
     enqueue_status_update.assert_not_awaited()
     enqueue_content_message.assert_not_awaited()
     build_response_parts.assert_not_called()
-    mock_sm.update_user_window_offset.assert_called_once_with(12345, "@1", 123)
+    mock_sm.update_user_window_offset.assert_called_once_with(
+        12345, "@1", 123, "local-1"
+    )
 
 
 @pytest.mark.asyncio
@@ -286,7 +296,9 @@ async def test_clean_mode_hides_tool_notifications() -> None:
 
     enqueue_content_message.assert_not_awaited()
     build_response_parts.assert_not_called()
-    mock_sm.update_user_window_offset.assert_called_once_with(12345, "@1", 123)
+    mock_sm.update_user_window_offset.assert_called_once_with(
+        12345, "@1", 123, "local-1"
+    )
 
 
 @pytest.mark.asyncio
@@ -330,7 +342,9 @@ async def test_handle_new_message_renders_wait_tool_use_as_status() -> None:
     )
     enqueue_content_message.assert_not_awaited()
     build_response_parts.assert_not_called()
-    mock_sm.update_user_window_offset.assert_called_once_with(12345, "@1", 123)
+    mock_sm.update_user_window_offset.assert_called_once_with(
+        12345, "@1", 123, "local-1"
+    )
 
 
 @pytest.mark.asyncio
@@ -368,7 +382,9 @@ async def test_handle_new_message_hides_wait_tool_result() -> None:
     enqueue_status_update.assert_not_awaited()
     enqueue_content_message.assert_not_awaited()
     build_response_parts.assert_not_called()
-    mock_sm.update_user_window_offset.assert_called_once_with(12345, "@1", 456)
+    mock_sm.update_user_window_offset.assert_called_once_with(
+        12345, "@1", 456, "local-1"
+    )
 
 
 @pytest.mark.asyncio
