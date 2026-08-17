@@ -341,6 +341,10 @@ class SessionMapLoadingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("@2", manager.window_states)
         self.assertEqual(manager.thread_bindings[5992562050][14847], "@2")
         self.assertEqual(manager.user_window_offsets[5992562050]["@2"], 4096)
+        self.assertEqual(
+            manager.user_window_offset_sessions[5992562050]["@2"],
+            "session-quant",
+        )
         self.assertEqual(manager.window_display_names["@2"], "QuantPlatformKit")
         self.assertEqual(manager.group_chat_ids["5992562050:14847"], -1003811990090)
         self.assertNotIn("telegram-agent-bot:@2", session_map)

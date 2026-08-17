@@ -495,6 +495,9 @@ class TestReadNewLinesOffsetRecovery:
             mock_sm.iter_thread_bindings.return_value = [(12345, 42, "@1")]
             mock_sm.get_window_state.return_value = state
             mock_sm.user_window_offsets = {12345: {"@1": old_size}}
+            mock_sm.user_window_offset_sessions = {
+                12345: {"@1": "session-missing-state"}
+            }
             messages = await monitor.check_for_updates(set())
 
         assert [message.text for message in messages] == ["new answer"]
@@ -537,6 +540,7 @@ class TestReadNewLinesOffsetRecovery:
             mock_sm.iter_thread_bindings.return_value = [(12345, 42, "@1")]
             mock_sm.get_window_state.return_value = state
             mock_sm.user_window_offsets = {12345: {"@1": old_size}}
+            mock_sm.user_window_offset_sessions = {12345: {"@1": "session-stale-state"}}
             messages = await monitor.check_for_updates(set())
 
         assert [message.text for message in messages] == ["new answer"]
@@ -591,6 +595,10 @@ class TestReadNewLinesOffsetRecovery:
                 11111: {"@1": second_offset},
                 22222: {"@1": first_offset},
             }
+            mock_sm.user_window_offset_sessions = {
+                11111: {"@1": "session-shared-state"},
+                22222: {"@1": "session-shared-state"},
+            }
             messages = await monitor.check_for_updates(set())
 
         assert [message.text for message in messages] == [
@@ -600,6 +608,27 @@ class TestReadNewLinesOffsetRecovery:
         tracked = monitor.state.get_session("session-shared-state")
         assert tracked is not None
         assert tracked.last_byte_offset == jsonl_file.stat().st_size
+
+    def test_initial_offset_ignores_offset_from_reused_window(self, monitor, tmp_path):
+        """An offset from an older session must not skip a new session's output."""
+        jsonl_file = tmp_path / "session.jsonl"
+        jsonl_file.write_text("new session output\n", encoding="utf-8")
+        manager = SimpleNamespace(
+            iter_thread_bindings=lambda: iter([(12345, 42, "@1")]),
+            get_window_state=lambda _window_id: SimpleNamespace(
+                session_id="new-session"
+            ),
+            user_window_offsets={12345: {"@1": 8}},
+            user_window_offset_sessions={12345: {"@1": "old-session"}},
+        )
+
+        offset = monitor._initial_offset_from_user_window_offsets(
+            "new-session",
+            jsonl_file,
+            manager,
+        )
+
+        assert offset == 0
 
     @pytest.mark.asyncio
     async def test_messages_carry_source_line_offsets(

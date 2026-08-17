@@ -218,7 +218,12 @@ from .handlers.status_polling import (
     status_poll_loop,
 )
 from .screenshot import text_to_image
-from .session import CodexSession, is_shell_pane_command, session_manager
+from .session import (
+    CodexSession,
+    _session_ids_match,
+    is_shell_pane_command,
+    session_manager,
+)
 from .session_monitor import NewMessage
 from .terminal_parser import (
     extract_auth_error_message,
@@ -3666,6 +3671,11 @@ async def _recover_missing_bound_window(
         for uid, offsets in session_manager.user_window_offsets.items()
         if old_window_id in offsets
     }
+    old_offset_sessions = {
+        uid: sessions[old_window_id]
+        for uid, sessions in session_manager.user_window_offset_sessions.items()
+        if old_window_id in sessions
+    }
 
     (
         success,
@@ -3733,7 +3743,13 @@ async def _recover_missing_bound_window(
         offsets = session_manager.user_window_offsets.setdefault(offset_user_id, {})
         offsets[created_wid] = offset
         offsets.pop(old_window_id, None)
-    if old_offsets:
+    for offset_user_id, session_id in old_offset_sessions.items():
+        sessions = session_manager.user_window_offset_sessions.setdefault(
+            offset_user_id, {}
+        )
+        sessions[created_wid] = session_id
+        sessions.pop(old_window_id, None)
+    if old_offsets or old_offset_sessions:
         session_manager._save_state()
 
     await session_manager.remove_session_map_entry(old_window_id)
@@ -5654,14 +5670,24 @@ async def _mark_transcript_message_delivered(
         return
 
     if msg.source_offset > 0:
-        session_manager.update_user_window_offset(user_id, window_id, msg.source_offset)
+        session_manager.update_user_window_offset(
+            user_id,
+            window_id,
+            msg.source_offset,
+            msg.session_id,
+        )
         return
 
     session = await session_manager.resolve_session_for_window(window_id)
     if session and session.file_path:
         try:
             file_size = Path(session.file_path).stat().st_size
-            session_manager.update_user_window_offset(user_id, window_id, file_size)
+            session_manager.update_user_window_offset(
+                user_id,
+                window_id,
+                file_size,
+                msg.session_id,
+            )
         except OSError:
             pass
 
@@ -5678,8 +5704,21 @@ def _transcript_message_already_delivered(
     user_window_offsets = getattr(session_manager, "user_window_offsets", {})
     if not isinstance(user_window_offsets, dict):
         return False
+    user_window_offset_sessions = getattr(
+        session_manager, "user_window_offset_sessions", {}
+    )
+    if not isinstance(user_window_offset_sessions, dict):
+        return False
     user_offsets = user_window_offsets.get(user_id, {})
     if not isinstance(user_offsets, dict):
+        return False
+    user_sessions = user_window_offset_sessions.get(user_id, {})
+    if not isinstance(user_sessions, dict):
+        return False
+    recorded_session_id = user_sessions.get(window_id)
+    if not isinstance(recorded_session_id, str) or not _session_ids_match(
+        recorded_session_id, msg.session_id
+    ):
         return False
     delivered_offset = user_offsets.get(window_id)
     return isinstance(delivered_offset, int) and delivered_offset >= msg.source_offset

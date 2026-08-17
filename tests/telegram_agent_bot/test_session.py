@@ -510,6 +510,14 @@ class TestGroupChatId:
 
 
 class TestWindowState:
+    def test_update_offset_records_explicit_session_identity(
+        self, mgr: SessionManager
+    ) -> None:
+        mgr.update_user_window_offset(100, "@1", 42, "session-1")
+
+        assert mgr.user_window_offsets == {100: {"@1": 42}}
+        assert mgr.user_window_offset_sessions == {100: {"@1": "session-1"}}
+
     def test_get_creates_new(self, mgr: SessionManager) -> None:
         state = mgr.get_window_state("@0")
         assert state.session_id == ""
@@ -530,11 +538,14 @@ class TestWindowState:
         self, mgr: SessionManager
     ) -> None:
         mgr.bind_thread(100, 1, "@1")
+        mgr.update_user_window_offset(100, "@1", 42, "session-1")
 
         mgr.remove_window_state("@1")
 
         assert mgr.get_window_for_thread(100, 1) is None
         assert mgr.get_target_for_thread(100, 1) is None
+        assert 100 not in mgr.user_window_offsets
+        assert 100 not in mgr.user_window_offset_sessions
 
     def test_prepare_window_launch_sets_account_and_clears_quota_flag(
         self, mgr: SessionManager
