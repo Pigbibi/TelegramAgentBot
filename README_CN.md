@@ -252,6 +252,8 @@ TELEGRAM_AGENT_BOT_OUTPUT_MODE=clean
 | `TELEGRAM_AGENT_BOT_STATUS_REPOST_INTERVAL` | `60.0` | 长时间 `Thinking` 每隔多少秒重发一次，以便 Telegram topic 显示为活跃；设为 `0` 则只原地编辑 |
 | `TELEGRAM_AGENT_BOT_AGENT_INPUT_QUEUE_MAX_SIZE` | `20` | agent 显示交互提示时，每个会话最多由 bot 暂存多少条 Telegram 输入；普通 busy 状态会直接发给 agent |
 | `TELEGRAM_AGENT_BOT_AGENT_INPUT_QUEUE_MAX_WAIT_SECONDS` | `1800` | bot 暂存输入最多等待多少秒；设为 `0` 可禁用过期 |
+| `TELEGRAM_AGENT_BOT_AGENT_STARTUP_TIMEOUT_SECONDS` | `180` | 新启动 agent UI 最多等待多少秒，超时后报告首条消息转发失败 |
+| `TELEGRAM_AGENT_BOT_MAX_CONCURRENT_UPDATES` | `16` | 最多并发处理多少个 topic；同一 topic 内仍按顺序处理 |
 | `TELEGRAM_AGENT_BOT_AUTO_UPDATE` | `false` | 启动时自动检查并 fast-forward 更新 git 源码安装 |
 | `TELEGRAM_AGENT_BOT_UPDATE_INTERVAL_SECONDS` | `86400` | 两次自动更新检查之间的最短间隔 |
 | `TELEGRAM_AGENT_BOT_UPDATE_REQUIRE_IDLE` | `true` | 仅在没有活跃 Codex pane 时应用自动更新 |

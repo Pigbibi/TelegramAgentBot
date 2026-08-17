@@ -268,6 +268,10 @@ class Config:
                 )
             ),
         )
+        self.telegram_max_concurrent_updates = max(
+            1,
+            int(os.getenv("TELEGRAM_AGENT_BOT_MAX_CONCURRENT_UPDATES", "16")),
+        )
 
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix

@@ -748,11 +748,17 @@ class TmuxManager:
                             submitted_after_settle = True
                             break
                     if not submitted_after_settle:
-                        logger.error(
-                            "Codex prompt still appears pending in window %s after retry",
+                        logger.warning(
+                            "Codex prompt still appears pending in window %s after retry; "
+                            "deferring delivery confirmation to the transcript monitor",
                             window_id,
                         )
-                        return False
+                        # Text and both Enter control keys reached tmux.  A visible
+                        # input row is only a TUI heuristic: newer Codex builds can
+                        # leave it painted while the submitted turn is already
+                        # running.  The caller performs authoritative transcript
+                        # confirmation and can retry Enter when it is truly pending.
+                        return True
                     logger.info(
                         "Codex prompt cleared in window %s after submit settle grace",
                         window_id,
