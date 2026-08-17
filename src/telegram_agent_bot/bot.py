@@ -1074,6 +1074,17 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await safe_reply(update.message, "❌ This command only works in a topic.")
         return
 
+    ambiguous_wid = session_manager.get_ambiguous_window_for_thread(user.id, thread_id)
+    if isinstance(ambiguous_wid, str) and ambiguous_wid:
+        session_manager.unbind_thread(user.id, thread_id)
+        await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
+        await safe_reply(
+            update.message,
+            "✅ Removed the ambiguous topic binding. Send a message to create or "
+            "resume a dedicated session.",
+        )
+        return
+
     wid = session_manager.get_window_for_thread(user.id, thread_id)
     if not wid:
         target = _remote_target_for_thread(user.id, thread_id)
@@ -1110,6 +1121,18 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     thread_id = _get_thread_id(update)
+    ambiguous_wid = (
+        session_manager.get_ambiguous_window_for_thread(user.id, thread_id)
+        if thread_id is not None
+        else None
+    )
+    if isinstance(ambiguous_wid, str) and ambiguous_wid:
+        await safe_reply(
+            update.message,
+            "❌ This topic shares an agent window with another topic. Control is "
+            "paused to prevent affecting the wrong session; use /unbind here first.",
+        )
+        return
     wid = session_manager.resolve_window_for_thread(user.id, thread_id)
     target = session_manager.resolve_target_for_thread(user.id, thread_id)
     if not wid and not target:
@@ -1164,6 +1187,15 @@ async def interrupt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     thread_id = _get_thread_id(update)
     if thread_id is None:
         await safe_reply(update.message, "❌ Please use a named topic.")
+        return
+
+    ambiguous_wid = session_manager.get_ambiguous_window_for_thread(user.id, thread_id)
+    if isinstance(ambiguous_wid, str) and ambiguous_wid:
+        await safe_reply(
+            update.message,
+            "❌ This topic shares an agent window with another topic. Interrupt is "
+            "paused to prevent affecting the wrong session; use /unbind here first.",
+        )
         return
 
     chat = update.effective_chat
@@ -2731,6 +2763,15 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
+    ambiguous_wid = session_manager.get_ambiguous_window_for_thread(user.id, thread_id)
+    if isinstance(ambiguous_wid, str) and ambiguous_wid:
+        await safe_reply(
+            update.message,
+            "❌ This topic shares an agent window with another topic. Messages are "
+            "paused to prevent cross-topic delivery; use /unbind here first.",
+        )
+        return
+
     wid = session_manager.get_window_for_thread(user.id, thread_id)
     remote_target = None
     if wid is None:
@@ -2891,6 +2932,15 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await safe_reply(
             update.message,
             "❌ Please use a named topic. Create a new topic to start a session.",
+        )
+        return
+
+    ambiguous_wid = session_manager.get_ambiguous_window_for_thread(user.id, thread_id)
+    if isinstance(ambiguous_wid, str) and ambiguous_wid:
+        await safe_reply(
+            update.message,
+            "❌ This topic shares an agent window with another topic. Messages are "
+            "paused to prevent cross-topic delivery; use /unbind here first.",
         )
         return
 
@@ -3981,6 +4031,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(
             update.message,
             "❌ Please use a named topic. Create a new topic to start a session.",
+        )
+        return
+
+    ambiguous_wid = session_manager.get_ambiguous_window_for_thread(user.id, thread_id)
+    if isinstance(ambiguous_wid, str) and ambiguous_wid:
+        await safe_reply(
+            update.message,
+            "❌ This topic shares an agent window with another topic. Messages are "
+            "paused to prevent cross-topic delivery; use /unbind here first.",
         )
         return
 

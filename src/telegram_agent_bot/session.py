@@ -1840,7 +1840,25 @@ class SessionManager:
         bindings = self.thread_bindings.get(user_id)
         if not bindings:
             return None
-        return bindings.get(thread_id)
+        window_id = bindings.get(thread_id)
+        if window_id and window_id in self.ambiguous_window_bindings():
+            logger.error(
+                "Refusing ambiguous topic binding: user=%d thread=%d window=%s",
+                user_id,
+                thread_id,
+                window_id,
+            )
+            return None
+        return window_id
+
+    def get_ambiguous_window_for_thread(
+        self, user_id: int, thread_id: int
+    ) -> str | None:
+        """Return the local window when this topic shares it with another topic."""
+        window_id = self.thread_bindings.get(user_id, {}).get(thread_id)
+        if window_id and window_id in self.ambiguous_window_bindings():
+            return window_id
+        return None
 
     def bind_thread_target(
         self,
@@ -1898,7 +1916,20 @@ class SessionManager:
         """
         targets = self.thread_targets.get(user_id)
         if targets and thread_id in targets:
-            return targets[thread_id]
+            target = targets[thread_id]
+            if (
+                target.backend_id == "local"
+                and target.window_id
+                and target.window_id in self.ambiguous_window_bindings()
+            ):
+                logger.error(
+                    "Refusing ambiguous topic target: user=%d thread=%d window=%s",
+                    user_id,
+                    thread_id,
+                    target.window_id,
+                )
+                return None
+            return target
 
         window_id = self.get_window_for_thread(user_id, thread_id)
         if not window_id:
@@ -1941,6 +1972,17 @@ class SessionManager:
         for user_id, bindings in list(self.thread_bindings.items()):
             for thread_id, window_id in list(bindings.items()):
                 yield user_id, thread_id, window_id
+
+    def ambiguous_window_bindings(self) -> dict[str, list[tuple[int, int]]]:
+        """Return local windows bound to more than one Telegram topic."""
+        bindings: dict[str, list[tuple[int, int]]] = {}
+        for user_id, thread_id, window_id in self.iter_thread_bindings():
+            bindings.setdefault(window_id, []).append((user_id, thread_id))
+        return {
+            window_id: topics
+            for window_id, topics in bindings.items()
+            if len(topics) > 1
+        }
 
     @staticmethod
     def _window_id_sort_key(window_id: str) -> tuple[int, str]:
@@ -2028,7 +2070,15 @@ class SessionManager:
         Returns list of (user_id, window_id, thread_id) tuples.
         """
         result: list[tuple[int, str, int]] = []
+        ambiguous_windows = self.ambiguous_window_bindings()
         for user_id, thread_id, window_id in self.iter_thread_bindings():
+            if window_id in ambiguous_windows:
+                logger.error(
+                    "Skipping output for ambiguous window %s bound to topics %s",
+                    window_id,
+                    ambiguous_windows[window_id],
+                )
+                continue
             resolved = await self.resolve_session_for_window(window_id)
             if resolved and _session_ids_match(resolved.session_id, session_id):
                 result.append((user_id, window_id, thread_id))

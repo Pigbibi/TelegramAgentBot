@@ -153,6 +153,29 @@ class TestThreadBindings:
 
         assert seen == [(100, 1, "@1")]
 
+    def test_ambiguous_local_window_is_not_resolved(self, mgr: SessionManager) -> None:
+        mgr.bind_thread(100, 1, "@1")
+        mgr.bind_thread(200, 2, "@1")
+
+        assert mgr.ambiguous_window_bindings() == {"@1": [(100, 1), (200, 2)]}
+        assert mgr.get_ambiguous_window_for_thread(100, 1) == "@1"
+        assert mgr.get_window_for_thread(100, 1) is None
+        assert mgr.get_target_for_thread(100, 1) is None
+        assert mgr.resolve_window_for_thread(200, 2) is None
+        assert mgr.resolve_target_for_thread(200, 2) is None
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_local_window_does_not_receive_output(
+        self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mgr.bind_thread(100, 1, "@1")
+        mgr.bind_thread(200, 2, "@1")
+        resolve_session = AsyncMock()
+        monkeypatch.setattr(mgr, "resolve_session_for_window", resolve_session)
+
+        assert await mgr.find_users_for_session("session-1") == []
+        resolve_session.assert_not_awaited()
+
     def test_bind_thread_tracks_topic_managed_session(
         self, mgr: SessionManager
     ) -> None:
