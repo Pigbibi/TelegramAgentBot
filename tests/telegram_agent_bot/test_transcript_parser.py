@@ -765,6 +765,22 @@ class TestParseEntries:
         assert EXPQUOTE_END in result[0].text
         assert "reasoning here" in result[0].text
 
+    def test_codex_internal_context_is_not_forwarded_as_user_text(
+        self, make_jsonl_entry
+    ):
+        entries = [
+            make_jsonl_entry(
+                "user",
+                "<codex_internal_context><objective>continue</objective>"
+                "</codex_internal_context>",
+            )
+        ]
+
+        result, pending = TranscriptParser.parse_entries(entries)
+
+        assert result == []
+        assert pending == {}
+
     def test_response_item_encrypted_reasoning_pair_renders_thinking_entry(
         self, monkeypatch
     ):

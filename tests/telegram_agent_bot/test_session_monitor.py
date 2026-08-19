@@ -429,10 +429,10 @@ class TestReadNewLinesOffsetRecovery:
         )
 
     @pytest.mark.asyncio
-    async def test_stale_backlog_before_latest_user_is_dropped(
+    async def test_unread_assistant_output_before_latest_user_is_preserved(
         self, monitor, tmp_path, make_jsonl_entry
     ):
-        """Lagged monitor backlog should not replay older replies after a new prompt."""
+        """A later prompt must not discard assistant output awaiting delivery."""
         jsonl_file = tmp_path / "session.jsonl"
         old_answer = make_jsonl_entry(msg_type="assistant", content="old answer")
         latest_user = make_jsonl_entry(msg_type="user", content="new question")
@@ -465,7 +465,7 @@ class TestReadNewLinesOffsetRecovery:
             mock_config.show_user_messages = False
             messages = await monitor.check_for_updates(set())
 
-        assert [message.text for message in messages] == ["new answer"]
+        assert [message.text for message in messages] == ["old answer", "new answer"]
 
     @pytest.mark.asyncio
     async def test_missing_monitor_state_resumes_from_user_window_offset(
