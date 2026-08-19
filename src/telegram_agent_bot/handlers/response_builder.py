@@ -3,19 +3,121 @@
 Builds paginated response messages from Codex output:
   - Handles different content types (text, thinking, tool_use, tool_result)
   - Splits long messages into pages within Telegram's 4096 char limit
-  - Truncates thinking content to keep messages compact
+  - Preserves long user messages and expandable tool output without truncation
 
-Markdown conversion is NOT done here — the send layer (message_sender,
-message_queue) handles convert_markdown() so each message is converted
-exactly once.
+Final Markdown conversion is done by the send layer. This module performs
+side-effect-free conversions only while sizing expandable quote pages.
 
 Key function:
   - build_response_parts: Build paginated response messages
 """
 
-from ..markdown_v2 import convert_markdown_tables
+from ..markdown_v2 import convert_markdown, convert_markdown_tables
 from ..telegram_sender import split_message
 from ..transcript_parser import TranscriptParser
+
+
+_FORMATTED_PAGE_BUDGET = 3800
+_PLAIN_PAGE_BUDGET = 2800
+
+
+def _split_expandable_quote(inner: str) -> list[str]:
+    """Split quote text by its rendered MarkdownV2 size without losing content."""
+    start_tag = TranscriptParser.EXPANDABLE_QUOTE_START
+    end_tag = TranscriptParser.EXPANDABLE_QUOTE_END
+    if not inner:
+        return [""]
+
+    chunks: list[str] = []
+    remaining = inner
+    while remaining:
+        low = 1
+        high = len(remaining)
+        best = 0
+        while low <= high:
+            middle = (low + high) // 2
+            candidate = f"{start_tag}{remaining[:middle]}{end_tag}"
+            if len(convert_markdown(candidate)) <= _FORMATTED_PAGE_BUDGET:
+                best = middle
+                low = middle + 1
+            else:
+                high = middle - 1
+
+        if best <= 0:
+            # A single rendered character always fits in practice. Keep forward
+            # progress if a future Markdown renderer adds unexpected overhead.
+            best = 1
+
+        if best < len(remaining):
+            prefix = remaining[:best]
+            newline_break = prefix.rfind("\n")
+            space_break = prefix.rfind(" ")
+            natural_break = max(newline_break, space_break)
+            if natural_break >= best // 2:
+                best = natural_break + 1
+
+        chunks.append(remaining[:best])
+        remaining = remaining[best:]
+
+    return chunks
+
+
+def _append_segment(parts: list[str], segment: str) -> None:
+    """Append a complete segment, combining it with the previous page if safe."""
+    if not segment:
+        return
+    if parts:
+        combined = parts[-1] + segment
+        if len(convert_markdown(combined)) <= _FORMATTED_PAGE_BUDGET:
+            parts[-1] = combined
+            return
+    parts.append(segment)
+
+
+def _split_expandable_content(text: str) -> list[str]:
+    """Paginate text containing one or more expandable quote sentinel blocks."""
+    start_tag = TranscriptParser.EXPANDABLE_QUOTE_START
+    end_tag = TranscriptParser.EXPANDABLE_QUOTE_END
+    parts: list[str] = []
+    cursor = 0
+
+    while True:
+        quote_start = text.find(start_tag, cursor)
+        if quote_start < 0:
+            break
+        quote_end = text.find(end_tag, quote_start + len(start_tag))
+        if quote_end < 0:
+            break
+
+        plain = text[cursor:quote_start]
+        for chunk in split_message(plain, max_length=_PLAIN_PAGE_BUDGET):
+            _append_segment(parts, chunk)
+
+        inner_start = quote_start + len(start_tag)
+        inner = text[inner_start:quote_end]
+        for quote_chunk in _split_expandable_quote(inner):
+            block = f"{start_tag}{quote_chunk}{end_tag}"
+            _append_segment(parts, block)
+
+        cursor = quote_end + len(end_tag)
+
+    remainder = text[cursor:]
+    for chunk in split_message(remainder, max_length=_PLAIN_PAGE_BUDGET):
+        _append_segment(parts, chunk)
+
+    return parts or [text]
+
+
+def _decorate_parts(parts: list[str], prefix: str, separator: str) -> list[str]:
+    """Add the content label and stable page counters."""
+    total = len(parts)
+    decorated: list[str] = []
+    for index, part in enumerate(parts, 1):
+        body = f"{prefix}{separator}{part}" if prefix else part
+        if total > 1:
+            body = f"{body}\n\n[{index}/{total}]"
+        decorated.append(body)
+    return decorated
 
 
 def build_response_parts(
@@ -32,30 +134,12 @@ def build_response_parts(
     """
     text = text.strip()
 
-    # User messages: add emoji prefix (no newline)
+    # User messages: add emoji prefix (no newline), but preserve the complete
+    # transcript text by using the same pagination path as assistant messages.
     if role == "user":
         prefix = "👤 "
         separator = ""
-        # User messages are typically short, no special processing needed
-        if len(text) > 3000:
-            text = text[:3000] + "…"
-        return [f"{prefix}{text}"]
-
-    # Truncate thinking content to keep it compact
-    if content_type == "thinking" and is_complete:
-        start_tag = TranscriptParser.EXPANDABLE_QUOTE_START
-        end_tag = TranscriptParser.EXPANDABLE_QUOTE_END
-        max_thinking = 500
-        if start_tag in text and end_tag in text:
-            inner = text[text.index(start_tag) + len(start_tag) : text.index(end_tag)]
-            if len(inner) > max_thinking:
-                inner = inner[:max_thinking] + "\n\n… (thinking truncated)"
-            text = start_tag + inner + end_tag
-        elif len(text) > max_thinking:
-            text = text[:max_thinking] + "\n\n… (thinking truncated)"
-
-    # Format based on content type
-    if content_type == "thinking":
+    elif content_type == "thinking":
         # Thinking: prefix with "∴ Thinking…" and single newline
         prefix = "∴ Thinking…"
         separator = "\n"
@@ -64,13 +148,10 @@ def build_response_parts(
         prefix = ""
         separator = ""
 
-    # If text contains expandable quote sentinels, don't split —
-    # the quote must stay atomic. Truncation is handled by
-    # _render_expandable_quote in markdown_v2.py.
+    # Each page gets a complete sentinel pair so Telegram can render all quote
+    # content as expandable MarkdownV2 without the send layer truncating it.
     if TranscriptParser.EXPANDABLE_QUOTE_START in text:
-        if prefix:
-            return [f"{prefix}{separator}{text}"]
-        return [text]
+        return _decorate_parts(_split_expandable_content(text), prefix, separator)
 
     # Convert tables to card-style before splitting so tables aren't broken
     # across messages. The send layer's convert_markdown() call is idempotent.
@@ -81,17 +162,4 @@ def build_response_parts(
     max_text = 3000 - len(prefix) - len(separator)
 
     text_chunks = split_message(text, max_length=max_text)
-    total = len(text_chunks)
-
-    if total == 1:
-        if prefix:
-            return [f"{prefix}{separator}{text_chunks[0]}"]
-        return [text_chunks[0]]
-
-    parts = []
-    for i, chunk in enumerate(text_chunks, 1):
-        if prefix:
-            parts.append(f"{prefix}{separator}{chunk}\n\n[{i}/{total}]")
-        else:
-            parts.append(f"{chunk}\n\n[{i}/{total}]")
-    return parts
+    return _decorate_parts(text_chunks, prefix, separator)

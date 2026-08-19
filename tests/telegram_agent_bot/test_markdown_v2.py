@@ -56,3 +56,11 @@ class TestConvertMarkdown:
         assert ">inside quote||" in result
         assert "before" in result
         assert "after" in result
+
+    def test_expandable_quote_renderer_does_not_truncate(self) -> None:
+        inner = "x" * 5000
+
+        result = convert_markdown(f"{EXP_START}{inner}{EXP_END}")
+
+        assert result.count("x") == len(inner)
+        assert "truncated" not in result.lower()

@@ -116,41 +116,16 @@ def _escape_mdv2(text: str) -> str:
     return _MDV2_ESCAPE_RE.sub(r"\\\1", text)
 
 
-# Max rendered chars for a single expandable quote block.
-# Leaves room for surrounding text within Telegram's 4096 char message limit.
-_EXPQUOTE_MAX_RENDERED = 3800
-
-
 def _render_expandable_quote(m: re.Match[str]) -> str:
-    """Render an expandable blockquote block in raw MarkdownV2.
+    """Render a complete expandable blockquote block in raw MarkdownV2.
 
-    Truncates the rendered output to _EXPQUOTE_MAX_RENDERED chars
-    to ensure the final message fits within Telegram's 4096 limit.
+    Message-size pagination happens before conversion in response_builder.  This
+    layer must not silently discard content because callers also use it for plain
+    fallback and delivery acknowledgements.
     """
     inner = m.group(1)
     escaped = _escape_mdv2(inner)
-    lines = escaped.split("\n")
-    # Build quoted lines, truncating if needed to stay within budget
-    built: list[str] = []
-    total_len = 0
-    suffix = "\n>… \\(truncated\\)||"
-    budget = _EXPQUOTE_MAX_RENDERED - len(suffix)
-    truncated = False
-    for line in lines:
-        # +1 for ">" prefix, +1 for "\n" separator
-        line_cost = 1 + len(line) + 1
-        if total_len + line_cost > budget:
-            # Try to fit a partial line
-            remaining = budget - total_len - 2  # -2 for ">" and "\n"
-            if remaining > 20:
-                built.append(f">{line[:remaining]}")
-            truncated = True
-            break
-        built.append(f">{line}")
-        total_len += line_cost
-    if truncated:
-        return "\n".join(built) + suffix
-    return "\n".join(built) + "||"
+    return "\n".join(f">{line}" for line in escaped.split("\n")) + "||"
 
 
 def _markdownify(text: str) -> str:

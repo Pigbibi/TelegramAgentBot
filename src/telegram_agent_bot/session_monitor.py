@@ -439,47 +439,6 @@ class SessionMonitor:
         self.state.save_if_dirty()
 
     @staticmethod
-    def _drop_backlog_before_latest_user(
-        session_id: str,
-        entries: list[Any],
-    ) -> list[Any]:
-        """Drop stale assistant output that predates a newer prompt.
-
-        If the monitor falls behind, one unread slice may contain assistant output
-        for an older prompt followed by a newer user prompt and its later output.
-        Telegram cannot place the older output above the message the user already
-        sent, and replaying it after the new prompt is confusing, so keep the
-        newest user prompt and later output only.
-        """
-        latest_user_index: int | None = None
-        for index, entry in enumerate(entries):
-            if (
-                getattr(entry, "role", None) == "user"
-                and getattr(entry, "content_type", None) == "text"
-            ):
-                latest_user_index = index
-
-        if latest_user_index is None or latest_user_index == 0:
-            return entries
-
-        filtered: list[Any] = []
-        dropped_count = 0
-        for index, entry in enumerate(entries):
-            if index < latest_user_index and getattr(entry, "role", None) != "user":
-                dropped_count += 1
-                continue
-            filtered.append(entry)
-
-        if dropped_count:
-            logger.warning(
-                "Dropped %d stale transcript message(s) before latest user prompt "
-                "for session %s",
-                dropped_count,
-                session_id,
-            )
-        return filtered
-
-    @staticmethod
     def _initial_offset_from_user_window_offsets(
         session_id: str,
         file_path: Path,
@@ -647,11 +606,6 @@ class SessionMonitor:
                     self._pending_tools[session_info.session_id] = remaining
                 else:
                     self._pending_tools.pop(session_info.session_id, None)
-
-                parsed_entries = self._drop_backlog_before_latest_user(
-                    session_info.session_id,
-                    parsed_entries,
-                )
 
                 for entry in parsed_entries:
                     if not entry.text and not entry.image_data:
