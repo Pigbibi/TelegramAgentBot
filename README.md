@@ -248,6 +248,8 @@ be committed.
 | `TELEGRAM_AGENT_BOT_BACKEND` | `local` | Agent backend ID. `local` keeps the single-machine tmux behavior |
 | `TELEGRAM_AGENT_BOT_BACKEND_PLUGINS` | _(none)_ | Comma-separated Python modules that register optional agent backends |
 | `TELEGRAM_AGENT_BOT_TMUX_SESSION_NAME` | `telegram-agent-bot` | tmux session name used by the bot |
+| `TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME` | _(none)_ | Private tmux socket name. When set, the socket is kept under `$TELEGRAM_AGENT_BOT_DIR/tmux` rather than `/tmp`; a live legacy named socket is migrated automatically |
+| `TELEGRAM_AGENT_BOT_TMUX_SOCKET_PATH` | _(derived from socket name)_ | Optional absolute private tmux socket path override |
 | `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | `codex` for Codex, `claude` for Claude Code | Command used when creating a new window |
 | `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` | `~/.telegram-agent-bot/claude.env` | Optional 0600 environment file for Claude Code/DeepSeek; sourced without putting the key in tmux command text |
 | `TELEGRAM_AGENT_BOT_CODEX_MODEL` | `gpt-5.4-mini` | Default Codex model for new topics |

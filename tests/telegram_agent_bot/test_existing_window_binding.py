@@ -977,6 +977,16 @@ class TestExistingWindowBinding:
                 new_callable=AsyncMock,
             ) as refresh_session_map,
             patch(
+                "telegram_agent_bot.bot._wait_for_recovered_agent_process",
+                new_callable=AsyncMock,
+                return_value=(True, ""),
+            ),
+            patch(
+                "telegram_agent_bot.bot._recovered_agent_process_status",
+                new_callable=AsyncMock,
+                return_value=(True, ""),
+            ),
+            patch(
                 "telegram_agent_bot.bot.create_agent_session",
                 new_callable=AsyncMock,
             ) as create_agent_session,
@@ -985,10 +995,26 @@ class TestExistingWindowBinding:
             mock_sm.get_display_name.return_value = "Projects-2"
             mock_sm.window_states = {"@2": old_state}
             mock_sm.user_window_offsets = {12345: {"@2": 99}}
+            mock_sm.user_window_offset_sessions = {}
+            mock_sm.iter_thread_bindings.return_value = [(12345, 42, "@2")]
             mock_sm.wait_for_session_map_entry = AsyncMock(return_value=False)
             mock_sm.get_window_state.return_value = new_state
             mock_sm.remove_session_map_entry = AsyncMock()
             mock_tmux.find_window_by_id = AsyncMock(return_value=None)
+            mock_tmux.kill_window = AsyncMock(return_value=True)
+
+            def register_session(
+                _window_id,
+                session_id,
+                cwd,
+                window_name="",
+                **_kwargs,
+            ):
+                new_state.session_id = session_id
+                new_state.cwd = cwd
+                new_state.window_name = window_name
+
+            mock_sm.register_session_to_window.side_effect = register_session
             create_agent_session.return_value = CreateSessionResult(
                 ok=True,
                 message="Created window 'Projects-2'",

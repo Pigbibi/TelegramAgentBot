@@ -37,6 +37,7 @@ TMP_EXCLUDE_PATTERNS = (
     "snap-private-tmp",
     "systemd-private-*",
     "telegram-agent-bot-lock-*",
+    "tmux-*",
 )
 
 

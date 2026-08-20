@@ -1,4 +1,5 @@
 import os
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -47,6 +48,92 @@ class _DummySession:
 
 
 class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
+    def test_observed_tmux_session_is_not_silently_replaced(self) -> None:
+        manager = tmux_manager_module.TmuxManager(
+            session_name="telegram-agent-bot-test"
+        )
+        manager._session_was_observed = True
+
+        with (
+            patch.object(manager, "get_session", return_value=None),
+            self.assertRaisesRegex(RuntimeError, "Refusing to start a replacement"),
+        ):
+            manager.get_or_create_session()
+
+    def test_legacy_named_socket_is_migrated_to_durable_path(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="telegram-agent-bot-socket-migration-"
+        ) as tmpdir:
+            root = Path(tmpdir)
+            legacy_tmp = root / "legacy"
+            legacy_socket = (
+                legacy_tmp / f"tmux-{os.geteuid()}" / "telegram-agent-bot-test"
+            )
+            legacy_socket.parent.mkdir(parents=True)
+            unix_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            unix_socket.bind(str(legacy_socket))
+            unix_socket.close()
+            durable_socket = root / "durable" / "telegram-agent-bot-test"
+
+            with (
+                patch.object(
+                    tmux_manager_module.config,
+                    "tmux_socket_name",
+                    "telegram-agent-bot-test",
+                ),
+                patch.object(
+                    tmux_manager_module.config,
+                    "tmux_socket_path",
+                    durable_socket,
+                ),
+                patch.object(
+                    tmux_manager_module.config,
+                    "tmux_socket_path_is_derived",
+                    True,
+                ),
+                patch.dict(os.environ, {"TMUX_TMPDIR": str(legacy_tmp)}),
+                patch.object(tmux_manager_module, "_SOCKET_PATH_READY", False),
+                patch.object(tmux_manager_module, "_EFFECTIVE_SOCKET_PATH", None),
+            ):
+                prefix = tmux_manager_module.TmuxManager._tmux_cli_prefix()
+
+            self.assertEqual(prefix, ["tmux", "-S", str(durable_socket)])
+            self.assertFalse(legacy_socket.exists())
+            self.assertTrue(durable_socket.is_socket())
+
+    def test_explicit_socket_path_does_not_change_parent_permissions(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="telegram-agent-bot-explicit-socket-"
+        ) as tmpdir:
+            parent = Path(tmpdir) / "shared"
+            parent.mkdir(mode=0o755)
+            parent.chmod(0o755)
+            explicit_socket = parent / "bot.sock"
+
+            with (
+                patch.object(
+                    tmux_manager_module.config,
+                    "tmux_socket_name",
+                    "telegram-agent-bot-test",
+                ),
+                patch.object(
+                    tmux_manager_module.config,
+                    "tmux_socket_path",
+                    explicit_socket,
+                ),
+                patch.object(
+                    tmux_manager_module.config,
+                    "tmux_socket_path_is_derived",
+                    False,
+                ),
+                patch.object(tmux_manager_module, "_SOCKET_PATH_READY", False),
+                patch.object(tmux_manager_module, "_EFFECTIVE_SOCKET_PATH", None),
+            ):
+                prefix = tmux_manager_module.TmuxManager._tmux_cli_prefix()
+
+            self.assertEqual(prefix, ["tmux", "-S", str(explicit_socket)])
+            self.assertEqual(parent.stat().st_mode & 0o777, 0o755)
+
     async def test_create_window_uses_resume_subcommand(self) -> None:
         pane = _DummyPane()
         window = _DummyWindow(pane)

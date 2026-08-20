@@ -22,6 +22,8 @@ def _base_env(monkeypatch, tmp_path):
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CODEX_MODELS", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CLAUDE_MODELS", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST", raising=False)
+    monkeypatch.delenv("TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME", raising=False)
+    monkeypatch.delenv("TELEGRAM_AGENT_BOT_TMUX_SOCKET_PATH", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_ENABLE_ACCOUNT_ROTATION", raising=False)
     monkeypatch.delenv(
         "TELEGRAM_AGENT_BOT_AGENT_STARTUP_TIMEOUT_SECONDS", raising=False
@@ -81,6 +83,27 @@ class TestConfigValid:
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_TMUX_SESSION_NAME", "mysession")
         cfg = Config()
         assert cfg.tmux_session_name == "mysession"
+
+    def test_named_tmux_socket_defaults_to_durable_app_path(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME", "private-bot")
+        cfg = Config()
+        assert cfg.tmux_socket_path == tmp_path / "tmux" / "private-bot"
+        assert cfg.tmux_socket_path_is_derived is True
+
+    def test_explicit_tmux_socket_path_takes_priority(self, monkeypatch, tmp_path):
+        socket_path = tmp_path / "sockets" / "bot.sock"
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME", "private-bot")
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_TMUX_SOCKET_PATH", str(socket_path))
+        cfg = Config()
+        assert cfg.tmux_socket_path == socket_path
+        assert cfg.tmux_socket_path_is_derived is False
+
+    def test_default_shared_tmux_socket_is_preserved(self):
+        cfg = Config()
+        assert cfg.tmux_socket_name is None
+        assert cfg.tmux_socket_path is None
 
     def test_default_agent_backend_is_local(self):
         cfg = Config()

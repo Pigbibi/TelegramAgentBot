@@ -926,11 +926,18 @@ class SessionManager:
         return user_id
 
     async def wait_for_session_map_entry(
-        self, window_id: str, timeout: float = 5.0, interval: float = 0.5
+        self,
+        window_id: str,
+        timeout: float = 5.0,
+        interval: float = 0.5,
+        expected_session_id: str = "",
+        apply: bool = True,
     ) -> bool:
         """Poll session_map.json until an entry for window_id appears.
 
-        Returns True if the entry was found within timeout, False otherwise.
+        When expected_session_id is provided, stale entries for a reused tmux
+        window ID are ignored. Returns True if a matching entry was found
+        within timeout, False otherwise.
         """
         logger.debug(
             "Waiting for session_map entry: window_id=%s, timeout=%.1f",
@@ -946,14 +953,25 @@ class SessionManager:
                         content = await f.read()
                     session_map = json.loads(content)
                     info = session_map.get(key, {})
-                    if info.get("session_id"):
+                    mapped_session_id = info.get("session_id", "")
+                    expected_matches = not expected_session_id or (
+                        _canonical_session_id(mapped_session_id)
+                        == _canonical_session_id(expected_session_id)
+                    )
+                    if mapped_session_id and expected_matches:
+                        if not apply:
+                            return True
                         # Found — load into window_states immediately
                         logger.debug(
                             "session_map entry found for window_id %s", window_id
                         )
                         await self.load_session_map()
                         state = self.get_window_state(window_id)
-                        if state.session_id:
+                        state_matches = not expected_session_id or (
+                            _canonical_session_id(state.session_id)
+                            == _canonical_session_id(expected_session_id)
+                        )
+                        if state.session_id and state_matches:
                             return True
                         logger.debug(
                             "session_map entry for window_id %s was ignored during load",
@@ -1157,6 +1175,11 @@ class SessionManager:
             stale_wids = []
             for w, state in self.window_states.items():
                 if not w or w in valid_wids:
+                    continue
+                if self._window_has_bound_thread(w):
+                    # A missing bound window still needs its session metadata
+                    # for transactional recovery. Do not let another window's
+                    # hook entry erase that recovery source.
                     continue
                 if (
                     state.launch_started_at

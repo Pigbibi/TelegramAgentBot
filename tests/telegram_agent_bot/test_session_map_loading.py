@@ -22,6 +22,97 @@ from telegram_agent_bot.session import SessionManager, WindowState
 
 
 class SessionMapLoadingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_wait_for_session_map_ignores_reused_window_id(self) -> None:
+        manager = SessionManager()
+        with tempfile.TemporaryDirectory(
+            prefix="telegram-agent-bot-session-map-"
+        ) as tmpdir:
+            session_map_file = Path(tmpdir) / "session_map.json"
+            session_map_file.write_text(
+                json.dumps(
+                    {
+                        "telegram-agent-bot:@2": {
+                            "session_id": "stale-session",
+                            "cwd": "/tmp/project",
+                            "window_name": "Project",
+                        }
+                    }
+                )
+            )
+            with (
+                patch.object(
+                    session_module.config, "session_map_file", session_map_file
+                ),
+                patch.object(
+                    session_module.config,
+                    "tmux_session_name",
+                    "telegram-agent-bot",
+                ),
+                patch.object(manager, "load_session_map", AsyncMock()) as load_map,
+            ):
+                found = await manager.wait_for_session_map_entry(
+                    "@2",
+                    timeout=0.03,
+                    interval=0.01,
+                    expected_session_id="expected-session",
+                )
+
+        self.assertFalse(found)
+        load_map.assert_not_awaited()
+
+    async def test_session_map_keeps_missing_bound_recovery_source(self) -> None:
+        manager = SessionManager()
+        manager.window_states = {
+            "@8": WindowState(
+                session_id="recover-me",
+                cwd="/tmp/missing",
+                window_name="Missing",
+            )
+        }
+        manager.thread_bindings = {12345: {42: "@8"}}
+        with tempfile.TemporaryDirectory(
+            prefix="telegram-agent-bot-session-map-"
+        ) as tmpdir:
+            session_map_file = Path(tmpdir) / "session_map.json"
+            session_map_file.write_text(
+                json.dumps(
+                    {
+                        "telegram-agent-bot:@9": {
+                            "session_id": "other-session",
+                            "cwd": "/tmp/other",
+                            "window_name": "Other",
+                        }
+                    }
+                )
+            )
+            with (
+                patch.object(
+                    session_module.config, "session_map_file", session_map_file
+                ),
+                patch.object(
+                    session_module.config,
+                    "tmux_session_name",
+                    "telegram-agent-bot",
+                ),
+                patch.object(
+                    session_module.tmux_manager,
+                    "list_windows",
+                    AsyncMock(
+                        return_value=[
+                            SimpleNamespace(
+                                window_id="@9",
+                                cwd="/tmp/other",
+                                window_name="Other",
+                            )
+                        ]
+                    ),
+                ),
+            ):
+                await manager.load_session_map()
+
+        self.assertEqual(manager.window_states["@8"].session_id, "recover-me")
+        self.assertEqual(manager.thread_bindings[12345][42], "@8")
+
     async def test_empty_session_map_does_not_drop_existing_window_states(self) -> None:
         manager = SessionManager()
         manager.window_states = {
