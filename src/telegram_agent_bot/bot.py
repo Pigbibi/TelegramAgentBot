@@ -3705,7 +3705,7 @@ async def _recover_missing_bound_window(
     old_window_id: str,
     text: str,
 ) -> tuple[bool, str]:
-    """Recreate a missing bound tmux window and forward the pending text."""
+    """Transactionally recreate a missing window and forward pending text."""
     state = session_manager.window_states.get(old_window_id)
     if not state or not state.session_id or not state.cwd:
         return False, "missing window has no resumable session state"
@@ -3726,6 +3726,8 @@ async def _recover_missing_bound_window(
         for uid, sessions in session_manager.user_window_offset_sessions.items()
         if old_window_id in sessions
     }
+    persisted_window_ids = set(session_manager.window_states)
+    persisted_bindings = list(session_manager.iter_thread_bindings())
 
     (
         success,
@@ -3742,12 +3744,66 @@ async def _recover_missing_bound_window(
     if not success:
         return False, message
 
+    conflicting_topics = [
+        (bound_user_id, bound_thread_id)
+        for bound_user_id, bound_thread_id, bound_window_id in persisted_bindings
+        if bound_window_id == created_wid
+        and (bound_user_id, bound_thread_id) != (user_id, thread_id)
+    ]
+    if created_wid in persisted_window_ids or conflicting_topics:
+        # A freshly created tmux window ID must never already exist in persisted
+        # state. This means a replacement tmux server restarted its @N counter.
+        await tmux_manager.kill_window(created_wid)
+        logger.error(
+            "Refusing recovered window id collision: old=%s created=%s topics=%s",
+            old_window_id,
+            created_wid,
+            conflicting_topics,
+        )
+        return (
+            False,
+            "tmux reused a window id that is still assigned to saved topics. "
+            "The new window was stopped without changing any bindings; restore "
+            "the original tmux socket and restart the bot.",
+        )
+
+    async def discard_failed_window() -> None:
+        await tmux_manager.kill_window(created_wid)
+        await session_manager.remove_session_map_entry(created_wid)
+        session_manager.remove_window_state(created_wid)
+
+    started, startup_message = await _wait_for_recovered_agent_process(created_wid)
+    if not started:
+        await discard_failed_window()
+        return False, startup_message
+
+    # Do not synthesize a session_map entry before validating the resumed
+    # process. A synthetic entry used to make failed resumes look successful.
+    hook_ok = await session_manager.wait_for_session_map_entry(
+        created_wid,
+        timeout=15.0,
+        expected_session_id=resume_session_id,
+        apply=False,
+    )
+    healthy, health_message = await _recovered_agent_process_status(created_wid)
+    if not healthy:
+        await discard_failed_window()
+        return False, health_message
+
     session_manager.prepare_window_launch(
         created_wid,
         cwd=str(selected_path),
         window_name=created_wname,
         account_name=account_name or "",
     )
+    if not hook_ok:
+        logger.info(
+            "Recovered missing window %s as %s without a hook entry; "
+            "tracking resumed session_id=%s",
+            old_window_id,
+            created_wid,
+            resume_session_id,
+        )
     session_manager.register_session_to_window(
         created_wid,
         resume_session_id,
@@ -3755,23 +3811,9 @@ async def _recover_missing_bound_window(
         window_name=created_wname,
         persist_session_map=True,
     )
-
-    hook_ok = await session_manager.wait_for_session_map_entry(
-        created_wid, timeout=15.0
-    )
     ws = session_manager.get_window_state(created_wid)
-    if not hook_ok or ws.session_id != resume_session_id:
-        logger.info(
-            "Recovered missing window %s as %s; tracking resumed session_id=%s",
-            old_window_id,
-            created_wid,
-            resume_session_id,
-        )
-        ws.session_id = resume_session_id
-        ws.cwd = str(selected_path)
-        ws.window_name = created_wname
-        ws.account_name = account_name or ""
-        session_manager._save_state()
+    ws.account_name = account_name or ""
+    session_manager._save_state()
 
     session_manager.unhide_session(resume_session_id)
     if created_target:
@@ -3825,6 +3867,52 @@ async def _recover_missing_bound_window(
         "recovered the tmux window, but forwarding failed: "
         f"{send_msg}. Please send the message again.",
     )
+
+
+async def _recovered_agent_process_status(window_id: str) -> tuple[bool, str]:
+    """Return whether a recovery window still owns a live agent process."""
+    window = await tmux_manager.find_window_by_id(window_id)
+    if not window:
+        return False, "the recovery window exited before it became ready"
+
+    pane_command = (window.pane_current_command or "").strip()
+    if not is_shell_pane_command(pane_command):
+        return True, ""
+
+    pane_text = await tmux_manager.capture_pane(window_id) or ""
+    if "already has an active writer" in pane_text.lower():
+        return (
+            False,
+            "the previous session is still active in another Codex process. "
+            "Recovery was stopped without changing this topic's saved binding; "
+            "restore the original tmux socket or stop the original writer before "
+            "trying again.",
+        )
+    return (
+        False,
+        f"Codex exited during recovery (current command: {pane_command or 'unknown'}). "
+        "The saved topic binding was left unchanged.",
+    )
+
+
+async def _wait_for_recovered_agent_process(
+    window_id: str,
+    *,
+    timeout: float = 10.0,
+    interval: float = 0.5,
+) -> tuple[bool, str]:
+    """Wait for a recovery command to leave the shell, detecting fast failures."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    last_message = "Codex did not start before the recovery timeout"
+    while asyncio.get_running_loop().time() < deadline:
+        healthy, message = await _recovered_agent_process_status(window_id)
+        if healthy:
+            return True, ""
+        last_message = message
+        if "active in another Codex process" in message:
+            return False, message
+        await asyncio.sleep(interval)
+    return False, last_message
 
 
 async def _handle_non_codex_bound_window(

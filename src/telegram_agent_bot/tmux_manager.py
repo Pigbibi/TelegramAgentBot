@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import shlex
 import subprocess
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +58,61 @@ _WAITING_BACKGROUND_RE = re.compile(
 _HOOK_TRUST_BYPASS_FLAG = "--dangerously-bypass-hook-trust"
 _SUBMIT_SETTLE_CHECKS = 8
 _SUBMIT_SETTLE_INTERVAL_SECONDS = 0.5
+_SOCKET_PATH_LOCK = threading.Lock()
+_EFFECTIVE_SOCKET_PATH: Path | None = None
+_SOCKET_PATH_READY = False
+
+
+def _configured_socket_path() -> Path | None:
+    """Return the durable tmux socket path, migrating a legacy named socket."""
+    global _EFFECTIVE_SOCKET_PATH, _SOCKET_PATH_READY
+
+    with _SOCKET_PATH_LOCK:
+        if _SOCKET_PATH_READY:
+            return _EFFECTIVE_SOCKET_PATH
+
+        configured = getattr(config, "tmux_socket_path", None)
+        if configured is None:
+            _SOCKET_PATH_READY = True
+            return None
+
+        target = Path(configured).expanduser()
+        socket_name = getattr(config, "tmux_socket_name", None)
+        derived = getattr(config, "tmux_socket_path_is_derived", False)
+        parent_existed = target.parent.exists()
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if derived or not parent_existed:
+            try:
+                target.parent.chmod(0o700)
+            except OSError:
+                logger.debug("Unable to tighten tmux socket directory permissions")
+
+        if derived and socket_name and not target.exists():
+            legacy_tmpdir = Path(os.getenv("TMUX_TMPDIR", "/tmp")).expanduser()
+            legacy = legacy_tmpdir / f"tmux-{os.geteuid()}" / socket_name
+            if legacy.is_socket():
+                try:
+                    legacy.replace(target)
+                    logger.warning(
+                        "Migrated tmux socket from temporary path %s to %s",
+                        legacy,
+                        target,
+                    )
+                except OSError as exc:
+                    # Cross-filesystem renames are uncommon, but keeping the
+                    # live legacy socket is safer than starting a second server.
+                    logger.warning(
+                        "Unable to migrate live tmux socket %s to %s; continuing "
+                        "with the legacy path: %s",
+                        legacy,
+                        target,
+                        exc,
+                    )
+                    target = legacy
+
+        _EFFECTIVE_SOCKET_PATH = target
+        _SOCKET_PATH_READY = True
+        return target
 
 
 def _resume_target_id(session_id: str) -> str:
@@ -146,19 +203,27 @@ class TmuxManager:
         """
         self.session_name = session_name or config.tmux_session_name
         self._server: libtmux.Server | None = None
+        self._session_was_observed = False
 
     @property
     def server(self) -> libtmux.Server:
         """Get or create tmux server connection."""
         if self._server is None:
-            self._server = libtmux.Server(socket_name=config.tmux_socket_name)
+            socket_path = _configured_socket_path()
+            if socket_path is not None:
+                self._server = libtmux.Server(socket_path=socket_path)
+            else:
+                self._server = libtmux.Server(socket_name=config.tmux_socket_name)
         return self._server
 
     @staticmethod
     def _tmux_cli_prefix() -> list[str]:
         """Build a tmux CLI prefix that targets the configured socket when set."""
         cmd = ["tmux"]
-        if config.tmux_socket_name:
+        socket_path = _configured_socket_path()
+        if socket_path is not None:
+            cmd.extend(["-S", str(socket_path)])
+        elif config.tmux_socket_name:
             cmd.extend(["-L", config.tmux_socket_name])
         return cmd
 
@@ -225,8 +290,12 @@ class TmuxManager:
     def get_session(self) -> libtmux.Session | None:
         """Get the tmux session if it exists."""
         try:
-            return self.server.sessions.get(session_name=self.session_name)
-        except Exception:
+            session = self.server.sessions.get(session_name=self.session_name)
+            if session is not None:
+                self._session_was_observed = True
+            return session
+        except Exception as exc:
+            logger.debug("Unable to reach tmux session %s: %s", self.session_name, exc)
             return None
 
     def _paste_buffer_literal(self, window_id: str, text: str) -> bool:
@@ -468,6 +537,13 @@ class TmuxManager:
             self._scrub_session_env(session)
             return session
 
+        if self._session_was_observed:
+            raise RuntimeError(
+                "The managed tmux session became unreachable. Refusing to start a "
+                "replacement server because the original panes may still be alive. "
+                "Restart the bot after restoring the tmux socket."
+            )
+
         # Create new session with main window named specifically
         session = self.server.new_session(
             session_name=self.session_name,
@@ -476,6 +552,7 @@ class TmuxManager:
         # Rename the default window to the main window name
         if session.windows:
             session.windows[0].rename_window(config.tmux_main_window_name)
+        self._session_was_observed = True
         self._scrub_session_env(session)
         return session
 
@@ -882,8 +959,8 @@ class TmuxManager:
 
         # Create window in thread
         def _create_and_start() -> tuple[bool, str, str, str]:
-            session = self.get_or_create_session()
             try:
+                session = self.get_or_create_session()
                 # Create new window
                 window = session.new_window(
                     window_name=final_window_name,

@@ -137,6 +137,25 @@ class Config:
 
         # Tmux session name/socket and window naming
         self.tmux_socket_name = os.getenv("TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME") or None
+        configured_tmux_socket_path = os.getenv(
+            "TELEGRAM_AGENT_BOT_TMUX_SOCKET_PATH", ""
+        ).strip()
+        self.tmux_socket_path_is_derived = bool(
+            self.tmux_socket_name and not configured_tmux_socket_path
+        )
+        if configured_tmux_socket_path:
+            self.tmux_socket_path: Path | None = Path(
+                configured_tmux_socket_path
+            ).expanduser()
+        elif self.tmux_socket_name:
+            # Named tmux sockets normally live under /tmp and can be unlinked by
+            # host cleanup while the server and its panes are still alive. Keep
+            # bot-owned named sockets in the durable application directory.
+            self.tmux_socket_path = self.config_dir / "tmux" / self.tmux_socket_name
+        else:
+            # Preserve the shared default tmux server when no private socket was
+            # configured. Moving that socket could also move unrelated sessions.
+            self.tmux_socket_path = None
         self.tmux_session_name = os.getenv(
             "TELEGRAM_AGENT_BOT_TMUX_SESSION_NAME", "telegram-agent-bot"
         )

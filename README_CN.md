@@ -237,6 +237,8 @@ TELEGRAM_AGENT_BOT_OUTPUT_MODE=clean
 | `TELEGRAM_AGENT_BOT_BACKEND` | `local` | agent backend ID。默认 `local` 保持单机 tmux 行为 |
 | `TELEGRAM_AGENT_BOT_BACKEND_PLUGINS` | _(空)_ | 可选 backend 插件模块，多个用逗号分隔 |
 | `TELEGRAM_AGENT_BOT_TMUX_SESSION_NAME` | `telegram-agent-bot` | bot 使用的 tmux session 名称 |
+| `TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME` | _(空)_ | 私有 tmux socket 名称；设置后 socket 保存在 `$TELEGRAM_AGENT_BOT_DIR/tmux` 而不是 `/tmp`，已有的存活旧 socket 会自动迁移 |
+| `TELEGRAM_AGENT_BOT_TMUX_SOCKET_PATH` | _(根据 socket 名称生成)_ | 可选的私有 tmux socket 绝对路径覆盖值 |
 | `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | Codex 为 `codex`，Claude Code 为 `claude` | 创建新窗口时运行的命令 |
 | `TELEGRAM_AGENT_BOT_CLAUDE_COMMAND` | `claude` | Claude Code 创建命令 |
 | `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` | `~/.telegram-agent-bot/claude.env` | Claude Code/DeepSeek 环境文件；文件应为 `600`，不会把 key 写入 tmux 命令 |

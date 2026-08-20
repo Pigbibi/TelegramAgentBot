@@ -96,15 +96,19 @@ def test_clean_tmp_keeps_bot_locks_and_removes_old_artifacts(tmp_path: Path) -> 
     config = _config(tmp_path)
     config.tmp_path.mkdir()
     lock_dir = config.tmp_path / "telegram-agent-bot-lock-active"
+    tmux_dir = config.tmp_path / "tmux-1000"
     old_artifact = config.tmp_path / "old-artifact"
     lock_dir.mkdir()
+    tmux_dir.mkdir()
     old_artifact.mkdir()
     cutoff = time.time() - 5 * 24 * 60 * 60
     os.utime(lock_dir, (cutoff, cutoff))
+    os.utime(tmux_dir, (cutoff, cutoff))
     os.utime(old_artifact, (cutoff, cutoff))
 
     stats = cleanup.CleanupStats()
     cleanup.clean_tmp(config, stats)
 
     assert lock_dir.exists()
+    assert tmux_dir.exists()
     assert not old_artifact.exists()
