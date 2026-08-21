@@ -1981,7 +1981,7 @@ async def _send_or_queue_agent_input(
     window_id: str,
     text: str,
 ) -> tuple[bool, str, bool]:
-    """Send directly unless a pending interactive UI needs bot-side ordering."""
+    """Send when ready; otherwise preserve input in the bot-side FIFO queue."""
     key = _agent_input_key(user_id, thread_id, window_id)
     result: tuple[bool, str, bool]
     async with _agent_input_lock(key):
@@ -2046,6 +2046,22 @@ async def _send_or_queue_agent_input(
                         True,
                         "Interrupted agent prompt and queued until the agent is ready "
                         f"({depth}/{limit})",
+                        True,
+                    )
+            elif not is_codex_input_ready(pane_text):
+                queued, depth, limit = _queue_agent_input(key, text)
+                if not queued:
+                    result = (
+                        False,
+                        "Agent is busy and the input queue is full "
+                        f"({limit} pending). Wait for it to finish or use /interrupt.",
+                        False,
+                    )
+                else:
+                    _ensure_agent_input_drain_task(bot, key)
+                    result = (
+                        True,
+                        f"Agent is busy; queued until ready ({depth}/{limit})",
                         True,
                     )
             else:
@@ -3624,52 +3640,16 @@ async def _confirm_first_prompt_delivery(
     if transcript_ok:
         return True
 
-    if await tmux_manager.prompt_still_pending(window_id, text):
-        logger.warning(
-            "Codex window %s still has the first prompt in the input row after session "
-            "registration; retrying Enter",
-            window_id,
-        )
-        if not await tmux_manager.send_control_key(window_id, "Enter"):
-            return False
-
-        transcript_ok = await session_manager.wait_for_transcript_user_message(
-            window_id,
-            text,
-            timeout=transcript_timeout,
-        )
-        if transcript_ok:
-            return True
-
-        still_pending = await tmux_manager.prompt_still_pending(window_id, text)
-        if still_pending:
-            logger.warning(
-                "Codex window %s still has the first prompt pending after retry",
-                window_id,
-            )
-            return False
-
-        logger.info(
-            "Codex window %s accepted the first prompt after retry but transcript "
-            "confirmation is still pending",
-            window_id,
-        )
-        return True
-
-    if transcript_ok:
-        return True
-
     if not await tmux_manager.prompt_still_pending(window_id, text):
-        logger.info(
-            "Codex window %s has a session but the first prompt was not observed "
-            "in the transcript yet; input row is clear, so continuing",
+        logger.warning(
+            "Agent input cleared in window %s but was not recorded in the transcript",
             window_id,
         )
-        return True
+        return False
 
     logger.warning(
-        "Codex window %s still has the first prompt in the input row after "
-        "transcript confirmation timed out; retrying Enter",
+        "Agent input is still pending in window %s after transcript confirmation; "
+        "retrying Enter",
         window_id,
     )
     if not await tmux_manager.send_control_key(window_id, "Enter"):
@@ -3685,13 +3665,17 @@ async def _confirm_first_prompt_delivery(
 
     if await tmux_manager.prompt_still_pending(window_id, text):
         logger.warning(
-            "Codex window %s still has the first prompt pending after retry",
+            "Agent input is still pending in window %s after submit retry",
             window_id,
         )
         return False
 
+    # Unlike an input that was never observed in the prompt row, this text was
+    # visibly pending before we sent the retry Enter. Some Codex builds update
+    # the transcript after the short confirmation window, so clearing here is
+    # sufficient secondary evidence that the explicit retry was accepted.
     logger.info(
-        "Codex window %s accepted the first prompt after retry but transcript "
+        "Agent input cleared in window %s after explicit submit retry; transcript "
         "confirmation is still pending",
         window_id,
     )

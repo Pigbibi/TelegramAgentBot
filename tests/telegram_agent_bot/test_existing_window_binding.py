@@ -1090,6 +1090,31 @@ async def test_confirm_first_prompt_delivery_prefers_transcript_confirmation():
 
 
 @pytest.mark.asyncio
+async def test_confirm_first_prompt_delivery_rejects_cleared_unrecorded_input():
+    """A cleared TUI input row is not proof that Codex accepted the prompt."""
+    from telegram_agent_bot.bot import _confirm_first_prompt_delivery
+
+    with (
+        patch("telegram_agent_bot.bot.session_manager") as mock_sm,
+        patch("telegram_agent_bot.bot.tmux_manager") as mock_tmux,
+    ):
+        mock_sm.wait_for_transcript_user_message = AsyncMock(return_value=False)
+        mock_tmux.prompt_still_pending = AsyncMock(return_value=False)
+        mock_tmux.send_control_key = AsyncMock(return_value=True)
+
+        ok = await _confirm_first_prompt_delivery("@9", "silently dropped")
+
+    assert ok is False
+    mock_sm.wait_for_transcript_user_message.assert_awaited_once_with(
+        "@9",
+        "silently dropped",
+        timeout=5.0,
+    )
+    mock_tmux.prompt_still_pending.assert_awaited_once_with("@9", "silently dropped")
+    mock_tmux.send_control_key.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_refresh_session_map_retries_enter_when_first_prompt_is_pending():
     from telegram_agent_bot.bot import _refresh_session_map_after_first_prompt
 

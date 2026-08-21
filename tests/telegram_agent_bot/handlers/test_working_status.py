@@ -47,6 +47,29 @@ def test_synthetic_working_warns_when_run_is_unusually_long():
     assert "bounded timeout" in status
 
 
+def test_restore_working_preserves_elapsed_time_across_process_restart(monkeypatch):
+    monkeypatch.setattr(working_status.time, "time", lambda: 1010.0)
+    monkeypatch.setattr(working_status.time, "monotonic", lambda: 200.0)
+
+    working_status.restore_working(
+        1,
+        42,
+        "@5",
+        started_at_epoch=990.0,
+    )
+
+    assert (
+        working_status.status_text_for_pane(
+            1,
+            42,
+            "@5",
+            "• Working (1s • esc to interrupt)",
+            now=200.0,
+        )
+        == "💭 Thinking (20s)"
+    )
+
+
 def test_native_working_status_uses_telegram_interrupt_and_warns():
     status = working_status.format_native_working_status(
         "• Waiting for background terminal (381m 00s • esc to interrupt)"

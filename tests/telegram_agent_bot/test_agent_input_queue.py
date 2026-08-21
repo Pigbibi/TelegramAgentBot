@@ -47,7 +47,7 @@ async def test_queue_agent_input_after_interrupt_queues_and_starts_drain(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_send_or_queue_agent_input_sends_to_codex_native_queue_when_busy(
+async def test_send_or_queue_agent_input_uses_bot_side_queue_when_busy(
     monkeypatch,
 ):
     capture = SimpleNamespace(
@@ -55,11 +55,17 @@ async def test_send_or_queue_agent_input_sends_to_codex_native_queue_when_busy(
         missing=False,
     )
     send_message = AsyncMock(return_value=(True, "Sent"))
+    ensured: list[tuple[int, int, str]] = []
 
     monkeypatch.setattr(
         bot_module, "capture_agent_output", AsyncMock(return_value=capture)
     )
     monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+    monkeypatch.setattr(
+        bot_module,
+        "_ensure_agent_input_drain_task",
+        lambda _bot, key: ensured.append(key),
+    )
 
     ok, message, queued = await bot_module._send_or_queue_agent_input(
         MagicMock(),
@@ -69,9 +75,14 @@ async def test_send_or_queue_agent_input_sends_to_codex_native_queue_when_busy(
         "next prompt",
     )
 
-    assert (ok, message, queued) == (True, "Sent", False)
-    send_message.assert_awaited_once_with(12345, 42, "@1", "next prompt")
-    assert bot_module._agent_input_queues == {}
+    assert ok is True
+    assert queued is True
+    assert message == "Agent is busy; queued until ready (1/20)"
+    send_message.assert_not_awaited()
+    assert [
+        item.text for item in bot_module._agent_input_queues[(12345, 42, "@1")]
+    ] == ["next prompt"]
+    assert ensured == [(12345, 42, "@1")]
 
 
 @pytest.mark.asyncio

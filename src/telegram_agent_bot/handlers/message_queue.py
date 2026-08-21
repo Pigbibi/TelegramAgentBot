@@ -45,7 +45,9 @@ from .message_sender import (
 from .working_status import (
     is_active_working_status,
     mark_output_seen,
+    restore_working,
     status_text_for_pane,
+    working_started_at_epoch,
 )
 
 logger = logging.getLogger(__name__)
@@ -187,21 +189,50 @@ def _load_status_msg_info(
         except (TypeError, ValueError):
             created_at = 0.0
         if message_id and isinstance(window_id, str) and isinstance(text, str):
+            try:
+                chat_id = int(raw_info.get("chat_id", 0))
+            except (TypeError, ValueError):
+                chat_id = 0
+            if key[1] and chat_id < 0:
+                session_manager.set_group_chat_id(key[0], key[1], chat_id)
+
+            try:
+                started_at_epoch = float(raw_info.get("working_started_at", 0.0))
+            except (TypeError, ValueError):
+                started_at_epoch = 0.0
+            if started_at_epoch > 0 and is_active_working_status(text):
+                restore_working(
+                    key[0],
+                    key[1] or None,
+                    window_id,
+                    started_at_epoch=started_at_epoch,
+                )
             loaded[key] = (message_id, window_id, text, created_at)
     return loaded
 
 
 def _persist_status_msg_info() -> None:
     """Persist tracked status message ids for restart-safe edits/deletes."""
-    data = {
-        _status_key_to_str(key): {
+    data: dict[str, dict[str, object]] = {}
+    for key, info in _status_msg_info.items():
+        entry: dict[str, object] = {
             "message_id": info[0],
             "window_id": info[1],
             "text": info[2],
             "created_at": info[3],
         }
-        for key, info in _status_msg_info.items()
-    }
+        thread_id = key[1] or None
+        chat_id = session_manager.resolve_chat_id(key[0], thread_id)
+        if thread_id is not None and chat_id != key[0]:
+            entry["chat_id"] = chat_id
+        started_at_epoch = working_started_at_epoch(
+            key[0],
+            thread_id,
+            info[1],
+        )
+        if started_at_epoch is not None and is_active_working_status(info[2]):
+            entry["working_started_at"] = started_at_epoch
+        data[_status_key_to_str(key)] = entry
     try:
         atomic_write_json(_STATUS_MESSAGES_FILE, data)
     except Exception as exc:
