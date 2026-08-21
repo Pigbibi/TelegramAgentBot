@@ -91,6 +91,89 @@ class TestSessionMonitorDispatch:
         assert first_session_started.is_set()
         assert completed == ["b1"]
         assert dispatched_session_ids == {"session-b"}
+        assert monitor._last_dispatch_failed_session_ids == {"session-a"}
+        assert monitor._last_dispatch_successful_session_ids == {"session-b"}
+
+    @pytest.mark.asyncio
+    async def test_check_for_updates_skips_session_in_delivery_backoff(self, tmp_path):
+        monitor = SessionMonitor(
+            projects_path=tmp_path / "projects",
+            state_file=tmp_path / "monitor_state.json",
+        )
+        transcript = tmp_path / "session.jsonl"
+        monitor.scan_projects = AsyncMock(
+            return_value=[SessionInfo(session_id="session-a", file_path=transcript)]
+        )
+        read_new_lines = AsyncMock()
+        monitor._read_new_lines = read_new_lines
+
+        messages = await monitor.check_for_updates(
+            {"session-a"},
+            save_state=False,
+        )
+
+        assert messages == []
+        read_new_lines.assert_not_awaited()
+        assert monitor._deferred_state_updates == {}
+
+    def test_dispatch_failure_backoff_grows_caps_and_clears(
+        self, tmp_path, monkeypatch
+    ):
+        monitor = SessionMonitor(
+            projects_path=tmp_path / "projects",
+            state_file=tmp_path / "monitor_state.json",
+        )
+        monkeypatch.setattr(
+            "telegram_agent_bot.session_monitor._DISPATCH_RETRY_INITIAL_SECONDS",
+            10.0,
+        )
+        monkeypatch.setattr(
+            "telegram_agent_bot.session_monitor._DISPATCH_RETRY_MAX_SECONDS",
+            25.0,
+        )
+
+        monitor._record_dispatch_results({"session-a"}, set(), now=100.0)
+        assert monitor._sessions_in_dispatch_backoff(now=109.9) == {"session-a"}
+        assert monitor._sessions_in_dispatch_backoff(now=110.0) == set()
+
+        monitor._record_dispatch_results({"session-a"}, set(), now=110.0)
+        assert monitor._dispatch_retry_after["session-a"] == 130.0
+
+        monitor._record_dispatch_results({"session-a"}, set(), now=130.0)
+        assert monitor._dispatch_retry_after["session-a"] == 155.0
+
+        monitor._record_dispatch_results(set(), {"session-a"}, now=140.0)
+        assert monitor._dispatch_failure_counts == {}
+        assert monitor._dispatch_retry_after == {}
+
+    @pytest.mark.asyncio
+    async def test_scan_projects_caches_immutable_transcript_cwd(self, tmp_path):
+        monitor = SessionMonitor(
+            projects_path=tmp_path / "projects",
+            state_file=tmp_path / "monitor_state.json",
+        )
+        transcript = tmp_path / "session-a.jsonl"
+        transcript.write_text("{}\n", encoding="utf-8")
+        monitor._iter_session_files = MagicMock(return_value=[transcript])
+
+        with (
+            patch(
+                "telegram_agent_bot.session_monitor.read_cwd_from_jsonl",
+                return_value="/tmp/project",
+            ) as read_cwd,
+            patch("telegram_agent_bot.session_monitor.tmux_manager") as mock_tmux,
+        ):
+            mock_tmux.list_windows = AsyncMock(
+                return_value=[SimpleNamespace(cwd="/tmp/project")]
+            )
+
+            first = await monitor.scan_projects()
+            second = await monitor.scan_projects()
+
+        assert [session.session_id for session in first] == ["session-a"]
+        assert [session.session_id for session in second] == ["session-a"]
+        monitor._iter_session_files.assert_called_once_with()
+        read_cwd.assert_called_once_with(transcript)
 
     def test_commit_deferred_state_updates_can_commit_subset(self, tmp_path):
         monitor = SessionMonitor(
@@ -206,6 +289,8 @@ class TestSessionMonitorDispatch:
 
         assert delivered == ["first"]
         assert dispatched_session_ids == set()
+        assert monitor._last_dispatch_failed_session_ids == set()
+        assert monitor._last_dispatch_successful_session_ids == {"session-a"}
         assert monitor.state.get_session("session-a").last_byte_offset == 10
         assert monitor._deferred_state_updates["session-a"].last_byte_offset == 30
 

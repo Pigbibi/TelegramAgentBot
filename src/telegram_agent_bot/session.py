@@ -2102,8 +2102,12 @@ class SessionManager:
                     ambiguous_windows[window_id],
                 )
                 continue
-            resolved = await self.resolve_session_for_window(window_id)
-            if resolved and _session_ids_match(resolved.session_id, session_id):
+            # The persisted window binding is authoritative here. Resolving a
+            # CodexSession rebuilds a summary by parsing the entire transcript;
+            # doing that for every outgoing message makes large sessions consume
+            # a full CPU core before Telegram delivery is even attempted.
+            state = self.get_window_state(window_id)
+            if _session_ids_match(state.session_id, session_id):
                 result.append((user_id, window_id, thread_id))
         return result
 
