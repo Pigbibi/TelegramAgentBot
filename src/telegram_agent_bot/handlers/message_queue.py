@@ -976,7 +976,7 @@ async def _process_status_update_task(
         else:
             # Same window, text changed - edit in place
             # Send typing indicator when Codex is working
-            if "esc to interrupt" in status_text.lower():
+            if is_active_working_status(status_text):
                 try:
                     await bot.send_chat_action(
                         chat_id=chat_id, action=ChatAction.TYPING
@@ -1051,7 +1051,7 @@ async def _do_send_status_message(
                 return
         _pop_status_info(skey)
     # Send typing indicator when Codex is working
-    if "esc to interrupt" in text.lower():
+    if is_active_working_status(text):
         try:
             await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         except RetryAfter:

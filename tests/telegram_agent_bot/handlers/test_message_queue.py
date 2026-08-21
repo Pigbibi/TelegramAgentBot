@@ -955,4 +955,4 @@ async def test_check_status_uses_synthetic_timer_after_content(monkeypatch):
         message_queue._status_msg_info.clear()
         working_status._synthetic_working_starts.clear()
 
-    assert sent_texts == ["💭 Thinking (8s) · esc to interrupt"]
+    assert sent_texts == ["💭 Thinking (8s)"]

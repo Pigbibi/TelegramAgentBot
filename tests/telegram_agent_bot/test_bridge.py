@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 import subprocess
 
+import pytest
+
+from telegram_agent_bot import bridge
 from telegram_agent_bot.bridge import (
     BridgeConfig,
     BridgeTarget,
@@ -218,7 +221,9 @@ def test_build_orchestrator_message_includes_monthly_contract() -> None:
 def test_dispatch_to_tmux_uses_paste_buffer(monkeypatch) -> None:
     calls: list[tuple[list[str], bytes | None]] = []
 
-    def fake_run(argv, *, input=None, check=None, capture_output=None, text=None):
+    def fake_run(
+        argv, *, input=None, check=None, capture_output=None, text=None, timeout=None
+    ):
         calls.append((list(argv), input if isinstance(input, bytes) else None))
 
         class Result:
@@ -239,7 +244,9 @@ def test_dispatch_to_tmux_uses_paste_buffer(monkeypatch) -> None:
 
 
 def test_dispatch_to_tmux_raises_when_target_missing(monkeypatch) -> None:
-    def fake_run(argv, *, input=None, check=None, capture_output=None, text=None):
+    def fake_run(
+        argv, *, input=None, check=None, capture_output=None, text=None, timeout=None
+    ):
         class Result:
             stdout = ""
             returncode = 1 if "list-panes" in argv else 0
@@ -315,8 +322,13 @@ def test_process_target_retries_retryable_gh_failure(monkeypatch) -> None:
     state: dict = {}
     calls = {"count": 0}
 
-    def fake_run(argv, *, input=None, check=None, capture_output=None, text=None):
+    timeouts: list[float | None] = []
+
+    def fake_run(
+        argv, *, input=None, check=None, capture_output=None, text=None, timeout=None
+    ):
         if argv[0] == "gh":
+            timeouts.append(timeout)
             calls["count"] += 1
             if calls["count"] == 1:
                 raise subprocess.CalledProcessError(returncode=1, cmd=argv)
@@ -363,6 +375,37 @@ def test_process_target_retries_retryable_gh_failure(monkeypatch) -> None:
 
     assert dispatched is True
     assert calls["count"] == 2
+    assert timeouts == [60.0, 60.0]
+
+
+def test_watch_waits_after_transient_cli_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    class StopWatch(Exception):
+        pass
+
+    failure = subprocess.CalledProcessError(returncode=1, cmd=["gh", "issue", "list"])
+    monkeypatch.setattr(
+        bridge, "run_once", lambda *args, **kwargs: (_ for _ in ()).throw(failure)
+    )
+    slept: list[int] = []
+
+    def stop_after_sleep(interval: int) -> None:
+        slept.append(interval)
+        raise StopWatch
+
+    monkeypatch.setattr(bridge.time, "sleep", stop_after_sleep)
+
+    with pytest.raises(StopWatch):
+        bridge._watch(
+            BridgeConfig(),
+            {},
+            state_file=tmp_path / "state.json",
+            interval=300,
+        )
+
+    assert slept == [300]
+    assert "watcher will retry in 300 seconds" in caplog.text
 
 
 def test_process_orchestrator_dispatches_monthly_issue(monkeypatch) -> None:

@@ -62,6 +62,7 @@ DEFAULT_DISPATCH_MODE = "poll"
 DEFAULT_BRIDGE_MODE = "targets"
 DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_RETRY_BASE_DELAY_SECONDS = 1.0
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 60.0
 DEFAULT_MERGE_MODE = "manual"
 DEFAULT_MERGE_LABEL = "auto-merge-ok"
 DEFAULT_SOURCE_REPO = "QuantStrategyLab/AuditOrchestrator"
@@ -131,6 +132,7 @@ def _run_json_command(
     *,
     attempts: int = DEFAULT_RETRY_ATTEMPTS,
     base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
+    timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
 ) -> Any:
     """Run a command that returns JSON."""
     result = _run_subprocess_with_retry(
@@ -140,12 +142,13 @@ def _run_json_command(
         retryable_prefixes=("gh",),
         attempts=attempts,
         base_delay_seconds=base_delay_seconds,
+        timeout_seconds=timeout_seconds,
     )
     return json.loads(result.stdout)
 
 
 def _is_retryable_subprocess_error(
-    exc: subprocess.CalledProcessError | OSError,
+    exc: subprocess.CalledProcessError | subprocess.TimeoutExpired | OSError,
     retryable_prefixes: tuple[str, ...],
 ) -> bool:
     """Return whether a subprocess failure is worth retrying."""
@@ -172,6 +175,7 @@ def _run_subprocess_with_retry(
     retryable_prefixes: tuple[str, ...] = (),
     attempts: int = DEFAULT_RETRY_ATTEMPTS,
     base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
+    timeout_seconds: float | None = None,
 ) -> subprocess.CompletedProcess[Any]:
     """Run a subprocess with bounded retries for transient failures."""
     if attempts < 1:
@@ -184,8 +188,13 @@ def _run_subprocess_with_retry(
                 input=input,
                 capture_output=capture_output,
                 text=text,
+                timeout=timeout_seconds,
             )
-        except (subprocess.CalledProcessError, OSError) as exc:
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            OSError,
+        ) as exc:
             if attempt >= attempts or not _is_retryable_subprocess_error(
                 exc, retryable_prefixes
             ):
@@ -931,6 +940,40 @@ def run_once(
     return dispatched
 
 
+def _watch(
+    config: BridgeConfig,
+    state: dict[str, Any],
+    *,
+    state_file: Path,
+    interval: int,
+    force: bool = False,
+    dry_run: bool = False,
+    target_names: list[str] | None = None,
+    issue_number: int | None = None,
+) -> None:
+    """Run bridge passes without turning transient CLI failures into a crash loop."""
+    while True:
+        try:
+            dispatched = run_once(
+                config,
+                state,
+                force=force,
+                dry_run=dry_run,
+                target_names=target_names,
+                issue_number=issue_number,
+            )
+        except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as exc:
+            logger.error(
+                "Bridge pass failed; watcher will retry in %d seconds: %s",
+                interval,
+                exc,
+            )
+        else:
+            save_state(state_file, state)
+            logger.info("Bridge pass complete: dispatched=%d", dispatched)
+        time.sleep(interval)
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
     args = _parse_args(argv or sys.argv[1:])
@@ -950,18 +993,17 @@ def main(argv: list[str] | None = None) -> int:
             len(config.targets),
             interval,
         )
-        while True:
-            dispatched = run_once(
-                config,
-                state,
-                force=args.force,
-                dry_run=args.dry_run,
-                target_names=args.targets,
-                issue_number=args.issue_number,
-            )
-            save_state(args.state_file, state)
-            logger.info("Bridge pass complete: dispatched=%d", dispatched)
-            time.sleep(interval)
+        _watch(
+            config,
+            state,
+            state_file=args.state_file,
+            interval=interval,
+            force=args.force,
+            dry_run=args.dry_run,
+            target_names=args.targets,
+            issue_number=args.issue_number,
+        )
+        return 0
 
     dispatched = run_once(
         config,
