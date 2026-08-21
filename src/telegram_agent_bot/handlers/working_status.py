@@ -150,6 +150,45 @@ def start_working(
     return start, format_working_status(start, now=start)
 
 
+def working_started_at_epoch(
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+    *,
+    now: float | None = None,
+    now_epoch: float | None = None,
+) -> float | None:
+    """Return a restart-safe wall-clock start time for an active local timer."""
+    started_at = _synthetic_working_starts.get(
+        working_key(user_id, thread_id, window_id)
+    )
+    if started_at is None:
+        return None
+    current = now if now is not None else time.monotonic()
+    current_epoch = now_epoch if now_epoch is not None else time.time()
+    return current_epoch - max(0.0, current - started_at)
+
+
+def restore_working(
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+    *,
+    started_at_epoch: float,
+    now: float | None = None,
+    now_epoch: float | None = None,
+) -> float:
+    """Restore an active local timer without resetting its elapsed duration."""
+    current = now if now is not None else time.monotonic()
+    current_epoch = now_epoch if now_epoch is not None else time.time()
+    restored_start = current - max(0.0, current_epoch - started_at_epoch)
+    key = working_key(user_id, thread_id, window_id)
+    existing_start = _synthetic_working_starts.get(key)
+    if existing_start is None or restored_start < existing_start:
+        _synthetic_working_starts[key] = restored_start
+    return _synthetic_working_starts[key]
+
+
 def clear_working(user_id: int, thread_id: int | None, window_id: str) -> None:
     """Clear the local timer for one topic/window."""
     key = working_key(user_id, thread_id, window_id)

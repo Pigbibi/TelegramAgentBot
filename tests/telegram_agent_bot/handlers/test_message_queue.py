@@ -1,7 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from telegram.error import BadRequest, TimedOut
@@ -37,6 +37,81 @@ def test_status_message_info_persists_for_restart(monkeypatch, tmp_path):
 
         message_queue._pop_status_info((1, 42))
         assert json.loads(status_file.read_text()) == {}
+    finally:
+        message_queue._status_msg_info.clear()
+
+
+def test_status_message_info_restores_forum_route_and_working_timer(
+    monkeypatch, tmp_path
+):
+    """An active topic keeps its exact route and elapsed time across restart."""
+    status_file = tmp_path / "status_messages.json"
+    status_file.write_text(
+        json.dumps(
+            {
+                "1:42": {
+                    "message_id": 321,
+                    "window_id": "@4",
+                    "text": "💭 Thinking (10s)",
+                    "created_at": 123.0,
+                    "chat_id": -100123,
+                    "working_started_at": 990.0,
+                }
+            }
+        )
+    )
+    set_group_chat_id = MagicMock()
+    restore_working = MagicMock()
+    monkeypatch.setattr(
+        message_queue.session_manager, "set_group_chat_id", set_group_chat_id
+    )
+    monkeypatch.setattr(message_queue, "restore_working", restore_working)
+
+    loaded = message_queue._load_status_msg_info(status_file)
+
+    assert loaded == {(1, 42): (321, "@4", "💭 Thinking (10s)", 123.0)}
+    set_group_chat_id.assert_called_once_with(1, 42, -100123)
+    restore_working.assert_called_once_with(
+        1,
+        42,
+        "@4",
+        started_at_epoch=990.0,
+    )
+
+
+def test_status_message_info_persists_forum_route_and_working_start(
+    monkeypatch, tmp_path
+):
+    status_file = tmp_path / "status_messages.json"
+    monkeypatch.setattr(message_queue, "_STATUS_MESSAGES_FILE", status_file)
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda _user_id, _thread_id: -100123,
+    )
+    monkeypatch.setattr(
+        message_queue,
+        "working_started_at_epoch",
+        lambda *_args, **_kwargs: 990.0,
+    )
+    message_queue._status_msg_info.clear()
+
+    try:
+        message_queue._set_status_info(
+            (1, 42),
+            (321, "@4", "💭 Thinking (10s)", 123.0),
+        )
+
+        assert json.loads(status_file.read_text()) == {
+            "1:42": {
+                "message_id": 321,
+                "window_id": "@4",
+                "text": "💭 Thinking (10s)",
+                "created_at": 123.0,
+                "chat_id": -100123,
+                "working_started_at": 990.0,
+            }
+        }
     finally:
         message_queue._status_msg_info.clear()
 
