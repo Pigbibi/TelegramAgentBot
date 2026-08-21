@@ -28,6 +28,9 @@ _ENTRY_END_OFFSET_KEY = "_telegram_agent_bot_end_offset"
 _DISPATCH_GROUP_TIMEOUT_SECONDS = 120.0
 _DISPATCH_GROUP_SOFT_TIME_SECONDS = 20.0
 _DISPATCH_GROUP_MAX_MESSAGES = 8
+_DISPATCH_RETRY_INITIAL_SECONDS = 15.0
+_DISPATCH_RETRY_MAX_SECONDS = 300.0
+_SESSION_DISCOVERY_INTERVAL_SECONDS = 5.0
 
 
 @dataclass
@@ -76,7 +79,14 @@ class SessionMonitor:
         self._message_callback: Callable[[NewMessage], Awaitable[None]] | None = None
         self._pending_tools: dict[str, dict[str, PendingToolInfo]] = {}
         self._file_mtimes: dict[str, float] = {}
+        self._file_cwds: dict[str, str] = {}
+        self._session_file_cache: list[Path] | None = None
+        self._session_file_cache_refresh_after = 0.0
         self._deferred_state_updates: dict[str, TrackedSession] = {}
+        self._dispatch_failure_counts: dict[str, int] = {}
+        self._dispatch_retry_after: dict[str, float] = {}
+        self._last_dispatch_failed_session_ids: set[str] = set()
+        self._last_dispatch_successful_session_ids: set[str] = set()
 
     def set_message_callback(
         self, callback: Callable[[NewMessage], Awaitable[None]]
@@ -179,6 +189,21 @@ class SessionMonitor:
                 files.append(jsonl_file)
         return files
 
+    def _get_session_files(self) -> list[Path]:
+        """Reuse transcript discovery results between bounded refreshes."""
+        now = time.monotonic()
+        if (
+            self._session_file_cache is not None
+            and now < self._session_file_cache_refresh_after
+        ):
+            return self._session_file_cache
+
+        self._session_file_cache = self._iter_session_files()
+        self._session_file_cache_refresh_after = (
+            now + _SESSION_DISCOVERY_INTERVAL_SECONDS
+        )
+        return self._session_file_cache
+
     @staticmethod
     def _is_usage_limit_payload(payload: dict[str, Any]) -> bool:
         if payload.get("type") == "error":
@@ -222,18 +247,36 @@ class SessionMonitor:
         """Scan Codex transcripts whose cwd still matches a live tmux window."""
         active_cwds = await self._get_active_cwds()
         sessions: list[SessionInfo] = []
+        present_paths: set[str] = set()
 
-        for jsonl_file in self._iter_session_files():
-            file_cwd = await asyncio.to_thread(read_cwd_from_jsonl, jsonl_file)
+        for jsonl_file in self._get_session_files():
+            file_key = str(jsonl_file)
+            present_paths.add(file_key)
+            file_cwd = self._file_cwds.get(file_key, "")
+            if not file_cwd:
+                raw_cwd = await asyncio.to_thread(read_cwd_from_jsonl, jsonl_file)
+                if raw_cwd:
+                    # A Codex session's cwd is immutable metadata. Caching it avoids
+                    # reopening every historical transcript or resolving its cwd on
+                    # every monitor poll.
+                    file_cwd = self._normalize_path(raw_cwd)
+                    self._file_cwds[file_key] = file_cwd
             if not file_cwd:
                 continue
-            if self._normalize_path(file_cwd) not in active_cwds:
+            if file_cwd not in active_cwds:
                 continue
             sessions.append(
                 SessionInfo(
                     session_id=jsonl_file.stem, file_path=jsonl_file, cwd=file_cwd
                 )
             )
+
+        if len(self._file_cwds) > len(present_paths):
+            self._file_cwds = {
+                path: cwd
+                for path, cwd in self._file_cwds.items()
+                if path in present_paths
+            }
 
         sessions.sort(
             key=lambda session: session.file_path.stat().st_mtime,
@@ -490,13 +533,11 @@ class SessionMonitor:
 
     async def check_for_updates(
         self,
-        active_session_ids: set[str],
+        skipped_session_ids: set[str],
         *,
         save_state: bool = True,
     ) -> list[NewMessage]:
         """Check tracked Codex sessions for new parsed entries."""
-        del active_session_ids
-
         new_messages: list[NewMessage] = []
         if not save_state:
             self._deferred_state_updates.clear()
@@ -505,6 +546,8 @@ class SessionMonitor:
         from .session import session_manager
 
         for session_info in sessions:
+            if session_info.session_id in skipped_session_ids:
+                continue
             try:
                 project_path = session_info.cwd
                 tracked = self.state.get_session(session_info.session_id)
@@ -649,6 +692,8 @@ class SessionMonitor:
         should not make an unrelated topic wait behind a large backlog from
         another session.
         """
+        self._last_dispatch_failed_session_ids = set()
+        self._last_dispatch_successful_session_ids = set()
         callback = self._message_callback
         if not messages or callback is None:
             if messages:
@@ -716,6 +761,7 @@ class SessionMonitor:
         dispatched_session_ids: set[str] = set()
         for session_id, result in zip(tasks, results, strict=True):
             if isinstance(result, asyncio.TimeoutError):
+                self._last_dispatch_failed_session_ids.add(session_id)
                 logger.warning(
                     "Timed out dispatching transcript messages for session %s; "
                     "leaving monitor offset uncommitted for retry",
@@ -723,6 +769,7 @@ class SessionMonitor:
                 )
                 continue
             if isinstance(result, Exception):
+                self._last_dispatch_failed_session_ids.add(session_id)
                 logger.warning(
                     "Failed to dispatch transcript messages for session %s: %s; "
                     "leaving monitor offset uncommitted for retry",
@@ -736,6 +783,7 @@ class SessionMonitor:
                 or not isinstance(result[0], str)
                 or not isinstance(result[1], bool)
             ):
+                self._last_dispatch_failed_session_ids.add(session_id)
                 logger.warning(
                     "Unexpected dispatch result for session %s: %r; "
                     "leaving monitor offset uncommitted for retry",
@@ -744,10 +792,50 @@ class SessionMonitor:
                 )
                 continue
             result_session_id, group_complete = result
+            self._last_dispatch_successful_session_ids.add(result_session_id)
             if group_complete:
                 dispatched_session_ids.add(result_session_id)
 
         return dispatched_session_ids
+
+    def _sessions_in_dispatch_backoff(self, now: float | None = None) -> set[str]:
+        """Return sessions whose failed Telegram delivery retry is not due yet."""
+        current = time.monotonic() if now is None else now
+        return {
+            session_id
+            for session_id, retry_after in self._dispatch_retry_after.items()
+            if retry_after > current
+        }
+
+    def _record_dispatch_results(
+        self,
+        failed_session_ids: set[str],
+        successful_session_ids: set[str],
+        *,
+        now: float | None = None,
+    ) -> None:
+        """Back off failed destinations while retaining their unread offsets."""
+        current = time.monotonic() if now is None else now
+        for session_id in successful_session_ids:
+            self._dispatch_failure_counts.pop(session_id, None)
+            self._dispatch_retry_after.pop(session_id, None)
+
+        for session_id in failed_session_ids:
+            failure_count = self._dispatch_failure_counts.get(session_id, 0) + 1
+            self._dispatch_failure_counts[session_id] = failure_count
+            multiplier = 2 ** min(failure_count - 1, 8)
+            delay = min(
+                _DISPATCH_RETRY_MAX_SECONDS,
+                _DISPATCH_RETRY_INITIAL_SECONDS * multiplier,
+            )
+            self._dispatch_retry_after[session_id] = current + delay
+            logger.warning(
+                "Backing off transcript delivery for session %s for %.1fs "
+                "after %d consecutive failure(s)",
+                session_id,
+                delay,
+                failure_count,
+            )
 
     async def _monitor_loop(self) -> None:
         """Poll recursively discovered transcripts and forward new messages."""
@@ -762,12 +850,19 @@ class SessionMonitor:
         while self._running:
             try:
                 await session_manager.load_session_map()
-                new_messages = await self.check_for_updates(set(), save_state=False)
+                new_messages = await self.check_for_updates(
+                    self._sessions_in_dispatch_backoff(),
+                    save_state=False,
+                )
                 deferred_session_ids = set(self._deferred_state_updates)
                 message_session_ids = {message.session_id for message in new_messages}
                 if new_messages:
                     dispatched_session_ids = await self._dispatch_new_messages(
                         new_messages
+                    )
+                    self._record_dispatch_results(
+                        self._last_dispatch_failed_session_ids,
+                        self._last_dispatch_successful_session_ids,
                     )
                     self.commit_deferred_state_updates(
                         (deferred_session_ids - message_session_ids)

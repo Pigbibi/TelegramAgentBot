@@ -176,6 +176,21 @@ class TestThreadBindings:
         assert await mgr.find_users_for_session("session-1") == []
         resolve_session.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_find_users_uses_persisted_session_binding_without_rereading_file(
+        self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        session_uuid = "01a0225e-419a-70e0-8919-be63a5763ff1"
+        mgr.get_window_state("@1").session_id = f"rollout-prefix-{session_uuid}"
+        mgr.bind_thread(100, 42, "@1")
+        resolve_session = AsyncMock()
+        monkeypatch.setattr(mgr, "resolve_session_for_window", resolve_session)
+
+        users = await mgr.find_users_for_session(session_uuid)
+
+        assert users == [(100, "@1", 42)]
+        resolve_session.assert_not_awaited()
+
     def test_bind_thread_tracks_topic_managed_session(
         self, mgr: SessionManager
     ) -> None:
