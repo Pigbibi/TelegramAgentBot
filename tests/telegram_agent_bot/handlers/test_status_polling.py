@@ -250,7 +250,7 @@ class TestStatusPollerSettingsDetection:
                 mock_bot,
                 1,
                 window_id,
-                "• Working (1m 07s • esc to interrupt)",
+                "• Working (1m 07s)",
                 thread_id=42,
             )
 
@@ -276,7 +276,7 @@ class TestStatusPollerSettingsDetection:
             mock_bot,
             1,
             "@5",
-            "💭 Thinking (0s) · esc to interrupt",
+            "💭 Thinking (0s)",
             thread_id=42,
             prefer_before_content=True,
         )
@@ -335,7 +335,7 @@ class TestStatusPollerSettingsDetection:
             mock_bot,
             1,
             window_id,
-            "💭 Thinking (5s) · esc to interrupt",
+            "💭 Thinking (5s)",
         )
         assert mock_enqueue_status.await_args_list[0].kwargs == {"thread_id": 42}
         assert mock_enqueue_status.await_args_list[1].args == (
@@ -383,9 +383,7 @@ class TestStatusPollerSettingsDetection:
             )
 
         mock_enqueue_status.assert_awaited_once()
-        assert mock_enqueue_status.await_args.args[3] == (
-            "💭 Thinking (10s) · esc to interrupt"
-        )
+        assert mock_enqueue_status.await_args.args[3] == ("💭 Thinking (10s)")
         assert status_polling._synthetic_working_starts[(1, 42, window_id)] == 100.0
 
     @pytest.mark.asyncio
@@ -427,7 +425,7 @@ class TestStatusPollerSettingsDetection:
         mock_enqueue_status.assert_awaited_once()
         status_text = mock_enqueue_status.await_args.args[3]
         assert "◦ 1 background terminal running · /ps to view" in status_text
-        assert status_text.endswith("💭 Thinking (6s) · esc to interrupt")
+        assert status_text.endswith("💭 Thinking (6s)")
 
     @pytest.mark.asyncio
     async def test_synthetic_working_keeps_timer_below_public_progress(
@@ -470,7 +468,7 @@ class TestStatusPollerSettingsDetection:
         mock_enqueue_status.assert_awaited_once()
         status_text = mock_enqueue_status.await_args.args[3]
         assert '• Searched site:msci.com "MSCI USA Momentum Index"' in status_text
-        assert status_text.endswith("💭 Thinking (6s) · esc to interrupt")
+        assert status_text.endswith("💭 Thinking (6s)")
         assert status_polling._synthetic_working_starts[(1, 42, window_id)] == 100.0
 
     @pytest.mark.asyncio

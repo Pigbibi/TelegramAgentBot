@@ -7,6 +7,13 @@ from ..terminal_parser import codex_input_text, parse_status_update
 
 SYNTHETIC_WORKING_IDLE_GRACE = 2.0
 SYNTHETIC_WORKING_NO_OUTPUT_MAX = 10 * 60.0
+LONG_RUNNING_WARNING_SECONDS = 30 * 60.0
+
+_NATIVE_INTERRUPT_MARKER = "esc to interrupt"
+_LONG_RUNNING_WARNING = (
+    "⚠️ This task has been running for a long time. If progress has stopped, "
+    "use /interrupt, then retry with a bounded timeout."
+)
 
 _synthetic_working_starts: dict[tuple[int, int, str], float] = {}
 _synthetic_working_output_seen: set[tuple[int, int, str]] = set()
@@ -33,7 +40,8 @@ def is_active_working_status(status_text: str | None) -> bool:
         return False
     normalized = status_text.strip().lower()
     return (
-        "esc to interrupt" in normalized
+        _NATIVE_INTERRUPT_MARKER in normalized
+        or "/interrupt" in normalized
         or normalized.startswith("• working")
         or normalized.startswith("◦ working")
         or normalized.startswith("working")
@@ -44,15 +52,62 @@ def is_active_working_status(status_text: str | None) -> bool:
 
 def _active_status_public_detail(status_text: str) -> str | None:
     """Return extra public detail from a native Working/Thinking status line."""
-    marker = "esc to interrupt"
-    marker_index = status_text.lower().find(marker)
-    if marker_index < 0:
+    marker_match = re.search(
+        re.escape(_NATIVE_INTERRUPT_MARKER), status_text, flags=re.IGNORECASE
+    )
+    if marker_match is None:
         return None
-    tail = status_text[marker_index + len(marker) :]
+    tail = status_text[marker_match.end() :]
     tail = re.sub(r"^[\s\])）·•:;\-–—]+", "", tail).strip()
     if not tail:
         return None
     return f"◦ {tail}"
+
+
+def _native_elapsed_seconds(status_text: str) -> int | None:
+    """Parse elapsed time from a native Codex active-status line."""
+    marker_index = status_text.lower().find(_NATIVE_INTERRUPT_MARKER)
+    if marker_index < 0:
+        return None
+    prefix = status_text[:marker_index]
+    open_paren = prefix.rfind("(")
+    if open_paren >= 0:
+        prefix = prefix[open_paren + 1 :]
+    parts = re.findall(r"(\d+)\s*([hms])", prefix, flags=re.IGNORECASE)
+    if not parts:
+        return None
+    multipliers = {"h": 3600, "m": 60, "s": 1}
+    return sum(int(value) * multipliers[unit.lower()] for value, unit in parts)
+
+
+def _without_terminal_interrupt_hint(status_text: str) -> str:
+    """Hide Codex's terminal-only Escape hint from Telegram users."""
+    public_text = re.sub(
+        rf"\s*[•·]\s*{re.escape(_NATIVE_INTERRUPT_MARKER)}",
+        "",
+        status_text,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s+\)", ")", public_text)
+
+
+def _with_long_running_warning(status_text: str, elapsed: float) -> str:
+    """Add a recoverable warning after a status has run unusually long."""
+    if elapsed < LONG_RUNNING_WARNING_SECONDS:
+        return status_text
+    return f"{status_text}\n\n{_LONG_RUNNING_WARNING}"
+
+
+def format_native_working_status(status_text: str | None) -> str | None:
+    """Make native Codex working text actionable from Telegram."""
+    if not is_active_working_status(status_text):
+        return status_text
+    assert status_text is not None
+    elapsed = _native_elapsed_seconds(status_text)
+    public_text = _without_terminal_interrupt_hint(status_text)
+    if elapsed is None:
+        return public_text
+    return _with_long_running_warning(public_text, elapsed)
 
 
 def format_working_status(
@@ -67,7 +122,8 @@ def format_working_status(
     final line so the chat always ends with a visibly changing heartbeat.
     """
     elapsed = max(0, int((now if now is not None else time.monotonic()) - started_at))
-    timer = f"💭 Thinking ({format_elapsed(elapsed)}) · esc to interrupt"
+    timer = f"💭 Thinking ({format_elapsed(elapsed)})"
+    timer = _with_long_running_warning(timer, elapsed)
     if detail:
         public_detail = (
             _active_status_public_detail(detail)
@@ -125,7 +181,7 @@ def status_text_for_pane(
     key = working_key(user_id, thread_id, window_id)
     started_at = _synthetic_working_starts.get(key)
     if started_at is None:
-        return status_text
+        return format_native_working_status(status_text)
 
     current_time = now if now is not None else time.monotonic()
     elapsed = current_time - started_at

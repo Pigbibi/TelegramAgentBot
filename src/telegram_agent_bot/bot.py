@@ -3729,46 +3729,71 @@ async def _recover_missing_bound_window(
     persisted_window_ids = set(session_manager.window_states)
     persisted_bindings = list(session_manager.iter_thread_bindings())
 
-    (
-        success,
-        message,
-        created_wname,
-        created_wid,
-        created_target,
-    ) = await _create_agent_local_window(
-        cwd=selected_path,
-        window_name=requested_window_name,
-        resume_session_id=resume_session_id,
-        account_name=account_name or "",
-    )
-    if not success:
-        return False, message
+    # A real host reboot starts tmux's global @N allocator from the beginning.
+    # Reusing this topic's own ID is valid, while IDs reserved by other saved
+    # topics must be consumed and discarded until tmux returns a safe one.
+    max_create_attempts = min(len(persisted_window_ids) + 1, 16)
+    success = False
+    message = ""
+    created_wname = requested_window_name
+    created_wid = ""
+    created_target: AgentTarget | None = None
+    for create_attempt in range(1, max_create_attempts + 1):
+        (
+            success,
+            message,
+            created_wname,
+            created_wid,
+            created_target,
+        ) = await _create_agent_local_window(
+            cwd=selected_path,
+            window_name=requested_window_name,
+            resume_session_id=resume_session_id,
+            account_name=account_name or "",
+        )
+        if not success:
+            return False, message
 
-    conflicting_topics = [
-        (bound_user_id, bound_thread_id)
-        for bound_user_id, bound_thread_id, bound_window_id in persisted_bindings
-        if bound_window_id == created_wid
-        and (bound_user_id, bound_thread_id) != (user_id, thread_id)
-    ]
-    if created_wid in persisted_window_ids or conflicting_topics:
-        # A freshly created tmux window ID must never already exist in persisted
-        # state. This means a replacement tmux server restarted its @N counter.
+        conflicting_topics = [
+            (bound_user_id, bound_thread_id)
+            for bound_user_id, bound_thread_id, bound_window_id in persisted_bindings
+            if bound_window_id == created_wid
+            and (bound_user_id, bound_thread_id) != (user_id, thread_id)
+        ]
+        collides_with_other_state = (
+            created_wid in persisted_window_ids and created_wid != old_window_id
+        )
+        if not collides_with_other_state and not conflicting_topics:
+            break
+
         await tmux_manager.kill_window(created_wid)
-        logger.error(
-            "Refusing recovered window id collision: old=%s created=%s topics=%s",
+        logger.warning(
+            "Discarded recovered window id collision: old=%s created=%s "
+            "topics=%s attempt=%d/%d",
             old_window_id,
             created_wid,
             conflicting_topics,
+            create_attempt,
+            max_create_attempts,
         )
+    else:
         return (
             False,
-            "tmux reused a window id that is still assigned to saved topics. "
-            "The new window was stopped without changing any bindings; restore "
-            "the original tmux socket and restart the bot.",
+            "tmux could not allocate a window id that is not reserved by another "
+            "saved topic. Temporary windows were stopped without changing any "
+            "bindings; restart the bot and retry.",
         )
+
+    reused_original_id = created_wid == old_window_id
 
     async def discard_failed_window() -> None:
         await tmux_manager.kill_window(created_wid)
+        if reused_original_id:
+            # The newly created process reused the missing window's saved ID.
+            # Keep that recovery source intact if resume validation fails.
+            session_manager.window_states[old_window_id] = state
+            session_manager._save_state()
+            return
         await session_manager.remove_session_map_entry(created_wid)
         session_manager.remove_window_state(created_wid)
 
@@ -3831,21 +3856,22 @@ async def _recover_missing_bound_window(
             window_name=created_wname,
         )
 
-    for offset_user_id, offset in old_offsets.items():
-        offsets = session_manager.user_window_offsets.setdefault(offset_user_id, {})
-        offsets[created_wid] = offset
-        offsets.pop(old_window_id, None)
-    for offset_user_id, session_id in old_offset_sessions.items():
-        sessions = session_manager.user_window_offset_sessions.setdefault(
-            offset_user_id, {}
-        )
-        sessions[created_wid] = session_id
-        sessions.pop(old_window_id, None)
-    if old_offsets or old_offset_sessions:
-        session_manager._save_state()
+    if not reused_original_id:
+        for offset_user_id, offset in old_offsets.items():
+            offsets = session_manager.user_window_offsets.setdefault(offset_user_id, {})
+            offsets[created_wid] = offset
+            offsets.pop(old_window_id, None)
+        for offset_user_id, session_id in old_offset_sessions.items():
+            sessions = session_manager.user_window_offset_sessions.setdefault(
+                offset_user_id, {}
+            )
+            sessions[created_wid] = session_id
+            sessions.pop(old_window_id, None)
+        if old_offsets or old_offset_sessions:
+            session_manager._save_state()
 
-    await session_manager.remove_session_map_entry(old_window_id)
-    session_manager.remove_window_state(old_window_id)
+        await session_manager.remove_session_map_entry(old_window_id)
+        session_manager.remove_window_state(old_window_id)
     forget_missing_bound_window(user_id, thread_id, old_window_id)
 
     send_ok, send_msg = await _send_to_window_when_codex_ready(
