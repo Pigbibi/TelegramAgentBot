@@ -28,6 +28,7 @@ def _snapshot(**overrides):
             swap_total_bytes=4 * 1024**3,
             swap_used_bytes=1 * 1024**3,
             disk_total_bytes=40 * 1024**3,
+            disk_used_bytes=32 * 1024**3,
             disk_free_bytes=8 * 1024**3,
         ),
         "queue_depth": 0,
@@ -53,7 +54,7 @@ def test_collect_host_metrics_reads_linux_meminfo(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "telegram_agent_bot.vps_health.shutil.disk_usage",
-        lambda _path: SimpleNamespace(total=1000, free=200),
+        lambda _path: SimpleNamespace(total=1100, used=800, free=200),
     )
 
     metrics = collect_host_metrics(meminfo_path=meminfo)

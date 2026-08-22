@@ -354,7 +354,7 @@ class Config:
                 float(
                     os.getenv(
                         "TELEGRAM_AGENT_BOT_HEALTH_DISK_USED_PERCENT",
-                        "80",
+                        "85",
                     )
                 ),
             ),

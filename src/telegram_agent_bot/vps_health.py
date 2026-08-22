@@ -25,6 +25,7 @@ class HostMetrics:
     swap_total_bytes: int
     swap_used_bytes: int
     disk_total_bytes: int
+    disk_used_bytes: int
     disk_free_bytes: int
 
     @property
@@ -35,13 +36,13 @@ class HostMetrics:
 
     @property
     def disk_used_percent(self) -> float:
-        if self.disk_total_bytes <= 0:
+        usable_bytes = self.disk_used_bytes + self.disk_free_bytes
+        if usable_bytes <= 0:
             return 0.0
-        return (
-            100.0
-            * (self.disk_total_bytes - self.disk_free_bytes)
-            / self.disk_total_bytes
-        )
+        # Match df's operator-facing percentage. Filesystem-reserved blocks are
+        # neither user-visible free space nor application data and must not be
+        # reported as consumed by AgentBot.
+        return 100.0 * self.disk_used_bytes / usable_bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +102,7 @@ def collect_host_metrics(
         swap_total_bytes=swap_total,
         swap_used_bytes=max(0, swap_total - swap_free),
         disk_total_bytes=disk.total,
+        disk_used_bytes=disk.used,
         disk_free_bytes=disk.free,
     )
 

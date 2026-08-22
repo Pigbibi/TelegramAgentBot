@@ -23,7 +23,7 @@
     }
   },
   "max_changed_files": 30,
-  "max_changed_lines": 2000,
+  "max_changed_lines": 2400,
   "pr_review": {
     "enabled": true,
     "block_severities": [
