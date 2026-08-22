@@ -6,10 +6,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from telegram_agent_bot import bot as bot_module
+from telegram_agent_bot.durable_state import DurableRuntimeStore
 
 
 @pytest.fixture(autouse=True)
-def clear_agent_input_queue_state():
+def clear_agent_input_queue_state(monkeypatch, tmp_path):
+    store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+    store.initialize()
+    monkeypatch.setattr(bot_module, "_runtime_store", store)
     bot_module._agent_input_queues.clear()
     bot_module._agent_input_tasks.clear()
     bot_module._agent_input_locks.clear()
@@ -17,6 +21,56 @@ def clear_agent_input_queue_state():
     bot_module._agent_input_queues.clear()
     bot_module._agent_input_tasks.clear()
     bot_module._agent_input_locks.clear()
+
+
+def test_restore_agent_input_queues_after_restart(monkeypatch):
+    record = bot_module._runtime_store.enqueue_agent_input(
+        user_id=12345,
+        thread_id=42,
+        window_id="@1",
+        text="queued before restart",
+        max_pending=20,
+        created_at_epoch=1000.0,
+    )
+    assert record is not None
+    ensured: list[tuple[int, int, str]] = []
+    monkeypatch.setattr(
+        bot_module,
+        "_ensure_agent_input_drain_task",
+        lambda _bot, key: ensured.append(key),
+    )
+
+    restored = bot_module._restore_agent_input_queues(MagicMock())
+
+    assert restored == 1
+    assert [
+        item.text for item in bot_module._agent_input_queues[(12345, 42, "@1")]
+    ] == ["queued before restart"]
+    assert ensured == [(12345, 42, "@1")]
+
+
+@pytest.mark.asyncio
+async def test_runtime_shutdown_keeps_persisted_agent_inputs(monkeypatch):
+    monkeypatch.setattr(
+        bot_module,
+        "_ensure_agent_input_drain_task",
+        lambda _bot, _key: None,
+    )
+    ok, _message = await bot_module._queue_agent_input_after_interrupt(
+        MagicMock(),
+        12345,
+        42,
+        "@1",
+        "survive shutdown",
+    )
+    assert ok is True
+
+    await bot_module._cancel_agent_input_drain_tasks()
+
+    assert bot_module._agent_input_queues == {}
+    assert [
+        item.text for item in bot_module._runtime_store.list_pending_agent_inputs()
+    ] == ["survive shutdown"]
 
 
 @pytest.mark.asyncio

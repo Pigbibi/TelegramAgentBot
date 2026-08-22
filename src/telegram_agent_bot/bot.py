@@ -102,6 +102,7 @@ from .backends.base import AgentBackend, AgentTarget
 from .backends.browser import AgentBrowser, DirectoryListing
 from .backends.registry import get_configured_backend
 from .config import config
+from .durable_state import DurableRuntimeStore
 from .handlers.callback_data import (
     CB_ASK_DOWN,
     CB_ASK_ENTER,
@@ -195,6 +196,7 @@ from .handlers.interactive_ui import (
     set_interactive_mode,
 )
 from .handlers.message_queue import (
+    clear_permanent_delivery_failure,
     clear_status_msg_info,
     enqueue_content_message,
     enqueue_status_update,
@@ -287,12 +289,15 @@ _CODEX_UPDATE_PROMPT_STATE_FILENAME = "codex_update_prompt_state.json"
 class _QueuedAgentInput:
     text: str
     created_at: float = field(default_factory=time.monotonic)
+    created_at_epoch: float = field(default_factory=time.time)
+    store_id: int | None = None
 
 
 _AGENT_INPUT_POLL_INTERVAL_SECONDS = 1.0
 _agent_input_queues: dict[tuple[int, int, str], deque[_QueuedAgentInput]] = {}
 _agent_input_tasks: dict[tuple[int, int, str], asyncio.Task] = {}
 _agent_input_locks: dict[tuple[int, int, str], asyncio.Lock] = {}
+_runtime_store = DurableRuntimeStore(config.config_dir / "runtime.sqlite3")
 
 PRODUCT_NAME = "Agent"
 WELCOME_MESSAGE = (
@@ -690,6 +695,42 @@ def _get_thread_id(update: Update) -> int | None:
     if tid is None or tid == 1:
         return None
     return tid
+
+
+async def inbound_route_health_handler(
+    update: Update,
+    _context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Treat a fresh inbound topic message as proof that its route is usable."""
+    user = update.effective_user
+    message = update.effective_message
+    chat = update.effective_chat
+    if (
+        not user
+        or not is_user_allowed(user.id)
+        or message is None
+        or chat is None
+        or chat.type not in ("group", "supergroup")
+        or getattr(message, "forum_topic_closed", None) is not None
+    ):
+        return
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        return
+
+    session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+    if clear_permanent_delivery_failure(user.id, thread_id, chat_id=chat.id):
+        monitor = session_monitor
+        clear_block = getattr(monitor, "clear_permanent_delivery_block", None)
+        if callable(clear_block):
+            clear_block(user.id, thread_id)
+        logger.info(
+            "Cleared permanent Telegram delivery block after inbound route proof "
+            "(user=%d thread=%d chat=%d)",
+            user.id,
+            thread_id,
+            chat.id,
+        )
 
 
 def _filter_resumable_sessions(
@@ -1907,8 +1948,116 @@ def _queue_agent_input(
     limit = _agent_input_queue_max_size()
     if len(queue) >= limit:
         return False, len(queue), limit
-    queue.append(_QueuedAgentInput(text=text))
+    try:
+        record = _runtime_store.enqueue_agent_input(
+            user_id=key[0],
+            thread_id=key[1],
+            window_id=key[2],
+            text=text,
+            max_pending=limit,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to persist queued agent input (user=%d thread=%d window=%s)",
+            key[0],
+            key[1],
+            key[2],
+        )
+        return False, len(queue), limit
+    if record is None:
+        return False, len(queue), limit
+    queue.append(
+        _QueuedAgentInput(
+            text=text,
+            created_at_epoch=record.created_at_epoch,
+            store_id=record.id,
+        )
+    )
     return True, len(queue), limit
+
+
+def _delete_persisted_agent_inputs(items: list[_QueuedAgentInput]) -> None:
+    record_ids = [item.store_id for item in items if item.store_id is not None]
+    if not record_ids:
+        return
+    try:
+        _runtime_store.delete_agent_inputs(record_ids)
+    except Exception:
+        logger.exception(
+            "Failed to remove %d persisted agent input(s)", len(record_ids)
+        )
+
+
+def _clear_persisted_agent_input_target(key: tuple[int, int, str]) -> None:
+    try:
+        _runtime_store.delete_agent_inputs_for_target(*key)
+    except Exception:
+        logger.exception(
+            "Failed to clear persisted agent input target "
+            "(user=%d thread=%d window=%s)",
+            key[0],
+            key[1],
+            key[2],
+        )
+
+
+def _restore_agent_input_queues(bot: Bot) -> int:
+    """Reload prompts accepted before a process restart and restart drainers."""
+    try:
+        records = _runtime_store.list_pending_agent_inputs()
+    except Exception:
+        logger.exception("Failed to restore persisted agent input queue")
+        return 0
+
+    restored = 0
+    existing_ids = {
+        item.store_id
+        for queue in _agent_input_queues.values()
+        for item in queue
+        if item.store_id is not None
+    }
+    for record in records:
+        if record.id in existing_ids:
+            continue
+        window_id = record.window_id
+        resolved_window_id = session_manager.resolve_window_for_thread(
+            record.user_id,
+            record.thread_id or None,
+        )
+        if resolved_window_id and resolved_window_id != window_id:
+            window_id = resolved_window_id
+            try:
+                _runtime_store.retarget_agent_input(record.id, window_id)
+            except Exception:
+                logger.exception(
+                    "Failed to retarget restored agent input %d to window %s",
+                    record.id,
+                    window_id,
+                )
+                continue
+
+        age = max(0.0, time.time() - record.created_at_epoch)
+        created_at = time.monotonic() - age
+        key = _agent_input_key(
+            record.user_id,
+            record.thread_id or None,
+            window_id,
+        )
+        _agent_input_queues.setdefault(key, deque()).append(
+            _QueuedAgentInput(
+                text=record.text,
+                created_at=created_at,
+                created_at_epoch=record.created_at_epoch,
+                store_id=record.id,
+            )
+        )
+        restored += 1
+
+    for key in list(_agent_input_queues):
+        _ensure_agent_input_drain_task(bot, key)
+    if restored:
+        logger.info("Restored %d queued agent input(s) after restart", restored)
+    return restored
 
 
 async def _drop_expired_agent_input(
@@ -1922,11 +2071,13 @@ async def _drop_expired_agent_input(
 
     now = time.monotonic()
     expired = 0
+    expired_items: list[_QueuedAgentInput] = []
     while queue and now - queue[0].created_at >= max_wait:
-        queue.popleft()
+        expired_items.append(queue.popleft())
         expired += 1
 
     if expired:
+        _delete_persisted_agent_inputs(expired_items)
         user_id, thread_key, _window_id = key
         thread_id = thread_key or None
         wait_display = int(max_wait)
@@ -2121,6 +2272,7 @@ async def _drain_agent_input_queue(
                     bot, user_id, thread_id, "No session bound"
                 )
                 queue.clear()
+                _clear_persisted_agent_input_target(key)
                 return
             if capture.missing:
                 await _notify_queued_input_failure(
@@ -2130,6 +2282,7 @@ async def _drain_agent_input_queue(
                     "Window not found (may have been closed)",
                 )
                 queue.clear()
+                _clear_persisted_agent_input_target(key)
                 return
 
             pane_text = capture.text or ""
@@ -2142,6 +2295,7 @@ async def _drain_agent_input_queue(
                     _codex_auth_recovery_message(auth_error),
                 )
                 queue.clear()
+                _clear_persisted_agent_input_target(key)
                 return
             if not is_codex_input_ready(pane_text) or is_interactive_ui(pane_text):
                 await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
@@ -2154,11 +2308,13 @@ async def _drain_agent_input_queue(
                 item.text,
             )
             if not success:
-                queue.popleft()
+                failed_item = queue.popleft()
+                _delete_persisted_agent_inputs([failed_item])
                 await _notify_queued_input_failure(bot, user_id, thread_id, message)
                 continue
 
-            queue.popleft()
+            submitted_item = queue.popleft()
+            _delete_persisted_agent_inputs([submitted_item])
             await mark_window_working(bot, user_id, window_id, thread_id)
             confirmed = await _refresh_session_map_after_first_prompt(
                 window_id,
@@ -2194,6 +2350,7 @@ async def _drain_agent_input_queue(
 
 
 async def _cancel_agent_input_drain_tasks() -> None:
+    """Stop in-memory drainers while leaving the durable spool intact."""
     tasks = [task for task in _agent_input_tasks.values() if not task.done()]
     for task in tasks:
         task.cancel()
@@ -2215,6 +2372,9 @@ async def _discard_queued_agent_input(
     async with _agent_input_lock(key):
         queue = _agent_input_queues.pop(key, None)
         dropped = len(queue) if queue else 0
+        if queue:
+            _delete_persisted_agent_inputs(list(queue))
+        _clear_persisted_agent_input_target(key)
 
         task = _agent_input_tasks.pop(key, None)
         if task and not task.done() and task is not asyncio.current_task():
@@ -6101,6 +6261,14 @@ async def post_init(application: Application) -> None:
 
     _runtime_stopped = False
 
+    try:
+        _runtime_store.initialize()
+    except Exception:
+        logger.exception(
+            "Durable runtime store unavailable at startup; immediate agent input "
+            "remains available but busy inputs cannot be queued safely"
+        )
+
     await refresh_model_catalog()
 
     await application.bot.delete_my_commands()
@@ -6157,6 +6325,7 @@ async def post_init(application: Application) -> None:
         backend_info.backend_id,
         backend_info.display_name,
     )
+    _restore_agent_input_queues(application.bot)
 
     # Start status polling task
     _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
@@ -6236,7 +6405,10 @@ def create_bot() -> Application:
     application = (
         Application.builder()
         .concurrent_updates(
-            TopicUpdateProcessor(config.telegram_max_concurrent_updates)
+            TopicUpdateProcessor(
+                config.telegram_max_concurrent_updates,
+                update_store=_runtime_store,
+            )
         )
         .token(config.telegram_bot_token)
         .request(
@@ -6263,6 +6435,14 @@ def create_bot() -> Application:
     )
 
     application.add_error_handler(application_error_handler)
+
+    # Group -1 observes every inbound message before command/content handlers.
+    # A message arriving inside a forum topic proves that a previously
+    # quarantined route has become usable again.
+    application.add_handler(
+        MessageHandler(filters.ALL, inbound_route_health_handler),
+        group=-1,
+    )
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("history", history_command))

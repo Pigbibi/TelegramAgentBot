@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from telegram_agent_bot.durable_state import DurableRuntimeStore
 from telegram_agent_bot.update_processor import (
     TopicUpdateProcessor,
     update_topic_key,
@@ -86,3 +87,43 @@ async def test_same_topic_preserves_update_order() -> None:
 
     assert order == ["first-start", "first-end", "second"]
     assert processor._topic_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_completed_update_is_not_processed_twice(tmp_path) -> None:
+    store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+    processor = TopicUpdateProcessor(max_concurrent_updates=4, update_store=store)
+    await processor.initialize()
+    seen: list[str] = []
+
+    async def handle(label: str) -> None:
+        seen.append(label)
+
+    update = _update(99, chat_id=-100, thread_id=10)
+    await processor.process_update(update, handle("first"))
+    await processor.process_update(update, handle("duplicate"))
+
+    assert seen == ["first"]
+
+
+@pytest.mark.asyncio
+async def test_failed_update_can_be_retried(tmp_path) -> None:
+    store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+    processor = TopicUpdateProcessor(max_concurrent_updates=4, update_store=store)
+    await processor.initialize()
+    update = _update(99, chat_id=-100, thread_id=10)
+
+    async def fail() -> None:
+        raise RuntimeError("handler failed")
+
+    with pytest.raises(RuntimeError, match="handler failed"):
+        await processor.process_update(update, fail())
+
+    completed = False
+
+    async def succeed() -> None:
+        nonlocal completed
+        completed = True
+
+    await processor.process_update(update, succeed())
+    assert completed is True

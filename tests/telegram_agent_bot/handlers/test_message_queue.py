@@ -9,6 +9,7 @@ from telegram.error import BadRequest, TimedOut
 from telegram_agent_bot.agent_io import CaptureResult
 from telegram_agent_bot.backends.base import AgentTarget
 from telegram_agent_bot.handlers import message_queue
+from telegram_agent_bot.handlers.delivery_errors import PermanentDeliveryError
 
 
 def test_status_message_info_persists_for_restart(monkeypatch, tmp_path):
@@ -498,6 +499,84 @@ async def test_failed_content_send_preserves_working_status_and_reports_failure(
     finally:
         await message_queue.shutdown_workers()
         message_queue._status_msg_info.clear()
+
+
+@pytest.mark.asyncio
+async def test_permanent_topic_failure_is_quarantined_and_short_circuited(
+    monkeypatch, tmp_path
+):
+    await message_queue.shutdown_workers()
+    quarantine_file = tmp_path / "delivery_dead_letters.json"
+    monkeypatch.setattr(
+        message_queue, "_PERMANENT_DELIVERY_FAILURES_FILE", quarantine_file
+    )
+    message_queue._permanent_delivery_failures.clear()
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda _user_id, _thread_id=None: -100123,
+    )
+    monkeypatch.setattr(
+        message_queue,
+        "send_with_fallback",
+        AsyncMock(
+            side_effect=PermanentDeliveryError(
+                "Message thread not found",
+                chat_id=-100123,
+                thread_id=42,
+            )
+        ),
+    )
+
+    quarantine_bot = AsyncMock()
+    for _ in range(2):
+        delivered = await message_queue.enqueue_content_message(
+            bot=quarantine_bot,
+            user_id=1,
+            window_id="@4",
+            parts=["final content"],
+            thread_id=42,
+            wait_until_sent=True,
+        )
+        assert delivered is False
+
+    with pytest.raises(PermanentDeliveryError):
+        await message_queue.enqueue_content_message(
+            bot=quarantine_bot,
+            user_id=1,
+            window_id="@4",
+            parts=["final content"],
+            thread_id=42,
+            wait_until_sent=True,
+        )
+
+    assert message_queue.is_permanent_delivery_failure(1, 42)
+
+    with pytest.raises(PermanentDeliveryError):
+        await message_queue.enqueue_content_message(
+            bot=AsyncMock(),
+            user_id=1,
+            window_id="@4",
+            parts=["must not call Telegram again"],
+            thread_id=42,
+            wait_until_sent=True,
+        )
+
+    assert message_queue.send_with_fallback.await_count == 3
+    quarantine_bot.send_message.assert_awaited_once()
+
+    await message_queue.enqueue_status_update(
+        quarantine_bot,
+        user_id=1,
+        window_id="@4",
+        status_text="💭 Thinking…",
+        thread_id=42,
+    )
+    assert message_queue.send_with_fallback.await_count == 3
+    quarantine_bot.send_message.assert_awaited_once()
+    message_queue.clear_permanent_delivery_failure(1, 42)
+    assert not message_queue.is_permanent_delivery_failure(1, 42)
+    await message_queue.shutdown_workers()
 
 
 @pytest.mark.asyncio

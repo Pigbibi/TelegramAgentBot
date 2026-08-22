@@ -9,10 +9,16 @@ while preserving arrival order within each topic.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Hashable
 from typing import Any
 
 from telegram.ext import BaseUpdateProcessor
+
+from .durable_state import DurableRuntimeStore
+
+
+logger = logging.getLogger(__name__)
 
 
 def update_topic_key(update: object) -> Hashable:
@@ -37,14 +43,28 @@ def update_topic_key(update: object) -> Hashable:
 class TopicUpdateProcessor(BaseUpdateProcessor):
     """Run different topics concurrently and one topic sequentially."""
 
-    def __init__(self, max_concurrent_updates: int) -> None:
+    def __init__(
+        self,
+        max_concurrent_updates: int,
+        *,
+        update_store: DurableRuntimeStore | None = None,
+    ) -> None:
         super().__init__(max_concurrent_updates=max_concurrent_updates)
+        self._update_store = update_store
         self._topic_locks: dict[Hashable, asyncio.Lock] = {}
         self._topic_users: dict[Hashable, int] = {}
         self._registry_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
-        """No external resources are required."""
+        """Release interrupted claims while retaining completed update IDs."""
+        if self._update_store is not None:
+            try:
+                self._update_store.initialize(reset_inflight_updates=True)
+            except Exception:
+                logger.exception(
+                    "Telegram update dedupe store unavailable at startup; "
+                    "continuing without durable duplicate suppression"
+                )
 
     async def shutdown(self) -> None:
         """Release idle lock bookkeeping after update processing stops."""
@@ -64,7 +84,53 @@ class TopicUpdateProcessor(BaseUpdateProcessor):
 
         try:
             async with topic_lock:
-                await coroutine
+                update_id = getattr(update, "update_id", None)
+                claimed_update_id: int | None = None
+                if self._update_store is not None and isinstance(update_id, int):
+                    try:
+                        claimed = self._update_store.claim_telegram_update(update_id)
+                    except Exception:
+                        logger.exception(
+                            "Telegram update dedupe store unavailable; processing "
+                            "update %d without durable deduplication",
+                            update_id,
+                        )
+                    else:
+                        if not claimed:
+                            close = getattr(coroutine, "close", None)
+                            if callable(close):
+                                close()
+                            logger.info(
+                                "Skipping duplicate Telegram update %d", update_id
+                            )
+                            return
+                        claimed_update_id = update_id
+
+                try:
+                    await coroutine
+                except BaseException:
+                    if claimed_update_id is not None and self._update_store is not None:
+                        try:
+                            self._update_store.abandon_telegram_update(
+                                claimed_update_id
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Failed to release Telegram update claim %d",
+                                claimed_update_id,
+                            )
+                    raise
+                else:
+                    if claimed_update_id is not None and self._update_store is not None:
+                        try:
+                            self._update_store.complete_telegram_update(
+                                claimed_update_id
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Failed to persist completed Telegram update %d",
+                                claimed_update_id,
+                            )
         finally:
             async with self._registry_lock:
                 remaining = self._topic_users.get(key, 1) - 1

@@ -58,9 +58,9 @@ class TestConfigValid:
         cfg = Config()
         assert cfg.agent_startup_timeout_seconds == 180.0
 
-    def test_telegram_updates_default_to_sixteen_concurrent_topics(self):
+    def test_telegram_updates_default_to_four_concurrent_topics(self):
         cfg = Config()
-        assert cfg.telegram_max_concurrent_updates == 16
+        assert cfg.telegram_max_concurrent_updates == 4
 
     def test_telegram_update_concurrency_can_be_configured(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_MAX_CONCURRENT_UPDATES", "4")
