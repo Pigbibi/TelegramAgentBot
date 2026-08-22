@@ -849,6 +849,23 @@ class SessionMonitor:
                 cleared,
             )
 
+    def delivery_backlog_bytes(self) -> dict[str, int]:
+        """Return undelivered transcript bytes for currently bound sessions."""
+        from .session import session_manager
+
+        backlog: dict[str, int] = {}
+        for session_id, tracked in self.state.tracked_sessions.items():
+            if not session_manager.has_bound_thread_for_session(session_id):
+                continue
+            try:
+                current_size = Path(tracked.file_path).stat().st_size
+            except OSError:
+                continue
+            pending_bytes = max(0, current_size - tracked.last_byte_offset)
+            if pending_bytes:
+                backlog[session_id] = pending_bytes
+        return backlog
+
     def _record_dispatch_results(
         self,
         failed_session_ids: set[str],

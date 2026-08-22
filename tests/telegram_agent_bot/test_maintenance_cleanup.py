@@ -7,6 +7,11 @@ from pathlib import Path
 from telegram_agent_bot import maintenance_cleanup as cleanup
 
 
+def test_small_vps_cleanup_defaults_start_at_eighty_percent() -> None:
+    assert cleanup.DEFAULT_MAX_USED_PERCENT == 80.0
+    assert cleanup.DEFAULT_MIN_FREE_GB == 6.0
+
+
 def _config(tmp_path: Path, *, dry_run: bool = False) -> cleanup.CleanupConfig:
     home = tmp_path / "home"
     home.mkdir()

@@ -14,6 +14,27 @@ from telegram_agent_bot.handlers.delivery_errors import PermanentDeliveryError
 from telegram_agent_bot.session_monitor import NewMessage, SessionInfo, SessionMonitor
 
 
+def test_delivery_backlog_only_counts_bound_sessions(tmp_path, monkeypatch):
+    monitor = SessionMonitor(
+        projects_path=tmp_path / "projects",
+        state_file=tmp_path / "monitor_state.json",
+    )
+    bound_file = tmp_path / "bound.jsonl"
+    unbound_file = tmp_path / "unbound.jsonl"
+    bound_file.write_bytes(b"0123456789")
+    unbound_file.write_bytes(b"0123456789")
+    monitor.state.tracked_sessions = {
+        "bound": TrackedSession("bound", str(bound_file), last_byte_offset=4),
+        "unbound": TrackedSession("unbound", str(unbound_file), last_byte_offset=1),
+    }
+    monkeypatch.setattr(
+        "telegram_agent_bot.session.session_manager.has_bound_thread_for_session",
+        lambda session_id: session_id == "bound",
+    )
+
+    assert monitor.delivery_backlog_bytes() == {"bound": 6}
+
+
 class TestSessionMonitorDispatch:
     """Tests for monitor dispatch fairness across sessions."""
 

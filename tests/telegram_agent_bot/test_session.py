@@ -617,6 +617,18 @@ class TestWindowState:
 
         assert mgr.get_window_state("@1").launch_started_at == 0.0
 
+    def test_hibernation_marker_is_persisted_and_cleared_on_resume(
+        self, mgr: SessionManager
+    ) -> None:
+        mgr.get_window_state("@1").session_id = "sid-1"
+
+        assert mgr.mark_window_hibernated("@1", hibernated_at=123.0) is True
+        assert mgr.get_window_state("@1").hibernated_at == 123.0
+
+        mgr.register_session_to_window("@1", "sid-1", "/tmp/project")
+
+        assert mgr.get_window_state("@1").hibernated_at == 0.0
+
     def test_mark_window_usage_limit_exceeded_is_idempotent(
         self, mgr: SessionManager
     ) -> None:

@@ -24,10 +24,12 @@ from telegram import Bot
 from telegram.error import BadRequest
 
 from ..config import config
+from ..idle_sessions import idle_session_hibernator
 from ..session import session_manager
 from ..agent_io import capture_agent_output
-from ..terminal_parser import is_interactive_ui
+from ..terminal_parser import is_codex_input_ready, is_interactive_ui
 from ..tmux_manager import tmux_manager
+from ..turn_admission import turn_admission
 from .interactive_ui import (
     clear_interactive_msg,
     get_interactive_window,
@@ -125,6 +127,7 @@ async def update_status_message(
     """
     capture = await capture_agent_output(user_id, thread_id, window_id)
     if capture is None or capture.missing:
+        turn_admission.forget(window_id)
         clear_window_working(user_id, window_id, thread_id)
         # Window gone, enqueue clear (unless skipping status)
         if not skip_status:
@@ -137,6 +140,44 @@ async def update_status_message(
     if not pane_text:
         # Transient capture failure - keep existing status message
         return
+
+    pane_is_idle = is_codex_input_ready(pane_text) and not is_interactive_ui(pane_text)
+    turn_admission.observe(
+        window_id,
+        active=not pane_is_idle,
+    )
+
+    state = session_manager.window_states.get(window_id)
+    if state is not None and state.hibernated_at:
+        session_manager.clear_window_hibernated(window_id)
+    resumable = bool(state and state.session_id and state.cwd)
+    should_hibernate = idle_session_hibernator.observe(
+        window_id,
+        idle=pane_is_idle and resumable,
+        protected=turn_admission.is_protected(window_id),
+        timeout_seconds=float(getattr(config, "idle_session_timeout_seconds", 1800.0)),
+    )
+    if should_hibernate:
+        idle_session_hibernator.forget(window_id)
+        if await tmux_manager.kill_window(window_id):
+            session_manager.mark_window_hibernated(window_id)
+            turn_admission.forget(window_id)
+            clear_window_working(user_id, window_id, thread_id)
+            if not skip_status:
+                await enqueue_status_update(
+                    bot,
+                    user_id,
+                    window_id,
+                    None,
+                    thread_id=thread_id,
+                )
+            logger.info(
+                "Hibernated idle resumable window: user=%d thread=%s window=%s",
+                user_id,
+                thread_id,
+                window_id,
+            )
+            return
 
     interactive_window = get_interactive_window(user_id, thread_id)
     should_check_new_ui = True
@@ -265,6 +306,8 @@ async def status_poll_loop(bot: Bot) -> None:
                     # recreate the tmux window and resume the previous session.
                     w = await tmux_manager.find_window_by_id(wid)
                     if not w:
+                        turn_admission.forget(wid)
+                        idle_session_hibernator.forget(wid)
                         key = (user_id, thread_id, wid)
                         if key not in _missing_bound_windows:
                             _missing_bound_windows.add(key)

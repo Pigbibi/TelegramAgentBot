@@ -29,6 +29,22 @@ class PendingAgentInput:
     created_at_epoch: float
 
 
+@dataclass(frozen=True, slots=True)
+class PendingAgentInputStats:
+    """Small aggregate used by health checks without loading prompt text."""
+
+    count: int
+    oldest_created_at_epoch: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class HealthAlertState:
+    """Persisted alert activity and cooldown timestamp for one health issue."""
+
+    active: bool
+    last_sent_at_epoch: float
+
+
 class DurableRuntimeStore:
     """Persist a bounded prompt spool and recently completed Telegram updates."""
 
@@ -65,6 +81,12 @@ class DurableRuntimeStore:
                 );
                 CREATE INDEX IF NOT EXISTS telegram_updates_completed_idx
                     ON telegram_updates(state, updated_at_epoch);
+
+                CREATE TABLE IF NOT EXISTS health_alert_state (
+                    issue_key TEXT PRIMARY KEY,
+                    active INTEGER NOT NULL CHECK (active IN (0, 1)),
+                    last_sent_at_epoch REAL NOT NULL
+                );
                 """
             )
             if reset_inflight_updates:
@@ -136,6 +158,53 @@ class DurableRuntimeStore:
                 "FROM agent_input_queue ORDER BY id"
             ).fetchall()
         return [self._record_from_row(row) for row in rows]
+
+    def pending_agent_input_stats(self) -> PendingAgentInputStats:
+        """Return queue depth and oldest enqueue time without reading prompt text."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count, MIN(created_at_epoch) AS oldest "
+                "FROM agent_input_queue"
+            ).fetchone()
+        if row is None:
+            return PendingAgentInputStats(0, None)
+        oldest = row["oldest"]
+        return PendingAgentInputStats(
+            count=int(row["count"]),
+            oldest_created_at_epoch=float(oldest) if oldest is not None else None,
+        )
+
+    def load_health_alert_states(self) -> dict[str, HealthAlertState]:
+        """Load issue cooldown state so restarts do not repeat alerts."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT issue_key, active, last_sent_at_epoch FROM health_alert_state"
+            ).fetchall()
+        return {
+            str(row["issue_key"]): HealthAlertState(
+                active=bool(row["active"]),
+                last_sent_at_epoch=float(row["last_sent_at_epoch"]),
+            )
+            for row in rows
+        }
+
+    def save_health_alert_state(
+        self,
+        issue_key: str,
+        *,
+        active: bool,
+        last_sent_at_epoch: float,
+    ) -> None:
+        """Upsert one issue's active flag and last notification timestamp."""
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO health_alert_state "
+                "(issue_key, active, last_sent_at_epoch) VALUES (?, ?, ?) "
+                "ON CONFLICT(issue_key) DO UPDATE SET "
+                "active = excluded.active, "
+                "last_sent_at_epoch = excluded.last_sent_at_epoch",
+                (issue_key, int(active), last_sent_at_epoch),
+            )
 
     def retarget_agent_input(self, record_id: int, window_id: str) -> None:
         """Update a restored prompt after a persisted thread binding is re-resolved."""

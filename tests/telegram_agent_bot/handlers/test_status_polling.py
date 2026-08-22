@@ -17,6 +17,9 @@ from telegram_agent_bot.handlers.status_polling import (
     status_poll_loop,
     update_status_message,
 )
+from telegram_agent_bot.idle_sessions import idle_session_hibernator
+from telegram_agent_bot.session import WindowState, session_manager
+from telegram_agent_bot.turn_admission import turn_admission
 
 
 @pytest.fixture
@@ -49,11 +52,15 @@ def _clear_interactive_state():
     _interactive_msgs.clear()
     status_polling._synthetic_working_starts.clear()
     working_status._synthetic_working_output_seen.clear()
+    idle_session_hibernator.reset()
+    turn_admission.reset()
     yield
     _interactive_mode.clear()
     _interactive_msgs.clear()
     status_polling._synthetic_working_starts.clear()
     working_status._synthetic_working_output_seen.clear()
+    idle_session_hibernator.reset()
+    turn_admission.reset()
 
 
 @pytest.mark.usefixtures("_clear_interactive_state")
@@ -165,6 +172,54 @@ class TestStatusPollerSettingsDetection:
                 None,
                 thread_id=42,
             )
+
+    @pytest.mark.asyncio
+    async def test_resumable_idle_window_is_hibernated(
+        self, mock_bot: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ):
+        window_id = "@5"
+        idle_pane = "previous output\n\n›\n\n  gpt-5.5 · ~/repo"
+        monkeypatch.setattr(
+            session_manager,
+            "window_states",
+            {window_id: WindowState(session_id="sid-1", cwd="/tmp/project")},
+        )
+        monkeypatch.setattr(session_manager, "_save_state", MagicMock())
+        monkeypatch.setattr(
+            idle_session_hibernator,
+            "observe",
+            MagicMock(return_value=True),
+        )
+
+        with (
+            patch(
+                "telegram_agent_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+                return_value=capture_result(window_id, idle_pane),
+            ),
+            patch(
+                "telegram_agent_bot.handlers.status_polling.tmux_manager.kill_window",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_kill,
+            patch(
+                "telegram_agent_bot.handlers.status_polling.enqueue_status_update",
+                new_callable=AsyncMock,
+            ) as mock_enqueue_status,
+        ):
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+
+        mock_kill.assert_awaited_once_with(window_id)
+        assert session_manager.window_states[window_id].hibernated_at > 0
+        mock_enqueue_status.assert_awaited_once_with(
+            mock_bot,
+            1,
+            window_id,
+            None,
+            thread_id=42,
+        )
 
     @pytest.mark.asyncio
     async def test_public_progress_block_is_sent_as_status(self, mock_bot: AsyncMock):

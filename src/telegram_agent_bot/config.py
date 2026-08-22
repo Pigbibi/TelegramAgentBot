@@ -291,6 +291,92 @@ class Config:
             1,
             int(os.getenv("TELEGRAM_AGENT_BOT_MAX_CONCURRENT_UPDATES", "4")),
         )
+        self.agent_max_active_turns = max(
+            0,
+            int(os.getenv("TELEGRAM_AGENT_BOT_MAX_ACTIVE_TURNS", "2")),
+        )
+        self.idle_session_timeout_seconds = max(
+            0.0,
+            float(
+                os.getenv(
+                    "TELEGRAM_AGENT_BOT_IDLE_SESSION_TIMEOUT_SECONDS",
+                    "1800",
+                )
+            ),
+        )
+        self.health_alerts_enabled = os.getenv(
+            "TELEGRAM_AGENT_BOT_HEALTH_ALERTS_ENABLED",
+            "true",
+        ).strip().lower() not in {"0", "false", "no", "off"}
+        self.health_check_interval_seconds = max(
+            30.0,
+            float(
+                os.getenv(
+                    "TELEGRAM_AGENT_BOT_HEALTH_CHECK_INTERVAL_SECONDS",
+                    "60",
+                )
+            ),
+        )
+        self.health_alert_cooldown_seconds = max(
+            300.0,
+            float(
+                os.getenv(
+                    "TELEGRAM_AGENT_BOT_HEALTH_ALERT_COOLDOWN_SECONDS",
+                    "3600",
+                )
+            ),
+        )
+        self.health_memory_available_mb = max(
+            64.0,
+            float(
+                os.getenv(
+                    "TELEGRAM_AGENT_BOT_HEALTH_MEMORY_AVAILABLE_MB",
+                    "256",
+                )
+            ),
+        )
+        self.health_swap_used_percent = min(
+            100.0,
+            max(
+                1.0,
+                float(
+                    os.getenv(
+                        "TELEGRAM_AGENT_BOT_HEALTH_SWAP_USED_PERCENT",
+                        "75",
+                    )
+                ),
+            ),
+        )
+        self.health_disk_used_percent = min(
+            100.0,
+            max(
+                1.0,
+                float(
+                    os.getenv(
+                        "TELEGRAM_AGENT_BOT_HEALTH_DISK_USED_PERCENT",
+                        "80",
+                    )
+                ),
+            ),
+        )
+        self.health_queue_oldest_seconds = max(
+            60.0,
+            float(
+                os.getenv(
+                    "TELEGRAM_AGENT_BOT_HEALTH_QUEUE_OLDEST_SECONDS",
+                    "600",
+                )
+            ),
+        )
+        self.health_transcript_lag_seconds = max(
+            30.0,
+            float(
+                os.getenv(
+                    "TELEGRAM_AGENT_BOT_HEALTH_TRANSCRIPT_LAG_SECONDS",
+                    "120",
+                )
+            ),
+        )
 
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix

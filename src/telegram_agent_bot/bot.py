@@ -219,6 +219,7 @@ from .handlers.status_polling import (
     mark_window_working,
     status_poll_loop,
 )
+from .idle_sessions import idle_session_hibernator
 from .screenshot import text_to_image
 from .session import (
     CodexSession,
@@ -239,6 +240,7 @@ from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .transcribe import TranscriptionError, close_client as close_transcribe_client
 from .transcribe import transcribe_voice
+from .turn_admission import turn_admission
 from .update_processor import TopicUpdateProcessor
 from .updater import (
     CodexUpdateResult,
@@ -248,6 +250,7 @@ from .updater import (
 )
 from .utils import app_dir, sanitize_forward_text
 from .utils import atomic_write_json
+from .vps_health import VpsHealthMonitor, format_health_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +282,7 @@ session_monitor: Any | None = None
 # Status polling task
 _status_poll_task: asyncio.Task | None = None
 _auto_update_task: asyncio.Task | None = None
+_health_task: asyncio.Task | None = None
 _runtime_stopped = False
 _codex_update_prompted_versions: set[str] = set()
 _codex_update_apply_lock: asyncio.Lock | None = None
@@ -298,6 +302,7 @@ _agent_input_queues: dict[tuple[int, int, str], deque[_QueuedAgentInput]] = {}
 _agent_input_tasks: dict[tuple[int, int, str], asyncio.Task] = {}
 _agent_input_locks: dict[tuple[int, int, str], asyncio.Lock] = {}
 _runtime_store = DurableRuntimeStore(config.config_dir / "runtime.sqlite3")
+_health_monitor = VpsHealthMonitor(_runtime_store)
 
 PRODUCT_NAME = "Agent"
 WELCOME_MESSAGE = (
@@ -1370,6 +1375,20 @@ async def interrupt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await _refresh_session_map_after_first_prompt(wid)
 
 
+async def health_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show one bounded host/runtime health snapshot on demand."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id) or not update.message:
+        return
+    try:
+        snapshot = await _health_monitor.snapshot(session_monitor)
+        issues = _health_monitor.issues(snapshot, config)
+        await safe_reply(update.message, format_health_snapshot(snapshot, issues))
+    except Exception:
+        logger.exception("Failed to build on-demand host health snapshot")
+        await safe_reply(update.message, "❌ Host health snapshot is unavailable.")
+
+
 async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Fetch Codex usage stats from TUI and send to Telegram."""
     user = update.effective_user
@@ -1940,6 +1959,10 @@ def _agent_input_queue_max_wait_seconds() -> float:
     )
 
 
+def _agent_max_active_turns() -> int:
+    return max(0, int(getattr(config, "agent_max_active_turns", 2)))
+
+
 def _queue_agent_input(
     key: tuple[int, int, str],
     text: str,
@@ -1973,6 +1996,7 @@ def _queue_agent_input(
             store_id=record.id,
         )
     )
+    turn_admission.set_pending(key[2], pending=True)
     return True, len(queue), limit
 
 
@@ -2051,6 +2075,7 @@ def _restore_agent_input_queues(bot: Bot) -> int:
                 store_id=record.id,
             )
         )
+        turn_admission.set_pending(window_id, pending=True)
         restored += 1
 
     for key in list(_agent_input_queues):
@@ -2088,6 +2113,8 @@ async def _drop_expired_agent_input(
             f"{expired} queued input(s) expired after waiting {wait_display}s "
             "for the agent to become ready",
         )
+    if not queue:
+        turn_admission.set_pending(key[2], pending=False)
 
 
 def _ensure_agent_input_drain_task(
@@ -2200,6 +2227,7 @@ async def _send_or_queue_agent_input(
                         True,
                     )
             elif not is_codex_input_ready(pane_text):
+                turn_admission.observe(window_id, active=True)
                 queued, depth, limit = _queue_agent_input(key, text)
                 if not queued:
                     result = (
@@ -2216,13 +2244,45 @@ async def _send_or_queue_agent_input(
                         True,
                     )
             else:
-                success, message = await _send_message_to_agent(
-                    user_id,
-                    thread_id,
+                turn_admission.observe(window_id, active=False)
+                admitted = await turn_admission.try_acquire(
                     window_id,
-                    text,
+                    limit=_agent_max_active_turns(),
                 )
-                result = success, message, False
+                if not admitted:
+                    queued, depth, limit = _queue_agent_input(key, text)
+                    if not queued:
+                        result = (
+                            False,
+                            "Server task capacity is full and the input queue is "
+                            f"also full ({limit} pending).",
+                            False,
+                        )
+                    else:
+                        _ensure_agent_input_drain_task(bot, key)
+                        result = (
+                            True,
+                            "Server is at its active-task limit; queued for the "
+                            f"next available slot ({depth}/{limit})",
+                            True,
+                        )
+                else:
+                    try:
+                        success, message = await _send_message_to_agent(
+                            user_id,
+                            thread_id,
+                            window_id,
+                            text,
+                        )
+                    except BaseException:
+                        turn_admission.release(window_id)
+                        raise
+                    if success:
+                        turn_admission.mark_submitted(window_id)
+                        idle_session_hibernator.forget(window_id)
+                    else:
+                        turn_admission.release(window_id)
+                    result = success, message, False
 
     if key not in _agent_input_queues and key not in _agent_input_tasks:
         _agent_input_locks.pop(key, None)
@@ -2273,6 +2333,7 @@ async def _drain_agent_input_queue(
                 )
                 queue.clear()
                 _clear_persisted_agent_input_target(key)
+                turn_admission.set_pending(window_id, pending=False)
                 return
             if capture.missing:
                 await _notify_queued_input_failure(
@@ -2283,6 +2344,7 @@ async def _drain_agent_input_queue(
                 )
                 queue.clear()
                 _clear_persisted_agent_input_target(key)
+                turn_admission.forget(window_id)
                 return
 
             pane_text = capture.text or ""
@@ -2296,25 +2358,44 @@ async def _drain_agent_input_queue(
                 )
                 queue.clear()
                 _clear_persisted_agent_input_target(key)
+                turn_admission.set_pending(window_id, pending=False)
                 return
             if not is_codex_input_ready(pane_text) or is_interactive_ui(pane_text):
+                turn_admission.observe(window_id, active=True)
+                await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
+                continue
+            turn_admission.observe(window_id, active=False)
+            admitted = await turn_admission.try_acquire(
+                window_id,
+                limit=_agent_max_active_turns(),
+            )
+            if not admitted:
                 await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
                 continue
             item = queue[0]
-            success, message = await _send_message_to_agent(
-                user_id,
-                thread_id,
-                window_id,
-                item.text,
-            )
+            try:
+                success, message = await _send_message_to_agent(
+                    user_id,
+                    thread_id,
+                    window_id,
+                    item.text,
+                )
+            except BaseException:
+                turn_admission.release(window_id)
+                raise
             if not success:
+                turn_admission.release(window_id)
                 failed_item = queue.popleft()
                 _delete_persisted_agent_inputs([failed_item])
                 await _notify_queued_input_failure(bot, user_id, thread_id, message)
                 continue
 
+            turn_admission.mark_submitted(window_id)
+            idle_session_hibernator.forget(window_id)
             submitted_item = queue.popleft()
             _delete_persisted_agent_inputs([submitted_item])
+            if not queue:
+                turn_admission.set_pending(window_id, pending=False)
             await mark_window_working(bot, user_id, window_id, thread_id)
             confirmed = await _refresh_session_map_after_first_prompt(
                 window_id,
@@ -2343,6 +2424,7 @@ async def _drain_agent_input_queue(
         queue = _agent_input_queues.get(key)
         if not queue:
             _agent_input_queues.pop(key, None)
+            turn_admission.set_pending(window_id, pending=False)
         if _agent_input_tasks.get(key) is asyncio.current_task():
             _agent_input_tasks.pop(key, None)
         if key not in _agent_input_queues and key not in _agent_input_tasks:
@@ -2360,6 +2442,7 @@ async def _cancel_agent_input_drain_tasks() -> None:
     _agent_input_tasks.clear()
     _agent_input_queues.clear()
     _agent_input_locks.clear()
+    turn_admission.reset()
 
 
 async def _discard_queued_agent_input(
@@ -2375,6 +2458,7 @@ async def _discard_queued_agent_input(
         if queue:
             _delete_persisted_agent_inputs(list(queue))
         _clear_persisted_agent_input_target(key)
+        turn_admission.set_pending(window_id, pending=False)
 
         task = _agent_input_tasks.pop(key, None)
         if task and not task.done() and task is not asyncio.current_task():
@@ -3685,14 +3769,32 @@ async def _send_to_window_when_codex_ready(
                 last_message = "Agent UI is not ready for input"
             await asyncio.sleep(interval)
             continue
-        send_ok, send_msg = await _send_message_to_agent(
-            user_id,
-            thread_id,
+        turn_admission.observe(window_id, active=False)
+        admitted = await turn_admission.try_acquire(
             window_id,
-            text,
+            limit=_agent_max_active_turns(),
         )
+        if not admitted:
+            last_message = (
+                "Server is at its active-task limit; waiting for an available slot"
+            )
+            await asyncio.sleep(interval)
+            continue
+        try:
+            send_ok, send_msg = await _send_message_to_agent(
+                user_id,
+                thread_id,
+                window_id,
+                text,
+            )
+        except BaseException:
+            turn_admission.release(window_id)
+            raise
         if send_ok:
+            turn_admission.mark_submitted(window_id)
+            idle_session_hibernator.forget(window_id)
             return True, send_msg
+        turn_admission.release(window_id)
         last_message = send_msg
         if (
             "Window is not running an agent" not in send_msg
@@ -4392,8 +4494,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             await safe_reply(
                 update.message,
-                f"♻️ Window `{display}` disappeared. Recreating it and resuming "
-                "the previous session...",
+                (
+                    f"💤 Session `{display}` was paused while idle. Waking it and "
+                    "resuming your previous context..."
+                    if state.hibernated_at
+                    else f"♻️ Window `{display}` disappeared. Recreating it and "
+                    "resuming the previous session..."
+                ),
             )
             recovered, recovery_message = await _recover_missing_bound_window(
                 user_id=user.id,
@@ -6257,6 +6364,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 
 async def post_init(application: Application) -> None:
     global agent_backend, session_monitor, _status_poll_task, _auto_update_task
+    global _health_task
     global _runtime_stopped
 
     _runtime_stopped = False
@@ -6283,6 +6391,7 @@ async def post_init(application: Application) -> None:
         BotCommand("kill", "Kill session and delete topic"),
         BotCommand("unbind", "Unbind topic from session (keeps window running)"),
         BotCommand("usage", USAGE_COMMAND_DESCRIPTION),
+        BotCommand("health", "Show host and AgentBot health"),
         BotCommand("agentlogin", AGENT_LOGIN_COMMAND_DESCRIPTION),
         BotCommand("agentaccount", ACCOUNT_COMMAND_DESCRIPTION),
         BotCommand("codexlogin", "Login to Codex"),
@@ -6331,6 +6440,16 @@ async def post_init(application: Application) -> None:
     _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
     logger.info("Status polling task started")
 
+    if config.health_alerts_enabled:
+        _health_task = asyncio.create_task(
+            _health_monitor.run(
+                application.bot,
+                config,
+                lambda: session_monitor,
+            )
+        )
+        logger.info("Host health monitor started")
+
     from .updater import auto_update_loop_with_notifier
 
     _auto_update_task = asyncio.create_task(
@@ -6348,6 +6467,7 @@ async def _stop_runtime(
     application: Application, *, drain_message_workers: bool
 ) -> None:
     global agent_backend, session_monitor, _status_poll_task, _auto_update_task
+    global _health_task
     global _runtime_stopped
 
     if _runtime_stopped:
@@ -6372,6 +6492,15 @@ async def _stop_runtime(
             pass
         _auto_update_task = None
         logger.info("Auto-update task stopped")
+
+    if _health_task:
+        _health_task.cancel()
+        try:
+            await _health_task
+        except asyncio.CancelledError:
+            pass
+        _health_task = None
+        logger.info("Host health monitor stopped")
 
     await _cancel_agent_input_drain_tasks()
 
@@ -6453,6 +6582,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("kill", topic_closed_handler))
     application.add_handler(CommandHandler("unbind", unbind_command))
     application.add_handler(CommandHandler("usage", usage_command))
+    application.add_handler(CommandHandler("health", health_command))
     application.add_handler(CommandHandler("agentlogin", agent_login_command))
     application.add_handler(CommandHandler("agentaccount", agent_account_command))
     application.add_handler(CommandHandler("codexlogin", codex_login_command))
