@@ -278,6 +278,15 @@ class Config:
                 )
             ),
         )
+        self.transcript_confirm_timeout_seconds = max(
+            5.0,
+            float(
+                os.getenv(
+                    "TELEGRAM_AGENT_BOT_TRANSCRIPT_CONFIRM_TIMEOUT_SECONDS",
+                    "15",
+                )
+            ),
+        )
         self.agent_startup_timeout_seconds = max(
             30.0,
             float(

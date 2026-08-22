@@ -2302,6 +2302,12 @@ async def _notify_queued_input_failure(
     thread_id: int | None,
     message: str,
 ) -> None:
+    logger.warning(
+        "Queued agent input delivery failed (user=%d thread=%s): %s",
+        user_id,
+        thread_id,
+        message,
+    )
     try:
         await safe_send(
             bot,
@@ -2414,8 +2420,9 @@ async def _drain_agent_input_queue(
                     bot,
                     user_id,
                     thread_id,
-                    "Agent did not confirm that the queued message reached the "
-                    "transcript after submit retry",
+                    "Delivery was not confirmed in the agent transcript. The bot "
+                    "did not resend automatically to avoid a duplicate; send the "
+                    "message again if no reply appears.",
                 )
             await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
     except asyncio.CancelledError:
@@ -3898,9 +3905,11 @@ async def _confirm_first_prompt_delivery(
     window_id: str,
     text: str,
     *,
-    transcript_timeout: float = 5.0,
+    transcript_timeout: float | None = None,
 ) -> bool:
     """Confirm that the first forwarded prompt reached the Codex transcript."""
+    if transcript_timeout is None:
+        transcript_timeout = config.transcript_confirm_timeout_seconds
     transcript_ok = await session_manager.wait_for_transcript_user_message(
         window_id,
         text,
@@ -4610,9 +4619,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if not confirmed:
             await safe_reply(
                 update.message,
-                "⚠️ I sent the message, but the agent did not confirm it reached "
-                "the transcript after a submit retry. If the topic stays idle, "
-                "send it again or use /interrupt.",
+                "⚠️ Delivery was not confirmed in the agent transcript. The bot "
+                "did not resend automatically to avoid a duplicate. If no reply "
+                "appears, send the message again or use /interrupt.",
             )
 
     # Start background capture for ! bash command output

@@ -210,6 +210,7 @@ class TestConfigValid:
         cfg = Config()
         assert cfg.agent_input_queue_max_size == 20
         assert cfg.agent_input_queue_max_wait_seconds == 1800
+        assert cfg.transcript_confirm_timeout_seconds == 15
 
     def test_custom_agent_input_queue_limits(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_AGENT_INPUT_QUEUE_MAX_SIZE", "3")
@@ -225,6 +226,22 @@ class TestConfigValid:
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_AGENT_INPUT_QUEUE_MAX_WAIT_SECONDS", "0")
         cfg = Config()
         assert cfg.agent_input_queue_max_wait_seconds == 0
+
+    def test_transcript_confirmation_timeout_is_configurable(self, monkeypatch):
+        monkeypatch.setenv(
+            "TELEGRAM_AGENT_BOT_TRANSCRIPT_CONFIRM_TIMEOUT_SECONDS",
+            "24.5",
+        )
+        cfg = Config()
+        assert cfg.transcript_confirm_timeout_seconds == 24.5
+
+    def test_transcript_confirmation_timeout_has_safe_minimum(self, monkeypatch):
+        monkeypatch.setenv(
+            "TELEGRAM_AGENT_BOT_TRANSCRIPT_CONFIRM_TIMEOUT_SECONDS",
+            "1",
+        )
+        cfg = Config()
+        assert cfg.transcript_confirm_timeout_seconds == 5
 
     def test_account_rotation_defaults_disabled(self):
         cfg = Config()
