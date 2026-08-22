@@ -1,68 +1,144 @@
-# TelegramAgentBot Socket Backend
+# TelegramAgentBot socket backend
 
-Optional backend plugin for running TelegramAgentBot as a center bot with one or
-more remote agent nodes.
+The socket backend runs TelegramAgentBot as a center bot while Codex or Claude
+Code sessions run on one or more remote agent nodes.
 
-The default TelegramAgentBot install still uses local tmux. Install this plugin
-only on machines that need the socket cluster mode.
+Use the built-in `local` backend for a single-machine installation. Socket mode
+is intended for trusted multi-host setups where the center can reach each node
+through loopback forwarding or a private network.
+
+## Architecture
+
+```text
+Telegram
+   │
+   ▼
+center bot (`socket-cluster` backend)
+   │  TCP over SSH/private network
+   ▼
+agent node (`telegram-agent-node`)
+   │
+   ▼
+local tmux and agent transcript files
+```
+
+The plugin supports remote directory browsing, session creation and resume,
+text and control-key input, terminal capture, file upload, and transcript event
+delivery.
 
 ## Install
 
-From the main repository checkout:
+Install the core package and plugin into the same environment from the main
+repository checkout:
 
 ```bash
-pip install -e plugins/socket_backend
+uv pip install -e . -e plugins/socket_backend
 ```
 
-## Agent Node
-
-Run this on the machine that should host Codex/tmux sessions:
+Confirm both entry points are available:
 
 ```bash
-telegram-agent-node --node-id macbook --host 127.0.0.1 --port 8765
+telegram-agent-bot --version
+telegram-agent-node --help
 ```
 
-For image/file uploads, both sides default to a 25 MiB JSON line limit. You can
-raise or lower it with:
+## Start an agent node
+
+Run the node on the machine that owns the agent CLI, tmux server, credentials,
+projects, and transcript files:
 
 ```bash
-telegram-agent-node --node-id macbook --max-message-bytes 26214400
+telegram-agent-node \
+  --node-id macbook \
+  --host 127.0.0.1 \
+  --port 8765
 ```
 
-If the node is behind NAT, expose it to the VPS center bot with reverse SSH:
+The node ID is stored in topic bindings. Choose a stable, unique value and do
+not reuse it for another machine.
 
-```bash
-ssh -N -R 127.0.0.1:8765:127.0.0.1:8765 ubuntu@your-vps
-```
+Available environment variables:
 
-## Center Bot
+| Variable | Default | Description |
+| --- | --- | --- |
+| `TELEGRAM_AGENT_NODE_ID` | `local` | Stable node identifier |
+| `TELEGRAM_AGENT_NODE_HOST` | `127.0.0.1` | Listener address |
+| `TELEGRAM_AGENT_NODE_PORT` | `8765` | Listener port |
+| `TELEGRAM_AGENT_NODE_LOG_LEVEL` | `INFO` | Python log level |
+| `TELEGRAM_AGENT_NODE_MAX_MESSAGE_BYTES` | `26214400` | Maximum accepted JSON line size |
 
-Configure the VPS bot:
+Uploaded files are written below `~/.telegram-agent-bot/uploads/` on the node.
+The local path is then sent to the agent session.
+
+## Connect the center bot
+
+Configure the Telegram-facing process:
 
 ```ini
 TELEGRAM_AGENT_BOT_BACKEND=socket-cluster
 TELEGRAM_AGENT_BOT_BACKEND_PLUGINS=telegram_agent_bot_socket_backend
 TELEGRAM_AGENT_BOT_SOCKET_NODES=macbook=127.0.0.1:8765
+TELEGRAM_AGENT_BOT_SOCKET_TIMEOUT=20
+TELEGRAM_AGENT_BOT_SOCKET_RECONNECT_DELAY=5
 TELEGRAM_AGENT_BOT_SOCKET_MAX_MESSAGE_BYTES=26214400
 ```
 
-Then restart `telegram-agent-bot`.
+Multiple nodes use comma-separated `node-id=host:port` entries:
 
-## Service Examples
+```ini
+TELEGRAM_AGENT_BOT_SOCKET_NODES=macbook=127.0.0.1:8765,workstation=127.0.0.1:8766
+```
 
-Example service files live under `examples/`:
+Restart the center bot only after the node listener and network path have been
+verified.
+
+## Secure the transport
+
+The socket protocol does not provide public-internet authentication or TLS.
+Do not expose the listener directly to an untrusted network.
+
+For a node behind NAT, keep it bound to loopback and create a reverse SSH tunnel
+to the center host:
+
+```bash
+ssh -N \
+  -o ServerAliveInterval=30 \
+  -o ExitOnForwardFailure=yes \
+  -R 127.0.0.1:8765:127.0.0.1:8765 \
+  user@center-host
+```
+
+The center then connects to `127.0.0.1:8765`. Use a dedicated SSH identity,
+restrict its server-side permissions, and supervise the tunnel separately.
+
+If a private overlay network is used instead, enforce host identity and firewall
+rules at that layer before binding the node to a non-loopback address.
+
+## Service examples
+
+Templates are available under `examples/`:
 
 - `examples/systemd/telegram-agent-bot.socket-center.service`
 - `examples/systemd/telegram-agent-node.service`
 - `examples/systemd/socket-center.env.example`
-- `examples/launchd/io.github.telegramagentbot.agent-node.plist`
-- `examples/launchd/io.github.telegramagentbot.center-bot.plist`
+- `examples/launchd/io.github.telegramcodexbot.agent-node.plist`
+- `examples/launchd/io.github.telegramcodexbot.center-bot.plist`
 
-## Notes
+Replace every placeholder user, path, address, and environment file. Keep
+environment files owner-readable only.
 
-- The plugin proxies directory browsing, session creation, text sends, control
-  keys, capture, photo/file upload, and transcript events.
-- Uploaded files are written on the agent node under
-  `~/.telegram-agent-bot/uploads/` and Codex receives the node-local file path.
-- The node id should stay stable. Current routing uses `node_id:tmux_window_id`
-  as the center-visible session key.
+## Verification
+
+1. Start the node on loopback.
+2. Confirm the center can open the configured TCP address.
+3. Start the center bot with one node.
+4. Create a Telegram topic and browse the node's project roots.
+5. Start a disposable session and test text, Escape, capture, and file upload.
+6. Restart the center bot and confirm the topic still resolves to the same node.
+
+Inspect both processes when a request fails. A center timeout can be caused by
+the network path, a stopped node, an oversized payload, or a blocked local agent
+session.
+
+See [Agent backend plugins](../../docs/agent_backend_plugins.md) for the core
+backend contract and plugin-development guidance.

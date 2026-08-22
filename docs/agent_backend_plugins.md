@@ -1,70 +1,110 @@
-# Agent Backend Plugins
+# Agent backend plugins
 
-This page explains how to split TelegramAgentBot remote agent backends into standalone plugins and which interfaces they must implement.
+TelegramAgentBot routes session operations through an agent backend. The
+built-in `local` backend controls tmux and transcript files on the same machine
+as the Telegram bot. A plugin can route those operations to another transport
+or host.
 
-TelegramAgentBot keeps the default single-machine path on the built-in `local`
-backend. A real multi-node setup should live in a separate installable backend
-plugin so normal tmux usage stays simple and rollback-safe.
+Most installations should use `local`. Install a backend plugin only when the
+Telegram-facing process and agent sessions must run on different machines.
 
-## Current Core Support
+## Loading a backend
 
-The core already provides the plugin loading surface:
+Select a backend by ID:
 
-- `TELEGRAM_AGENT_BOT_BACKEND=<backend-id>`
-- `TELEGRAM_AGENT_BOT_BACKEND_PLUGINS=<python.module[,python.module...]>`
-- Python entry point group: `telegram_agent_bot.backends`
+```ini
+TELEGRAM_AGENT_BOT_BACKEND=local
+```
 
-A backend plugin implements `AgentBackend`:
+Plugins can register backends through the Python entry point group:
 
-- `prepare()`
-- `start(message_callback)`
-- `stop()`
-- `create_session(request)`
-- `send_message(target, text)`
-- `send_control(target, key)`
-- `capture(target, with_ansi=False)`
+```toml
+[project.entry-points."telegram_agent_bot.backends"]
+my-backend = "my_package.backend:MyBackend"
+```
 
-The core can now bind non-local `AgentTarget` values and route messages back by
-`backend_id`, `node_id`, and `session_id`.
+During development, modules can also be imported explicitly:
 
-Backends can also implement `AgentBrowser` for first-class remote session
-creation:
+```ini
+TELEGRAM_AGENT_BOT_BACKEND=my-backend
+TELEGRAM_AGENT_BOT_BACKEND_PLUGINS=my_package.backend
+```
+
+The plugin package must be installed in the same Python environment as
+TelegramAgentBot.
+
+## Backend contract
+
+A backend implements `telegram_agent_bot.backends.base.AgentBackend`:
+
+```python
+class AgentBackend(Protocol):
+    backend_id: str
+
+    def info(self) -> BackendInfo: ...
+    def prepare(self) -> None: ...
+    async def start(self, message_callback: MessageCallback) -> None: ...
+    async def stop(self) -> None: ...
+    async def create_session(
+        self, request: CreateSessionRequest
+    ) -> CreateSessionResult: ...
+    async def send_message(
+        self, target: AgentTarget, text: str
+    ) -> SendResult: ...
+    async def send_control(
+        self, target: AgentTarget, key: str
+    ) -> SendResult: ...
+    async def capture(
+        self, target: AgentTarget, *, with_ansi: bool = False
+    ) -> str | None: ...
+```
+
+`AgentTarget` identifies a session with `backend_id`, `node_id`, `session_id`,
+and, when applicable, `window_id`. Backend IDs and node IDs must remain stable
+because topic bindings persist across process restarts.
+
+`start()` receives an asynchronous callback for transcript events. Backends
+must preserve event ordering within one session and should return clear failure
+messages instead of raising transport details into Telegram handlers.
+
+## Optional browser capability
+
+A backend may implement `AgentBrowser` to support the normal Telegram project
+picker and resume flow:
 
 - `list_roots()`
 - `list_directory(node_id, path, root_path="")`
 - `list_sessions(node_id, cwd)`
 
-## Included Socket Backend Plugin
+Without this capability, the plugin is responsible for providing enough target
+information to create or bind a session through its own workflow.
 
-The repository includes the first real plugin as a separate package:
+Directory listings must enforce the selected root on the backend side. Do not
+rely only on Telegram callback data for path authorization.
 
-```text
-plugins/socket_backend
-```
+## Included socket backend
 
-It provides:
+The repository contains an optional package at
+[`plugins/socket_backend`](../plugins/socket_backend/README.md). It registers
+the `socket-cluster` backend and provides the `telegram-agent-node` command.
 
-- a center-side backend registered as `socket-cluster`;
-- an agent-node CLI: `telegram-agent-node`;
-- a tiny newline-delimited JSON protocol over TCP;
-- remote root browsing, directory browsing, resume-session lookup, session
-  creation, text send, control key send, pane capture, and transcript event
-  streaming;
-- file upload for Telegram photo/file forwarding to remote nodes.
+The center bot sends commands to one or more nodes, and nodes stream transcript
+events back to the center. Supported operations include:
 
-This avoids putting cluster code into the main bot package. It also avoids
-requiring a public domain: a Mac or another private machine can expose its
-local agent node to the VPS through a reverse SSH tunnel.
+- root and directory browsing;
+- session lookup, creation, and resume;
+- text and control-key input;
+- terminal capture;
+- photo and file upload;
+- transcript event delivery.
+
+Install it from the repository checkout:
 
 ```bash
-# On the agent node machine:
-telegram-agent-node --node-id macbook --host 127.0.0.1 --port 8765
-
-# Also on the agent node machine, tunnel that local port to the VPS:
-ssh -N -R 127.0.0.1:8765:127.0.0.1:8765 ubuntu@your-vps
+uv pip install -e plugins/socket_backend
 ```
 
-Center bot `.env`:
+Center configuration:
 
 ```ini
 TELEGRAM_AGENT_BOT_BACKEND=socket-cluster
@@ -73,84 +113,41 @@ TELEGRAM_AGENT_BOT_SOCKET_NODES=macbook=127.0.0.1:8765
 TELEGRAM_AGENT_BOT_SOCKET_MAX_MESSAGE_BYTES=26214400
 ```
 
-Install the plugin on machines that use socket mode:
+## Transport security
+
+The included socket protocol is intended for a trusted loopback or private
+network path. It does not provide public-internet authentication or TLS.
+
+- Bind agent nodes to `127.0.0.1` unless a private network policy protects the
+  listener.
+- Use an SSH tunnel or a private overlay network between hosts.
+- Apply firewall rules before binding to a non-loopback address.
+- Keep maximum message size bounded.
+- Treat uploaded files, project paths, terminal output, and transcript events as
+  sensitive data.
+
+Example reverse SSH tunnel from an agent node to a center host:
 
 ```bash
-pip install -e plugins/socket_backend
+ssh -N -R 127.0.0.1:8765:127.0.0.1:8765 user@center-host
 ```
 
-## Protocol Shape
+## Plugin design guidelines
 
-Use one request per TCP connection for commands:
+- Keep transport-specific code outside the core bot package.
+- Make `prepare()` idempotent and fail before Telegram polling starts when the
+  configuration is invalid.
+- Bound connection, request, and shutdown timeouts.
+- Avoid storing credentials in `AgentTarget` or Telegram callback payloads.
+- Validate node IDs, paths, file names, and message sizes at the receiving end.
+- Make retries explicit and safe for operations that create sessions or upload
+  files.
+- Provide unit tests for target serialization, path authorization, error
+  mapping, and event ordering.
+- Document service ownership, network boundaries, and recovery behavior.
 
-```json
-{"id":"...","op":"create_session","node_id":"macbook","cwd":"/Users/me/Projects/app","window_name":"app","resume_session_id":""}
-{"id":"...","op":"send_message","target":{"backend_id":"socket-cluster","node_id":"macbook","session_id":"..."},"text":"hello"}
-{"id":"...","op":"send_control","target":{"backend_id":"socket-cluster","node_id":"macbook","session_id":"..."},"key":"Escape"}
-{"id":"...","op":"capture","target":{"backend_id":"socket-cluster","node_id":"macbook","session_id":"..."},"with_ansi":true}
-{"id":"...","op":"list_roots"}
-{"id":"...","op":"list_directory","path":"/Users/me/Projects","root_path":"/Users/me/Projects"}
-{"id":"...","op":"list_sessions","cwd":"/Users/me/Projects/app"}
-{"id":"...","op":"upload_file","target":{"backend_id":"socket-cluster","node_id":"macbook","session_id":"..."},"filename":"photo.jpg","content_b64":"..."}
-```
+## Service examples
 
-Use a long-lived subscription connection for agent events:
-
-```json
-{"op":"subscribe","node_id":"macbook"}
-```
-
-Agent nodes stream parsed `NewMessage`-compatible payloads back to the center:
-
-```json
-{"op":"message","node_id":"macbook","window_id":"@7","message":{"session_id":"macbook:@7","text":"done","is_complete":true,"content_type":"text","role":"assistant"}}
-```
-
-The agent node reuses the existing `LocalTmuxBackend` internally. That keeps
-tmux, transcript parsing, screenshots, control keys, and session creation
-consistent with the default local mode.
-
-## Why Not GitHub As The Live Transport
-
-GitHub Issues or repository files can work as a slow control plane, but they are
-not ideal for live Telegram chat:
-
-- polling latency is noticeable;
-- API rate limits and concurrent edits need careful backoff;
-- secrets and transient chat payloads become harder to keep out of repository
-state;
-- screenshots and binary attachments need a separate storage path.
-
-GitHub remains useful for async task orchestration, which is what
-`telegram-agent-bridge` already covers. For live center-bot / agent-node chat,
-a socket plugin over reverse SSH is simpler and faster.
-
-## Service Examples
-
-Example service files are included in the plugin package:
-
-- `plugins/socket_backend/examples/systemd/telegram-agent-bot.socket-center.service`
-- `plugins/socket_backend/examples/systemd/telegram-agent-node.service`
-- `plugins/socket_backend/examples/systemd/socket-center.env.example`
-- `plugins/socket_backend/examples/launchd/io.github.telegramagentbot.agent-node.plist`
-- `plugins/socket_backend/examples/launchd/io.github.telegramagentbot.center-bot.plist`
-
-Use systemd user services for a Linux/VPS center bot or Linux agent node. Use
-LaunchAgent plists for a macOS agent node. The plist files contain placeholder
-paths like `/Users/YOUR_USER/Projects/TelegramAgentBot`; replace them before
-loading with `launchctl`.
-
-## Implementation Order
-
-1. Done: add optional browser capability to core and keep local mode as the
-   default path.
-2. Done: create the separate socket backend package with entry point
-   registration.
-3. Done: implement the agent-node CLI using `LocalTmuxBackend`.
-4. Done: implement the center-side `socket-cluster` backend request/response
-   methods.
-5. Done: add event subscription so node transcript messages call the center
-   `message_callback`.
-6. Done: add file-transfer support for photos and attachments.
-7. Done: add systemd/LaunchAgent examples for the VPS center bot and Mac agent
-   node.
+The socket package includes systemd and launchd examples under
+`plugins/socket_backend/examples/`. Replace all placeholder users, paths,
+addresses, and environment files before installing them.

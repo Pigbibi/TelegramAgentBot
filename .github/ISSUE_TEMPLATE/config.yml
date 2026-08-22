@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/Pigbibi/TelegramAgentBot/blob/main/docs/README.md
+    about: Read installation, configuration, deployment, and troubleshooting guides.
+  - name: Security policy
+    url: https://github.com/Pigbibi/TelegramAgentBot/blob/main/SECURITY.md
+    about: Read this before reporting a vulnerability or credential exposure.

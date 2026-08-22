@@ -11,13 +11,13 @@ Typical usage:
 
 The configuration file can use one of two modes:
 
-1. legacy target mode, where the config contains a `targets` array and each
-   target points at a GitHub repo and tmux window independently;
+1. target mode, where the config contains a `targets` array and each target
+   points at a GitHub repository and tmux window independently;
 2. orchestrator mode, where the config contains a single `source_repo` /
-   `runner_window` pair and the bridge consumes a monthly issue published by a
-   GitHub Actions control-plane repository such as `AuditOrchestrator`.
+   `runner_window` pair and the bridge consumes an issue from a control-plane
+   repository.
 
-Legacy target mode targets may define:
+Target mode entries may define:
 
     {
       "name": "crypto-snapshot",

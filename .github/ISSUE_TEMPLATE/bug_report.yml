@@ -1,0 +1,97 @@
+name: Bug report
+description: Report reproducible behavior in TelegramAgentBot
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Remove bot tokens, API keys, user IDs, private prompts, transcripts, repository names, and private paths before submitting.
+  - type: checkboxes
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: I reproduced the problem on the latest release or `main`.
+          required: true
+        - label: This report does not contain secrets or private data.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+  - type: textarea
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Configure ...
+        2. Start ...
+        3. Send ...
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: TelegramAgentBot version or commit
+      placeholder: "telegram-agent-bot --version or Git commit"
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Agent
+      options:
+        - Codex CLI
+        - Claude Code
+        - Both
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Backend
+      options:
+        - local
+        - socket-cluster
+        - another plugin
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Environment
+      description: OS, Python version, install method, agent CLI version, and service manager.
+      placeholder: |
+        OS: Ubuntu 24.04
+        Python: 3.12
+        Install: source checkout with uv
+        Agent CLI: ...
+        Service: systemd user service
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Redacted configuration
+      description: Include only relevant variable names and non-sensitive values.
+      render: shell
+  - type: textarea
+    attributes:
+      label: Redacted logs
+      description: Include the smallest useful excerpt. Do not paste a complete transcript.
+      render: text
+  - type: textarea
+    attributes:
+      label: Additional context
+      description: Add anything else needed to reproduce the issue.
