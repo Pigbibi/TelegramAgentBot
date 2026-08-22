@@ -29,6 +29,19 @@ def _base_env(monkeypatch, tmp_path):
         "TELEGRAM_AGENT_BOT_AGENT_STARTUP_TIMEOUT_SECONDS", raising=False
     )
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_MAX_CONCURRENT_UPDATES", raising=False)
+    monkeypatch.delenv("TELEGRAM_AGENT_BOT_MAX_ACTIVE_TURNS", raising=False)
+    monkeypatch.delenv("TELEGRAM_AGENT_BOT_IDLE_SESSION_TIMEOUT_SECONDS", raising=False)
+    for key in (
+        "TELEGRAM_AGENT_BOT_HEALTH_ALERTS_ENABLED",
+        "TELEGRAM_AGENT_BOT_HEALTH_CHECK_INTERVAL_SECONDS",
+        "TELEGRAM_AGENT_BOT_HEALTH_ALERT_COOLDOWN_SECONDS",
+        "TELEGRAM_AGENT_BOT_HEALTH_MEMORY_AVAILABLE_MB",
+        "TELEGRAM_AGENT_BOT_HEALTH_SWAP_USED_PERCENT",
+        "TELEGRAM_AGENT_BOT_HEALTH_DISK_USED_PERCENT",
+        "TELEGRAM_AGENT_BOT_HEALTH_QUEUE_OLDEST_SECONDS",
+        "TELEGRAM_AGENT_BOT_HEALTH_TRANSCRIPT_LAG_SECONDS",
+    ):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test:token")
     monkeypatch.setenv("ALLOWED_USERS", "12345")
     monkeypatch.setenv("TELEGRAM_AGENT_BOT_DIR", str(tmp_path))
@@ -66,6 +79,35 @@ class TestConfigValid:
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_MAX_CONCURRENT_UPDATES", "4")
         cfg = Config()
         assert cfg.telegram_max_concurrent_updates == 4
+
+    def test_local_agent_turns_default_to_two(self):
+        cfg = Config()
+        assert cfg.agent_max_active_turns == 2
+
+    def test_local_agent_turn_limit_can_be_disabled(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_MAX_ACTIVE_TURNS", "0")
+        cfg = Config()
+        assert cfg.agent_max_active_turns == 0
+
+    def test_idle_sessions_default_to_thirty_minutes(self):
+        cfg = Config()
+        assert cfg.idle_session_timeout_seconds == 1800.0
+
+    def test_idle_session_hibernation_can_be_disabled(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_IDLE_SESSION_TIMEOUT_SECONDS", "0")
+        cfg = Config()
+        assert cfg.idle_session_timeout_seconds == 0.0
+
+    def test_small_host_health_defaults(self):
+        cfg = Config()
+        assert cfg.health_alerts_enabled is True
+        assert cfg.health_check_interval_seconds == 60.0
+        assert cfg.health_alert_cooldown_seconds == 3600.0
+        assert cfg.health_memory_available_mb == 256.0
+        assert cfg.health_swap_used_percent == 75.0
+        assert cfg.health_disk_used_percent == 80.0
+        assert cfg.health_queue_oldest_seconds == 600.0
+        assert cfg.health_transcript_lag_seconds == 120.0
 
     def test_claude_agent_defaults(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "claude")

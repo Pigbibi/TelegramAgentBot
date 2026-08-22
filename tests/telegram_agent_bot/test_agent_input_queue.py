@@ -7,6 +7,7 @@ import pytest
 
 from telegram_agent_bot import bot as bot_module
 from telegram_agent_bot.durable_state import DurableRuntimeStore
+from telegram_agent_bot.turn_admission import turn_admission
 
 
 @pytest.fixture(autouse=True)
@@ -17,10 +18,12 @@ def clear_agent_input_queue_state(monkeypatch, tmp_path):
     bot_module._agent_input_queues.clear()
     bot_module._agent_input_tasks.clear()
     bot_module._agent_input_locks.clear()
+    turn_admission.reset()
     yield
     bot_module._agent_input_queues.clear()
     bot_module._agent_input_tasks.clear()
     bot_module._agent_input_locks.clear()
+    turn_admission.reset()
 
 
 def test_restore_agent_input_queues_after_restart(monkeypatch):
@@ -206,6 +209,61 @@ async def test_send_or_queue_agent_input_sends_immediately_when_ready(monkeypatc
     send_message.assert_awaited_once_with(12345, 42, "@1", "prompt")
     assert bot_module._agent_input_queues == {}
     assert bot_module._agent_input_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_send_or_queue_agent_input_queues_at_server_turn_limit(monkeypatch):
+    capture = SimpleNamespace(
+        text="previous output\n\n›\n\n  gpt-5.5 · ~/repo", missing=False
+    )
+    send_message = AsyncMock(return_value=(True, "Sent"))
+    monkeypatch.setattr(
+        bot_module, "capture_agent_output", AsyncMock(return_value=capture)
+    )
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+    monkeypatch.setattr(bot_module.config, "agent_max_active_turns", 2)
+    monkeypatch.setattr(bot_module, "_ensure_agent_input_drain_task", lambda *_: None)
+    turn_admission.observe("@2", active=True)
+    turn_admission.observe("@3", active=True)
+
+    ok, message, queued = await bot_module._send_or_queue_agent_input(
+        MagicMock(),
+        12345,
+        42,
+        "@1",
+        "prompt",
+    )
+
+    assert (ok, queued) == (True, True)
+    assert "active-task limit" in message
+    send_message.assert_not_awaited()
+    assert turn_admission.has_pending("@1") is True
+
+
+@pytest.mark.asyncio
+async def test_cancelled_send_releases_turn_reservation(monkeypatch):
+    capture = SimpleNamespace(
+        text="previous output\n\n›\n\n  gpt-5.5 · ~/repo", missing=False
+    )
+    monkeypatch.setattr(
+        bot_module, "capture_agent_output", AsyncMock(return_value=capture)
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_send_message_to_agent",
+        AsyncMock(side_effect=asyncio.CancelledError),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await bot_module._send_or_queue_agent_input(
+            MagicMock(),
+            12345,
+            42,
+            "@1",
+            "prompt",
+        )
+
+    assert turn_admission.snapshot().reserved_windows == frozenset()
 
 
 @pytest.mark.asyncio

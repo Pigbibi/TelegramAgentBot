@@ -170,6 +170,7 @@ class WindowState:
     model: str = ""
     reasoning_effort: str = ""
     fast_mode: bool = False
+    hibernated_at: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -192,6 +193,8 @@ class WindowState:
             d["reasoning_effort"] = self.reasoning_effort
         if self.fast_mode:
             d["fast_mode"] = True
+        if self.hibernated_at:
+            d["hibernated_at"] = self.hibernated_at
         return d
 
     @classmethod
@@ -209,6 +212,7 @@ class WindowState:
             model=str(data.get("model") or ""),
             reasoning_effort=str(data.get("reasoning_effort") or ""),
             fast_mode=bool(data.get("fast_mode", False)),
+            hibernated_at=float(data.get("hibernated_at", 0.0) or 0.0),
         )
 
 
@@ -1233,6 +1237,7 @@ class SessionManager:
         state.model = ""
         state.reasoning_effort = ""
         state.fast_mode = False
+        state.hibernated_at = 0.0
         self._save_state()
         logger.info("Cleared session for window_id %s", window_id)
 
@@ -1260,9 +1265,35 @@ class SessionManager:
         state.reasoning_effort = reasoning_effort
         state.fast_mode = fast_mode
         state.launch_started_at = time.time()
+        state.hibernated_at = 0.0
         if window_name:
             self.window_display_names[window_id] = window_name
         self._save_state()
+
+    def mark_window_hibernated(
+        self,
+        window_id: str,
+        *,
+        hibernated_at: float | None = None,
+    ) -> bool:
+        """Persist that an idle window was intentionally stopped for recovery."""
+        state = self.get_window_state(window_id)
+        timestamp = time.time() if hibernated_at is None else hibernated_at
+        if state.hibernated_at == timestamp:
+            return False
+        state.hibernated_at = timestamp
+        self._save_state()
+        logger.info("Window %s hibernated_at=%s", window_id, timestamp)
+        return True
+
+    def clear_window_hibernated(self, window_id: str) -> bool:
+        """Clear stale hibernation metadata after a window is live again."""
+        state = self.window_states.get(window_id)
+        if state is None or not state.hibernated_at:
+            return False
+        state.hibernated_at = 0.0
+        self._save_state()
+        return True
 
     def mark_window_usage_limit_exceeded(
         self,
@@ -1440,6 +1471,7 @@ class SessionManager:
         state.cwd = cwd
         state.usage_limit_exceeded = False
         state.launch_started_at = 0.0
+        state.hibernated_at = 0.0
         if agent_type:
             state.agent_type = normalize_agent_type(agent_type)
         canonical_id = _canonical_session_id(session_id)
