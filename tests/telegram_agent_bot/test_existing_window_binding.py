@@ -663,7 +663,8 @@ class TestExistingWindowBinding:
             await text_handler(update, context)
 
         safe_reply.assert_awaited_once()
-        assert "did not confirm" in safe_reply.await_args.args[1]
+        assert "not confirmed" in safe_reply.await_args.args[1]
+        assert "avoid a duplicate" in safe_reply.await_args.args[1]
 
     @pytest.mark.asyncio
     async def test_bound_topic_reports_when_direct_send_fails(self):
@@ -1083,7 +1084,7 @@ async def test_confirm_first_prompt_delivery_prefers_transcript_confirmation():
     mock_sm.wait_for_transcript_user_message.assert_awaited_once_with(
         "@9",
         "hello",
-        timeout=5.0,
+        timeout=15.0,
     )
     mock_tmux.prompt_still_pending.assert_not_awaited()
     mock_tmux.send_control_key.assert_not_awaited()
@@ -1108,7 +1109,7 @@ async def test_confirm_first_prompt_delivery_rejects_cleared_unrecorded_input():
     mock_sm.wait_for_transcript_user_message.assert_awaited_once_with(
         "@9",
         "silently dropped",
-        timeout=5.0,
+        timeout=15.0,
     )
     mock_tmux.prompt_still_pending.assert_awaited_once_with("@9", "silently dropped")
     mock_tmux.send_control_key.assert_not_awaited()
@@ -1141,7 +1142,7 @@ async def test_refresh_session_map_retries_enter_when_first_prompt_is_pending():
     mock_sm.wait_for_transcript_user_message.assert_awaited_once_with(
         "@9",
         "hello",
-        timeout=5.0,
+        timeout=15.0,
     )
 
 

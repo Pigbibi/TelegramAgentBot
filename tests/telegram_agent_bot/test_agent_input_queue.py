@@ -420,7 +420,8 @@ async def test_drain_agent_input_queue_notifies_when_submit_confirmation_fails(
     await bot_module._drain_agent_input_queue(MagicMock(), key)
 
     notify.assert_awaited_once()
-    assert "did not confirm" in notify.await_args.args[3]
+    assert "not confirmed" in notify.await_args.args[3]
+    assert "avoid a duplicate" in notify.await_args.args[3]
     assert key not in bot_module._agent_input_queues
 
 
