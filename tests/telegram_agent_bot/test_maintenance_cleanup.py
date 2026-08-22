@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from telegram_agent_bot import maintenance_cleanup as cleanup
 
@@ -95,6 +96,64 @@ def test_clean_action_runner_removes_work_and_old_versions(tmp_path: Path) -> No
     assert current_ext.exists()
     assert not old_bin.exists()
     assert not old_ext.exists()
+
+
+def test_clean_uv_cache_skips_runtime_used_by_active_process(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    cache = config.home / ".cache" / "uv"
+    runtime = cache / "archive-v0" / "tool" / "bin"
+    runtime.mkdir(parents=True)
+    marker = runtime / "code-review-graph"
+    marker.write_text("active")
+    stats = cleanup.CleanupStats()
+
+    cleanup.clean_uv_cache(
+        config,
+        stats,
+        process_lines=[f"123 python {marker} serve"],
+    )
+
+    assert marker.exists()
+    assert stats.removed_paths == []
+    assert any("active uv cache" in item for item in stats.skipped_paths)
+
+
+def test_clean_uv_cache_uses_bounded_prune(tmp_path: Path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    cache = config.home / ".cache" / "uv"
+    cache.mkdir(parents=True)
+    marker = cache / "unreachable"
+    marker.write_bytes(b"unused cache")
+    stats = cleanup.CleanupStats()
+    observed: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = command
+        observed["kwargs"] = kwargs
+        marker.unlink()
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(cleanup.shutil, "which", lambda _name: "/usr/bin/uv")
+    monkeypatch.setattr(cleanup.subprocess, "run", fake_run)
+
+    cleanup.clean_uv_cache(config, stats, process_lines=[])
+
+    assert observed["command"] == [
+        "/usr/bin/uv",
+        "cache",
+        "prune",
+        "--cache-dir",
+        str(cache.resolve()),
+        "--no-progress",
+    ]
+    assert observed["kwargs"] == {
+        "check": False,
+        "text": True,
+        "capture_output": True,
+        "timeout": 120,
+    }
+    assert not marker.exists()
+    assert stats.estimated_bytes == len(b"unused cache")
 
 
 def test_clean_tmp_keeps_bot_locks_and_removes_old_artifacts(tmp_path: Path) -> None:

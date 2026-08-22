@@ -31,7 +31,9 @@ Common cache cleanup includes:
 
 - `~/.npm/_cacache`, `~/.npm/_npx`, npm logs
 - selected Gradle caches (`caches`, `daemon`, `native`, `.tmp`)
-- `~/.cache/ms-playwright`, `~/.cache/uv`
+- `~/.cache/ms-playwright`
+- unreachable `~/.cache/uv` objects through bounded `uv cache prune`; the uv
+  cache is kept unchanged while a running process references a runtime below it
 - `~/.codex/.tmp`
 - old Codex session files past the configured retention window
 - old `/tmp` artifacts, excluding system sockets, systemd-private dirs, and bot
