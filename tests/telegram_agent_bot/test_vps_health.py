@@ -106,6 +106,14 @@ def test_health_recovery_is_emitted_once(tmp_path):
 def test_health_report_includes_runtime_counts():
     report = format_health_snapshot(_snapshot())
 
+    assert "1 running" in report
+    assert "2 sleeping" in report
+    assert "Status: healthy" in report
+
+
+def test_health_report_supports_chinese_when_selected():
+    report = format_health_snapshot(_snapshot(), language="zh")
+
     assert "1 个运行中" in report
     assert "2 个休眠" in report
     assert "状态：正常" in report
