@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from telegram_agent_bot.durable_state import DurableRuntimeStore
 from telegram_agent_bot.vps_health import (
+    HealthIssue,
     HealthSnapshot,
     HostMetrics,
     VpsHealthMonitor,
@@ -105,9 +106,60 @@ def test_health_recovery_is_emitted_once(tmp_path):
 def test_health_report_includes_runtime_counts():
     report = format_health_snapshot(_snapshot())
 
-    assert "1 active" in report
-    assert "2 sleeping" in report
-    assert "Status: healthy" in report
+    assert "1 个运行中" in report
+    assert "2 个休眠" in report
+    assert "状态：正常" in report
+
+
+def test_health_recovery_waits_until_state_is_stable(tmp_path):
+    store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+    store.initialize()
+    monitor = VpsHealthMonitor(store)
+    issues = monitor.issues(_snapshot(), _config())
+    first = monitor.decide(issues, cooldown_seconds=86400, now_epoch=1000)
+    monitor.record(first, now_epoch=1000)
+
+    not_yet = monitor.decide(
+        (),
+        cooldown_seconds=86400,
+        recovery_stable_seconds=300,
+        now_epoch=1100,
+    )
+    still_not = monitor.decide(
+        (),
+        cooldown_seconds=86400,
+        recovery_stable_seconds=300,
+        now_epoch=1399,
+    )
+    recovered = monitor.decide(
+        (),
+        cooldown_seconds=86400,
+        recovery_stable_seconds=300,
+        now_epoch=1400,
+    )
+
+    assert not_yet.event == "none"
+    assert still_not.event == "none"
+    assert recovered.event == "recovery"
+
+
+def test_health_state_change_notifies_without_waiting_for_repeat_cooldown(tmp_path):
+    store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+    store.initialize()
+    monitor = VpsHealthMonitor(store)
+    disk = (HealthIssue("disk", "磁盘"),)
+    monitor.record(
+        monitor.decide(disk, cooldown_seconds=86400, now_epoch=1000),
+        now_epoch=1000,
+    )
+
+    changed = monitor.decide(
+        (HealthIssue("memory", "内存"),),
+        cooldown_seconds=86400,
+        now_epoch=1100,
+    )
+
+    assert changed.event == "alert"
 
 
 def test_transcript_lag_requires_delivery_watermark_to_stall(tmp_path):

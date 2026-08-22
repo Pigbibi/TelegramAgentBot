@@ -123,32 +123,30 @@ def format_health_snapshot(
     """Render one compact operator-facing health report."""
     host = snapshot.host
     lines = [
-        "🩺 AgentBot host health",
+        "🩺 AgentBot 运行状态",
         "",
-        "Memory: "
-        f"{_format_bytes(host.memory_available_bytes)} available / "
-        f"{_format_bytes(host.memory_total_bytes)}",
-        "Swap: "
-        f"{_format_bytes(host.swap_used_bytes)} used / "
-        f"{_format_bytes(host.swap_total_bytes)} "
-        f"({host.swap_used_percent:.0f}%)",
-        "Disk: "
-        f"{host.disk_used_percent:.0f}% used, "
-        f"{_format_bytes(host.disk_free_bytes)} free",
-        "Agent turns: "
-        f"{snapshot.active_turns} active, "
-        f"{snapshot.queue_depth} queued in "
-        f"{snapshot.pending_windows} topic(s), "
-        f"{snapshot.hibernated_sessions} sleeping",
-        "Transcript delivery: "
-        f"{snapshot.transcript_backlog_sessions} lagging session(s), "
-        f"{_format_bytes(snapshot.transcript_backlog_bytes)} pending",
     ]
     if issues:
-        lines.extend(["", "Warnings:"])
-        lines.extend(f"- {issue.message}" for issue in issues)
-    else:
-        lines.extend(["", "Status: healthy"])
+        lines.extend(["问题：", *(f"• {issue.message}" for issue in issues), ""])
+    lines.extend(
+        [
+            "资源："
+            f"可用内存 {_format_bytes(host.memory_available_bytes)} / "
+            f"{_format_bytes(host.memory_total_bytes)}；"
+            f"交换空间 {host.swap_used_percent:.0f}%；"
+            f"磁盘 {host.disk_used_percent:.0f}%（剩余 "
+            f"{_format_bytes(host.disk_free_bytes)}）",
+            "任务："
+            f"{snapshot.active_turns} 个运行中，"
+            f"{snapshot.queue_depth} 个排队，"
+            f"{snapshot.hibernated_sessions} 个休眠",
+            "消息同步："
+            f"{snapshot.transcript_backlog_sessions} 个会话待发送，"
+            f"共 {_format_bytes(snapshot.transcript_backlog_bytes)}",
+        ]
+    )
+    if not issues:
+        lines.extend(["", "状态：正常"])
     return "\n".join(lines)
 
 
@@ -160,6 +158,7 @@ class VpsHealthMonitor:
         self._alert_states: dict[str, HealthAlertState] | None = None
         self._transcript_lag_started: dict[str, float] = {}
         self._transcript_delivery_offsets: dict[str, int] = {}
+        self._recovery_candidate_since: float | None = None
 
     def _measure_transcript_lag(
         self,
@@ -279,8 +278,8 @@ class VpsHealthMonitor:
             found.append(
                 HealthIssue(
                     "memory",
-                    "available memory is low "
-                    f"({_format_bytes(snapshot.host.memory_available_bytes)})",
+                    "可用内存偏低："
+                    f"{_format_bytes(snapshot.host.memory_available_bytes)}",
                 )
             )
         if (
@@ -290,15 +289,15 @@ class VpsHealthMonitor:
             found.append(
                 HealthIssue(
                     "swap",
-                    f"swap use is {snapshot.host.swap_used_percent:.0f}%",
+                    f"Swap 使用率较高：{snapshot.host.swap_used_percent:.0f}%",
                 )
             )
         if snapshot.host.disk_used_percent >= config.health_disk_used_percent:
             found.append(
                 HealthIssue(
                     "disk",
-                    f"root disk use is {snapshot.host.disk_used_percent:.0f}% "
-                    f"({_format_bytes(snapshot.host.disk_free_bytes)} free)",
+                    f"磁盘使用率较高：{snapshot.host.disk_used_percent:.0f}%"
+                    f"（剩余 {_format_bytes(snapshot.host.disk_free_bytes)}）",
                 )
             )
         if (
@@ -308,8 +307,8 @@ class VpsHealthMonitor:
             found.append(
                 HealthIssue(
                     "agent_queue",
-                    f"oldest queued prompt has waited "
-                    f"{snapshot.oldest_queue_age_seconds / 60:.0f} min",
+                    "最早的排队任务已等待 "
+                    f"{snapshot.oldest_queue_age_seconds / 60:.0f} 分钟",
                 )
             )
         if (
@@ -320,8 +319,10 @@ class VpsHealthMonitor:
             found.append(
                 HealthIssue(
                     "transcript_lag",
-                    f"transcript delivery has lagged for "
-                    f"{snapshot.oldest_transcript_lag_seconds:.0f}s",
+                    "Telegram 消息同步已连续 "
+                    f"{snapshot.oldest_transcript_lag_seconds / 60:.0f} 分钟没有进展"
+                    f"（{snapshot.transcript_backlog_sessions} 个会话，"
+                    f"待发送 {_format_bytes(snapshot.transcript_backlog_bytes)}）",
                 )
             )
         return tuple(found)
@@ -331,6 +332,7 @@ class VpsHealthMonitor:
         issues: tuple[HealthIssue, ...],
         *,
         cooldown_seconds: float,
+        recovery_stable_seconds: float = 0.0,
         now_epoch: float | None = None,
     ) -> HealthDecision:
         """Choose alert, recovery, or silence without changing persisted state."""
@@ -339,10 +341,21 @@ class VpsHealthMonitor:
         current_keys = {issue.key for issue in issues}
         previously_active = {key for key, state in states.items() if state.active}
         if not current_keys and previously_active:
+            if recovery_stable_seconds > 0:
+                if self._recovery_candidate_since is None:
+                    self._recovery_candidate_since = current_time
+                    return HealthDecision("none", ())
+                if (
+                    current_time - self._recovery_candidate_since
+                    < recovery_stable_seconds
+                ):
+                    return HealthDecision("none", ())
             return HealthDecision("recovery", ())
         if not current_keys:
+            self._recovery_candidate_since = None
             return HealthDecision("none", ())
-        due = any(
+        self._recovery_candidate_since = None
+        due = current_keys != previously_active or any(
             key not in states
             or not states[key].active
             or current_time - states[key].last_sent_at_epoch >= cooldown_seconds
@@ -379,6 +392,7 @@ class VpsHealthMonitor:
                         last_sent_at_epoch=old.last_sent_at_epoch,
                     )
         elif decision.event == "recovery":
+            self._recovery_candidate_since = None
             for key, old in list(states.items()):
                 if not old.active:
                     continue
@@ -399,14 +413,21 @@ class VpsHealthMonitor:
                 decision = self.decide(
                     issues,
                     cooldown_seconds=float(config.health_alert_cooldown_seconds),
+                    recovery_stable_seconds=float(
+                        config.health_recovery_stable_seconds
+                    ),
                 )
                 if decision.event == "alert":
-                    text = "⚠️ Host health warning\n\n" + format_health_snapshot(
+                    text = "⚠️ AgentBot 需要关注\n\n" + format_health_snapshot(
                         snapshot,
                         decision.issues,
                     )
+                    text += "\n\nBot 会自动重试；同一问题状态不变时不会频繁提醒。"
                 elif decision.event == "recovery":
-                    text = "✅ AgentBot host health recovered."
+                    text = (
+                        "✅ AgentBot 已恢复\n\n"
+                        "此前的问题已连续一段时间未再出现，当前运行正常。"
+                    )
                 else:
                     text = ""
 

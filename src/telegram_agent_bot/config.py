@@ -322,7 +322,16 @@ class Config:
             float(
                 os.getenv(
                     "TELEGRAM_AGENT_BOT_HEALTH_ALERT_COOLDOWN_SECONDS",
-                    "3600",
+                    "86400",
+                )
+            ),
+        )
+        self.health_recovery_stable_seconds = max(
+            0.0,
+            float(
+                os.getenv(
+                    "TELEGRAM_AGENT_BOT_HEALTH_RECOVERY_STABLE_SECONDS",
+                    "300",
                 )
             ),
         )
@@ -373,7 +382,7 @@ class Config:
             float(
                 os.getenv(
                     "TELEGRAM_AGENT_BOT_HEALTH_TRANSCRIPT_LAG_SECONDS",
-                    "120",
+                    "300",
                 )
             ),
         )
