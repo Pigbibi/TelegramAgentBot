@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from telegram_agent_bot.monitor_state import TrackedSession
+from telegram_agent_bot.handlers.delivery_errors import PermanentDeliveryError
 from telegram_agent_bot.session_monitor import NewMessage, SessionInfo, SessionMonitor
 
 
@@ -93,6 +94,34 @@ class TestSessionMonitorDispatch:
         assert dispatched_session_ids == {"session-b"}
         assert monitor._last_dispatch_failed_session_ids == {"session-a"}
         assert monitor._last_dispatch_successful_session_ids == {"session-b"}
+
+    @pytest.mark.asyncio
+    async def test_permanent_delivery_failure_blocks_retry_until_route_recovers(
+        self, tmp_path
+    ):
+        monitor = SessionMonitor(
+            projects_path=tmp_path / "projects",
+            state_file=tmp_path / "monitor_state.json",
+        )
+
+        async def callback(_message: NewMessage) -> None:
+            raise PermanentDeliveryError(
+                "Message thread not found",
+                user_id=12345,
+                thread_id=42,
+                chat_id=-100123,
+            )
+
+        monitor.set_message_callback(callback)
+        dispatched = await monitor._dispatch_new_messages(
+            [NewMessage("session-a", "answer", True)]
+        )
+
+        assert dispatched == set()
+        assert monitor._sessions_in_dispatch_backoff(now=10_000.0) == {"session-a"}
+
+        monitor.clear_permanent_delivery_block(12345, 42)
+        assert monitor._sessions_in_dispatch_backoff(now=10_000.0) == set()
 
     @pytest.mark.asyncio
     async def test_check_for_updates_skips_session_in_delivery_backoff(self, tmp_path):

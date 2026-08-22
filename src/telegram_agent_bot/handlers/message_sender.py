@@ -27,6 +27,7 @@ from telegram.error import NetworkError, RetryAfter
 
 from ..markdown_v2 import convert_markdown
 from ..transcript_parser import TranscriptParser
+from .delivery_errors import PermanentDeliveryError, is_permanent_topic_error
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,20 @@ PARSE_MODE = "MarkdownV2"
 NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
+def _raise_if_permanent_topic_error(
+    exc: BaseException,
+    *,
+    chat_id: int,
+    message_thread_id: int | None,
+) -> None:
+    if is_permanent_topic_error(exc):
+        raise PermanentDeliveryError(
+            str(exc),
+            chat_id=chat_id,
+            thread_id=message_thread_id,
+        ) from exc
+
+
 async def send_with_fallback(
     bot: Bot,
     chat_id: int,
@@ -118,7 +133,12 @@ async def send_with_fallback(
         )
     except RetryAfter:
         raise
-    except Exception:
+    except Exception as exc:
+        _raise_if_permanent_topic_error(
+            exc,
+            chat_id=chat_id,
+            message_thread_id=kwargs.get("message_thread_id"),
+        )
         try:
             return await _call_with_connect_retry(
                 lambda: bot.send_message(
@@ -129,6 +149,11 @@ async def send_with_fallback(
         except RetryAfter:
             raise
         except Exception as e:
+            _raise_if_permanent_topic_error(
+                e,
+                chat_id=chat_id,
+                message_thread_id=kwargs.get("message_thread_id"),
+            )
             logger.error(f"Failed to send message to {chat_id}: {e}")
             return None
 
@@ -172,6 +197,11 @@ async def send_photo(
     except RetryAfter:
         raise
     except Exception as e:
+        _raise_if_permanent_topic_error(
+            e,
+            chat_id=chat_id,
+            message_thread_id=kwargs.get("message_thread_id"),
+        )
         logger.error("Failed to send photo to %d: %s", chat_id, e)
 
 

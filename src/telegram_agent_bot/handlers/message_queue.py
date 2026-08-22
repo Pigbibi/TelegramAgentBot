@@ -42,6 +42,7 @@ from .message_sender import (
     send_with_fallback,
     strip_sentinels,
 )
+from .delivery_errors import PermanentDeliveryError
 from .working_status import (
     is_active_working_status,
     mark_output_seen,
@@ -129,7 +130,143 @@ _AUTO_CLEAR_TOOL_VISIBLE_SECONDS = 20.0
 StatusInfo = tuple[int, str, str, float]
 StatusKey = tuple[int, int]
 _STATUS_MESSAGES_FILE = config.config_dir / "status_messages.json"
+_PERMANENT_DELIVERY_FAILURES_FILE = config.config_dir / "delivery_dead_letters.json"
+_PERMANENT_DELIVERY_FAILURE_THRESHOLD = 3
 _MIN_WORKING_STATUS_VISIBLE_SECONDS = 1.5
+
+
+def _delivery_failure_key(user_id: int, thread_id: int | None) -> str:
+    return f"{user_id}:{thread_id or 0}"
+
+
+def _load_permanent_delivery_failures() -> dict[str, dict[str, object]]:
+    try:
+        raw = json.loads(_PERMANENT_DELIVERY_FAILURES_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        logger.warning("Failed to load delivery dead letters: %s", exc)
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        key: value
+        for key, value in raw.items()
+        if isinstance(key, str) and isinstance(value, dict)
+    }
+
+
+def _persist_permanent_delivery_failures() -> None:
+    try:
+        atomic_write_json(
+            _PERMANENT_DELIVERY_FAILURES_FILE,
+            _permanent_delivery_failures,
+        )
+    except Exception as exc:
+        logger.error("Failed to persist delivery dead letters: %s", exc)
+
+
+_permanent_delivery_failures = _load_permanent_delivery_failures()
+
+
+def _permanent_delivery_failure_count(info: dict[str, object]) -> int:
+    count = info.get("count", 0)
+    return count if isinstance(count, int) else 0
+
+
+def is_permanent_delivery_failure(user_id: int, thread_id: int | None) -> bool:
+    """Return whether output to this topic is quarantined pending route proof."""
+    info = _permanent_delivery_failures.get(_delivery_failure_key(user_id, thread_id))
+    return bool(
+        info
+        and _permanent_delivery_failure_count(info)
+        >= _PERMANENT_DELIVERY_FAILURE_THRESHOLD
+    )
+
+
+def _permanent_delivery_error_for(
+    user_id: int,
+    thread_id: int | None,
+) -> PermanentDeliveryError | None:
+    info = _permanent_delivery_failures.get(_delivery_failure_key(user_id, thread_id))
+    if info is None:
+        return None
+    if _permanent_delivery_failure_count(info) < _PERMANENT_DELIVERY_FAILURE_THRESHOLD:
+        return None
+    chat_id = info.get("chat_id")
+    return PermanentDeliveryError(
+        str(info.get("reason", "Telegram topic route is quarantined")),
+        user_id=user_id,
+        thread_id=thread_id,
+        chat_id=int(chat_id) if isinstance(chat_id, int) else None,
+    )
+
+
+def _record_permanent_delivery_failure(
+    user_id: int,
+    thread_id: int | None,
+    error: PermanentDeliveryError,
+) -> int:
+    key = _delivery_failure_key(user_id, thread_id)
+    now = time.time()
+    previous = _permanent_delivery_failures.get(key, {})
+    count = _permanent_delivery_failure_count(previous) + 1
+    chat_id = error.chat_id
+    if chat_id is None:
+        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+    _permanent_delivery_failures[key] = {
+        "user_id": user_id,
+        "thread_id": thread_id or 0,
+        "chat_id": chat_id,
+        "reason": str(error),
+        "count": count,
+        "first_failed_at": previous.get("first_failed_at", now),
+        "last_failed_at": now,
+    }
+    _persist_permanent_delivery_failures()
+    return count
+
+
+def clear_permanent_delivery_failure(
+    user_id: int,
+    thread_id: int | None,
+    *,
+    chat_id: int | None = None,
+) -> bool:
+    """Clear a quarantine after an inbound message proves a route is live."""
+    key = _delivery_failure_key(user_id, thread_id)
+    info = _permanent_delivery_failures.get(key)
+    if info is None:
+        return False
+    if chat_id is not None:
+        session_manager.set_group_chat_id(user_id, thread_id, chat_id)
+    _permanent_delivery_failures.pop(key, None)
+    _persist_permanent_delivery_failures()
+    return True
+
+
+async def _notify_permanent_delivery_failure(
+    bot: Bot,
+    user_id: int,
+    thread_id: int | None,
+) -> None:
+    """Send one private warning because the failed forum topic is unreachable."""
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text=(
+                f"⚠️ Telegram topic {thread_id or 0} is no longer reachable. "
+                "Agent output is safely paused instead of retrying forever. "
+                "Reopen and message that topic to resume, or bind a new topic."
+            ),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to notify user %d about quarantined topic %s: %s",
+            user_id,
+            thread_id,
+            exc,
+        )
 
 
 def _should_repost_status(status_text: str, created_at: float) -> bool:
@@ -473,9 +610,19 @@ async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> 
             task = await queue.get()
             _active_queue_keys.add(key)
             delivery_success: bool | None = None
+            delivery_error: PermanentDeliveryError | None = None
             should_requeue = False
             current_task: MessageTask = task
             try:
+                existing_permanent_error = _permanent_delivery_error_for(
+                    user_id,
+                    current_task.thread_id,
+                )
+                if existing_permanent_error is not None:
+                    if current_task.task_type == "content":
+                        delivery_error = existing_permanent_error
+                    continue
+
                 # Flood control: drop status, wait for content
                 flood_end = _flood_until.get(user_id, 0)
                 if flood_end > 0:
@@ -509,10 +656,46 @@ async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> 
                     delivery_success = await _process_content_task(
                         bot, user_id, merged_task
                     )
+                    if delivery_success:
+                        clear_permanent_delivery_failure(
+                            user_id,
+                            merged_task.thread_id,
+                        )
                 elif task.task_type == "status_update":
                     await _process_status_update_task(bot, user_id, task)
                 elif task.task_type == "status_clear":
                     await _do_clear_status_message(bot, user_id, task.thread_id or 0)
+            except PermanentDeliveryError as exc:
+                exc.with_target(user_id=user_id, thread_id=current_task.thread_id)
+                failure_count = _record_permanent_delivery_failure(
+                    user_id,
+                    current_task.thread_id,
+                    exc,
+                )
+                if failure_count >= _PERMANENT_DELIVERY_FAILURE_THRESHOLD:
+                    delivery_error = exc
+                    if failure_count == _PERMANENT_DELIVERY_FAILURE_THRESHOLD:
+                        await _notify_permanent_delivery_failure(
+                            bot,
+                            user_id,
+                            current_task.thread_id,
+                        )
+                    logger.error(
+                        "Quarantined permanent Telegram destination failure: "
+                        "user=%d thread=%s chat=%s reason=%s",
+                        user_id,
+                        current_task.thread_id,
+                        exc.chat_id,
+                        exc,
+                    )
+                else:
+                    logger.warning(
+                        "Permanent Telegram destination failure has not reached "
+                        "quarantine threshold: user=%d thread=%s reason=%s",
+                        user_id,
+                        current_task.thread_id,
+                        exc,
+                    )
             except RetryAfter as e:
                 retry_secs = (
                     e.retry_after
@@ -578,7 +761,10 @@ async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> 
                     and not task.delivery_future.done()
                     and not should_requeue
                 ):
-                    task.delivery_future.set_result(bool(delivery_success))
+                    if delivery_error is not None:
+                        task.delivery_future.set_exception(delivery_error)
+                    else:
+                        task.delivery_future.set_result(bool(delivery_success))
                 _active_queue_keys.discard(key)
                 queue.task_done()
         except asyncio.CancelledError:
@@ -1176,6 +1362,9 @@ async def enqueue_content_message(
         window_id,
         content_type,
     )
+    permanent_error = _permanent_delivery_error_for(user_id, thread_id)
+    if permanent_error is not None:
+        raise permanent_error
     queue = get_or_create_queue(bot, user_id, thread_id)
     delivery_future: asyncio.Future[bool] | None = None
     if wait_until_sent:
@@ -1210,6 +1399,8 @@ async def enqueue_status_update(
     prefer_before_content: bool = False,
 ) -> None:
     """Enqueue status update. Skipped if text unchanged or during flood control."""
+    if is_permanent_delivery_failure(user_id, thread_id):
+        return
     # Don't enqueue during flood control — they'd just be dropped
     flood_end = _flood_until.get(user_id, 0)
     if flood_end > time.monotonic():

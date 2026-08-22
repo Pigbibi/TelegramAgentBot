@@ -17,6 +17,7 @@ import aiofiles
 
 from .account_manager import list_account_homes
 from .config import config
+from .handlers.delivery_errors import PermanentDeliveryError
 from .monitor_state import MonitorState, TrackedSession
 from .session import _is_shell_pane_command, _iter_transcript_roots, _session_ids_match
 from .tmux_manager import tmux_manager
@@ -85,6 +86,7 @@ class SessionMonitor:
         self._deferred_state_updates: dict[str, TrackedSession] = {}
         self._dispatch_failure_counts: dict[str, int] = {}
         self._dispatch_retry_after: dict[str, float] = {}
+        self._permanent_delivery_blocks: dict[str, tuple[int, int]] = {}
         self._last_dispatch_failed_session_ids: set[str] = set()
         self._last_dispatch_successful_session_ids: set[str] = set()
 
@@ -768,6 +770,21 @@ class SessionMonitor:
                     session_id,
                 )
                 continue
+            if isinstance(result, PermanentDeliveryError):
+                if result.user_id is not None and result.thread_id is not None:
+                    self._permanent_delivery_blocks[session_id] = (
+                        result.user_id,
+                        result.thread_id,
+                    )
+                else:
+                    self._last_dispatch_failed_session_ids.add(session_id)
+                logger.error(
+                    "Permanently blocking transcript delivery for session %s "
+                    "until its Telegram route is proven live: %s",
+                    session_id,
+                    result,
+                )
+                continue
             if isinstance(result, Exception):
                 self._last_dispatch_failed_session_ids.add(session_id)
                 logger.warning(
@@ -801,11 +818,36 @@ class SessionMonitor:
     def _sessions_in_dispatch_backoff(self, now: float | None = None) -> set[str]:
         """Return sessions whose failed Telegram delivery retry is not due yet."""
         current = time.monotonic() if now is None else now
-        return {
+        retrying = {
             session_id
             for session_id, retry_after in self._dispatch_retry_after.items()
             if retry_after > current
         }
+        return retrying | set(self._permanent_delivery_blocks)
+
+    def clear_permanent_delivery_block(
+        self,
+        user_id: int,
+        thread_id: int | None,
+    ) -> None:
+        """Resume quarantined transcripts after a fresh inbound topic update."""
+        target = (user_id, thread_id or 0)
+        cleared = [
+            session_id
+            for session_id, blocked_target in self._permanent_delivery_blocks.items()
+            if blocked_target == target
+        ]
+        for session_id in cleared:
+            self._permanent_delivery_blocks.pop(session_id, None)
+            self._dispatch_failure_counts.pop(session_id, None)
+            self._dispatch_retry_after.pop(session_id, None)
+        if cleared:
+            logger.info(
+                "Cleared permanent delivery block for user=%d thread=%s sessions=%s",
+                user_id,
+                thread_id,
+                cleared,
+            )
 
     def _record_dispatch_results(
         self,
@@ -819,6 +861,7 @@ class SessionMonitor:
         for session_id in successful_session_ids:
             self._dispatch_failure_counts.pop(session_id, None)
             self._dispatch_retry_after.pop(session_id, None)
+            self._permanent_delivery_blocks.pop(session_id, None)
 
         for session_id in failed_session_ids:
             failure_count = self._dispatch_failure_counts.get(session_id, 0) + 1

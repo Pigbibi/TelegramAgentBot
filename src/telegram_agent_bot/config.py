@@ -289,7 +289,7 @@ class Config:
         )
         self.telegram_max_concurrent_updates = max(
             1,
-            int(os.getenv("TELEGRAM_AGENT_BOT_MAX_CONCURRENT_UPDATES", "16")),
+            int(os.getenv("TELEGRAM_AGENT_BOT_MAX_CONCURRENT_UPDATES", "4")),
         )
 
         # Display user messages in history and real-time notifications
