@@ -264,6 +264,67 @@ def clean_action_runners(config: CleanupConfig, stats: CleanupStats) -> None:
         clean_action_runner(runner_dir, config, stats, process_lines)
 
 
+def _process_uses_path(path: Path, process_lines: Sequence[str]) -> bool:
+    """Return whether a process command references a file below ``path``."""
+    resolved = str(_resolve(path))
+    return any(resolved in line for line in process_lines)
+
+
+def clean_uv_cache(
+    config: CleanupConfig,
+    stats: CleanupStats,
+    process_lines: Sequence[str] | None = None,
+) -> None:
+    """Prune unreachable uv objects without unlinking an active tool runtime."""
+    cache = config.home / ".cache" / "uv"
+    if not cache.exists():
+        return
+
+    processes = _read_process_lines() if process_lines is None else process_lines
+    if _process_uses_path(cache, processes):
+        stats.record_skip(f"active uv cache: {cache}")
+        return
+
+    uv = shutil.which("uv")
+    if not uv:
+        stats.record_skip(f"uv executable unavailable; cache kept: {cache}")
+        return
+
+    command = [
+        uv,
+        "cache",
+        "prune",
+        "--cache-dir",
+        str(_resolve(cache)),
+        "--no-progress",
+    ]
+    if config.dry_run:
+        print(f"DRY-RUN run {' '.join(command)}")
+        return
+
+    before = path_size(cache)
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        stats.record_error(f"uv cache prune failed: {exc}")
+        return
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or f"exit status {completed.returncode}"
+        stats.record_error(f"uv cache prune failed: {detail}")
+        return
+
+    reclaimed = max(0, before - path_size(cache))
+    print(f"pruned {cache} ({_format_bytes(reclaimed)} reclaimed)")
+    if reclaimed:
+        stats.record_removed(_resolve(cache), reclaimed)
+
+
 def clean_common_caches(config: CleanupConfig, stats: CleanupStats) -> None:
     cache_targets = (
         config.home / ".npm" / "_cacache",
@@ -273,11 +334,11 @@ def clean_common_caches(config: CleanupConfig, stats: CleanupStats) -> None:
         config.home / ".gradle" / "native",
         config.home / ".gradle" / ".tmp",
         config.home / ".cache" / "ms-playwright",
-        config.home / ".cache" / "uv",
         config.home / ".cache" / "gd12345hotlinebot",
     )
     for target in cache_targets:
         remove_path(target, config, stats)
+    clean_uv_cache(config, stats)
     clear_directory_contents(config.home / ".codex" / ".tmp", config, stats)
     clean_old_files(
         config.home / ".codex" / "sessions",
