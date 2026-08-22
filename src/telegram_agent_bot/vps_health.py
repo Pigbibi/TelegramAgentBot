@@ -159,6 +159,41 @@ class VpsHealthMonitor:
         self.store = store
         self._alert_states: dict[str, HealthAlertState] | None = None
         self._transcript_lag_started: dict[str, float] = {}
+        self._transcript_delivery_offsets: dict[str, int] = {}
+
+    def _measure_transcript_lag(
+        self,
+        backlog: dict[str, int],
+        delivery_offsets: dict[str, int],
+        *,
+        now_monotonic: float,
+    ) -> float:
+        """Measure time since delivery last progressed, not backlog lifetime."""
+        backlog_ids = set(backlog)
+        for session_id in list(self._transcript_lag_started):
+            if session_id not in backlog_ids:
+                self._transcript_lag_started.pop(session_id, None)
+                self._transcript_delivery_offsets.pop(session_id, None)
+
+        for session_id in backlog_ids:
+            current_offset = delivery_offsets.get(session_id)
+            previous_offset = self._transcript_delivery_offsets.get(session_id)
+            if session_id not in self._transcript_lag_started or (
+                current_offset is not None
+                and previous_offset is not None
+                and current_offset != previous_offset
+            ):
+                self._transcript_lag_started[session_id] = now_monotonic
+            if current_offset is not None:
+                self._transcript_delivery_offsets[session_id] = current_offset
+
+        return max(
+            (
+                now_monotonic - self._transcript_lag_started[session_id]
+                for session_id in backlog_ids
+            ),
+            default=0.0,
+        )
 
     def _load_alert_states(self) -> dict[str, HealthAlertState]:
         if self._alert_states is not None:
@@ -187,25 +222,31 @@ class VpsHealthMonitor:
             oldest_queue_age = 0.0
             queue_depth = 0
 
-        backlog = (
-            session_monitor.delivery_backlog_bytes()
-            if session_monitor is not None
-            and hasattr(session_monitor, "delivery_backlog_bytes")
-            else {}
-        )
+        delivery_offsets: dict[str, int] = {}
+        if session_monitor is not None and hasattr(
+            session_monitor, "delivery_backlog_metrics"
+        ):
+            backlog_metrics = session_monitor.delivery_backlog_metrics()
+            backlog = {
+                session_id: pending_bytes
+                for session_id, (pending_bytes, _offset) in backlog_metrics.items()
+            }
+            delivery_offsets = {
+                session_id: offset
+                for session_id, (_pending_bytes, offset) in backlog_metrics.items()
+            }
+        else:
+            backlog = (
+                session_monitor.delivery_backlog_bytes()
+                if session_monitor is not None
+                and hasattr(session_monitor, "delivery_backlog_bytes")
+                else {}
+            )
         now_monotonic = time.monotonic()
-        backlog_ids = set(backlog)
-        for session_id in list(self._transcript_lag_started):
-            if session_id not in backlog_ids:
-                self._transcript_lag_started.pop(session_id, None)
-        for session_id in backlog_ids:
-            self._transcript_lag_started.setdefault(session_id, now_monotonic)
-        oldest_transcript_lag = max(
-            (
-                now_monotonic - self._transcript_lag_started[session_id]
-                for session_id in backlog_ids
-            ),
-            default=0.0,
+        oldest_transcript_lag = self._measure_transcript_lag(
+            backlog,
+            delivery_offsets,
+            now_monotonic=now_monotonic,
         )
 
         scheduler = turn_admission.snapshot()

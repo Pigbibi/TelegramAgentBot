@@ -108,3 +108,41 @@ def test_health_report_includes_runtime_counts():
     assert "1 active" in report
     assert "2 sleeping" in report
     assert "Status: healthy" in report
+
+
+def test_transcript_lag_requires_delivery_watermark_to_stall(tmp_path):
+    store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+    store.initialize()
+    monitor = VpsHealthMonitor(store)
+
+    assert (
+        monitor._measure_transcript_lag(
+            {"active": 100}, {"active": 1000}, now_monotonic=10.0
+        )
+        == 0.0
+    )
+    assert (
+        monitor._measure_transcript_lag(
+            {"active": 120}, {"active": 1000}, now_monotonic=131.0
+        )
+        == 121.0
+    )
+    assert (
+        monitor._measure_transcript_lag(
+            {"active": 80}, {"active": 1040}, now_monotonic=132.0
+        )
+        == 0.0
+    )
+
+
+def test_transcript_lag_tracking_forgets_drained_sessions(tmp_path):
+    store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+    store.initialize()
+    monitor = VpsHealthMonitor(store)
+    monitor._measure_transcript_lag(
+        {"drained": 10}, {"drained": 20}, now_monotonic=10.0
+    )
+
+    assert monitor._measure_transcript_lag({}, {}, now_monotonic=20.0) == 0.0
+    assert monitor._transcript_lag_started == {}
+    assert monitor._transcript_delivery_offsets == {}
