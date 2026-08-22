@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose a user-facing improvement
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: checkboxes
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: This request does not contain secrets or private data.
+          required: true
+  - type: textarea
+    attributes:
+      label: Problem
+      description: What user problem should the project solve?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Proposed workflow
+      description: Describe the behavior from the operator's point of view.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Alternatives
+      description: What existing workflow or workaround have you tried?
+  - type: textarea
+    attributes:
+      label: Security and compatibility
+      description: Note effects on authorization, credentials, tmux sessions, backends, state files, or existing configuration.
+  - type: textarea
+    attributes:
+      label: Additional context
+      description: Add concise examples, mockups, or links when they materially clarify the request.

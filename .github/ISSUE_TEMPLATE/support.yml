@@ -1,0 +1,42 @@
+name: Support question
+description: Ask for help configuring or operating TelegramAgentBot
+title: "[Support]: "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read the README, documentation index, and troubleshooting guide first. Support is provided on a best-effort basis.
+  - type: checkboxes
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the documentation and existing issues.
+          required: true
+        - label: I removed tokens, credentials, private prompts, transcripts, repository names, and personal data.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+  - type: textarea
+    attributes:
+      label: Goal
+      description: What are you trying to accomplish?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: What happened
+      description: Describe the current result and the steps already tried.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Environment
+      description: OS, install method, agent CLI, backend, and service manager.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Redacted health or log output
+      render: text

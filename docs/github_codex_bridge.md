@@ -1,201 +1,185 @@
-# GitHub -> Codex bridge
+# GitHub issue bridge
 
-This page explains how to poll GitHub issues and inject them into a live Codex tmux session.
+`telegram-agent-bridge` polls GitHub issues and sends selected issue content to
+a Codex session already running in tmux. It is a separate process from the
+Telegram bot and does not replace TelegramAgentBot's session monitor.
 
-This bridge polls GitHub issues and injects a structured task into a tmux
-window where Codex is already running.
+Use the bridge for asynchronous, repository-scoped work. It is not intended as
+a low-latency chat transport.
 
-The intended flow is:
+## Requirements
 
-1. Monthly review / optimization issues are created in GitHub.
-2. `telegram-agent-bridge` polls those issues with `gh`.
-3. Matching issues are converted into a Codex task prompt.
-4. The prompt is pasted into a configured tmux window.
-5. telegram-agent-bot keeps listening to the Codex transcript and streams the result back
-   to Telegram as usual.
+- `gh` installed and authenticated as an account that can read the configured
+  repositories;
+- tmux access as the user running the bridge;
+- a live Codex session in every configured destination window;
+- a local JSON configuration file outside the Git checkout.
 
-The bridge does not replace telegram-agent-bot. It is only the task injector.
-It only touches the repositories listed in its config file, so it will not
-affect other repositories unless you add them explicitly.
+Confirm access before starting the bridge:
+
+```bash
+gh auth status
+gh repo view owner/repository
+tmux list-windows -a
+```
 
 ## Configuration
 
-Commit only the template file in the repo. Keep your real config local at
-`~/.telegram-agent-bot/github_codex_bridge.json` and never add it to Git.
+Copy the placeholder template:
 
-Any repository list, including any targets that you want to auto-merge, must
-stay only in the local config. Do not add those repository names or target
-settings to the open-source template.
+```bash
+cp docs/github_codex_bridge.sample.json \
+  ~/.telegram-agent-bot/github_codex_bridge.json
+chmod 600 ~/.telegram-agent-bot/github_codex_bridge.json
+```
 
-Template file:
+Do not commit the real file. It may contain private repository names, local
+paths, tmux targets, and operational instructions.
 
-- `docs/github_codex_bridge.sample.json`
+### Target mode
 
-Create `~/.telegram-agent-bot/github_codex_bridge.json`:
+Use `bridge_mode: "targets"` to poll repositories independently:
 
 ```json
 {
   "bridge_mode": "targets",
   "dispatch_mode": "poll",
-  "tmux_socket": null,
-  "issue_limit": 50,
-  "body_limit": 4000,
-  "comment_limit": 3,
   "poll_interval_seconds": 300,
   "retry_attempts": 3,
   "retry_base_delay_seconds": 1.0,
-  "source_repo": "owner/control-plane-repo",
-  "source_label": "monthly-review",
-  "source_query": "Monthly Audit Review",
-  "runner_window": "@42",
-  "runner_workspace": "/home/ubuntu/Projects/runner",
-  "runner_extra_instructions": "Treat the monthly issue as the contract and keep changes minimal.",
   "targets": [
     {
-      "name": "snapshot-audit",
-      "repo": "owner/example-snapshot-repo",
+      "name": "maintenance",
+      "repo": "owner/repository",
       "window": "@12",
-      "workspace": "/home/ubuntu/Projects/example-snapshot-repo",
-      "labels": ["codex-bridge"],
-      "query": "monthly review",
-      "extra_instructions": "Only make low-risk changes."
-    },
-    {
-      "name": "execution-audit",
-      "repo": "owner/example-execution-repo",
-      "window": "@13",
-      "workspace": "/home/ubuntu/Projects/example-execution-repo",
-      "labels": ["codex-bridge"],
-      "query": "monthly review",
-      "extra_instructions": "Focus on execution quality, monthly audit findings, and low-risk fixes."
+      "workspace": "/srv/work/repository",
+      "labels": ["agent-task"],
+      "query": "maintenance",
+      "merge_mode": "manual",
+      "extra_instructions": "Keep the change focused and open a draft PR."
     }
   ]
 }
 ```
 
-Fields:
+Each target is evaluated independently. The bridge records the dispatched issue
+fingerprint and does not resend unchanged work unless `--force` is supplied.
 
-- `bridge_mode`: `targets` (legacy per-repository bridge, the default) or
-  `orchestrator` (consume the monthly issue published by a GitHub Actions
-  control plane such as `AuditOrchestrator`).
-- `dispatch_mode`: `poll` (run once per invocation, the default) or `watch`
-  (keep polling on `poll_interval_seconds`).
-- `source_repo`: repository that publishes the monthly issue when `bridge_mode`
-  is `orchestrator`.
-- `source_label`: label used to identify the monthly issue when `bridge_mode`
-  is `orchestrator`.
-- `source_query`: optional title/body filter used to select the monthly issue
-  when `bridge_mode` is `orchestrator`.
-- `source_issue_number`: optional explicit issue number to consume in
-  orchestrator mode.
-- `runner_window`: tmux window that receives the orchestrator task.
-- `runner_workspace`: optional local workspace path to include in the
-  orchestrator task prompt.
-- `runner_extra_instructions`: optional extra guardrails appended to the
-  orchestrator task prompt.
-- `repo`: GitHub repository in `owner/name` form.
-- `window`: tmux window id or target accepted by `tmux -t`.
-- `workspace`: optional local repo path to include in the instruction text.
-- `labels`: optional labels that must all be present on an issue before it is
-  dispatched.
-- `query`: optional case-insensitive substring search over issue title/body.
-- `issue_number`: optional explicit issue number to dispatch.
-- `merge_mode`: `manual` (default) or `auto`.
-- `merge_label`: label required before auto-merge is permitted.
-- `retry_attempts`: bounded retry count for transient `gh` and `tmux` failures.
-- `retry_base_delay_seconds`: base delay for retry backoff.
-- `extra_instructions`: optional repo-specific guardrails appended to the task.
+Target fields:
 
-## Bridge modes
-
-### Legacy target mode
-
-Use `bridge_mode: "targets"` when you want the bridge to poll one or more
-repositories directly and inject a separate Codex task for each target.
-
-This is the original mode and it still works as before.
+| Field | Required | Description |
+| --- | --- | --- |
+| `name` | yes | Stable local target identifier |
+| `repo` | yes | GitHub repository in `owner/name` form |
+| `window` | yes | Destination accepted by `tmux -t` |
+| `workspace` | no | Local path included in the generated task |
+| `labels` | no | Labels that must all be present |
+| `query` | no | Case-insensitive title/body substring |
+| `issue_number` | no | Dispatch one explicit issue |
+| `merge_mode` | no | `manual` or `auto`; default is `manual` |
+| `merge_label` | no | Required label for automatic merge eligibility |
+| `extra_instructions` | no | Target-specific prompt constraints |
 
 ### Orchestrator mode
 
-Use `bridge_mode: "orchestrator"` when you want the bridge to consume a
-monthly issue from a control-plane repository and hand the work to one tmux
-runner window.
+Use `bridge_mode: "orchestrator"` when one control-plane repository publishes a
+complete task for a single runner window:
 
-The monthly issue should already contain the machine-readable payload defined by
-the control-plane repository. The bridge just relays that contract into the
-runner session.
+```json
+{
+  "bridge_mode": "orchestrator",
+  "dispatch_mode": "watch",
+  "poll_interval_seconds": 300,
+  "source_repo": "owner/control-plane",
+  "source_label": "agent-task",
+  "source_query": "scheduled review",
+  "runner_window": "@42",
+  "runner_workspace": "/srv/work/runner",
+  "runner_extra_instructions": "Treat the issue body as the task contract."
+}
+```
+
+Set `source_issue_number` to consume one explicit issue instead of selecting by
+label and query.
+
+## Limits and retry behavior
+
+Top-level limits keep each poll bounded:
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `issue_limit` | `50` | Maximum issues returned by one GitHub query |
+| `body_limit` | `4000` | Maximum issue-body characters added to the prompt |
+| `comment_limit` | `3` | Maximum recent comments added to the prompt |
+| `poll_interval_seconds` | `300` | Watch-mode interval |
+| `retry_attempts` | `3` | Attempts for transient `gh` and tmux subprocess failures |
+| `retry_base_delay_seconds` | `1.0` | Exponential-backoff base delay |
+| `tmux_socket` | unset | Optional tmux socket path or name used by the bridge |
+
+Authentication failures, invalid configuration, missing repositories, and
+missing tmux targets are logical errors and should be fixed instead of retried
+indefinitely.
+
+## Commands
+
+Preview the generated prompt without writing to tmux:
+
+```bash
+telegram-agent-bridge \
+  --config ~/.telegram-agent-bot/github_codex_bridge.json \
+  --dry-run
+```
+
+Run one dispatch pass:
+
+```bash
+telegram-agent-bridge \
+  --config ~/.telegram-agent-bot/github_codex_bridge.json \
+  --once
+```
+
+Poll continuously:
+
+```bash
+telegram-agent-bridge \
+  --config ~/.telegram-agent-bot/github_codex_bridge.json \
+  --watch --interval 300
+```
+
+Limit execution to one named target or issue:
+
+```bash
+telegram-agent-bridge --target maintenance --issue-number 123 --once
+```
+
+The default state file is:
+
+```text
+~/.telegram-agent-bot/github_codex_bridge_state.json
+```
 
 ## Automatic merge
 
-Automatic merge is possible, but it should remain opt-in and label-gated.
-Recommended guardrails:
+Keep `merge_mode` set to `manual` unless the destination repository has a
+narrow, independently enforced merge policy. A safe automatic path should
+require all of the following:
 
-- Only allow merge for low-risk maintenance targets.
-- Require a dedicated label such as `auto-merge-ok`.
-- Require tests to pass in the Codex session before merging.
-- Require GitHub CI checks to be green before merging.
-- Require review comments to be resolved before merging.
-- Never auto-merge if the prompt asked for architectural changes or touched
-  production risk paths.
+- an explicit opt-in label;
+- a pull request rather than a direct push;
+- required GitHub checks;
+- no unresolved review requests;
+- a restricted set of repositories and change types;
+- an auditable merge gate outside the agent prompt.
 
-The preferred flow is:
+Do not use prompt text as the only authorization for merging or deployment.
 
-1. Codex creates a draft PR.
-2. GitHub checks run.
-3. A second small automation step merges only if the issue/PR satisfies the
-   merge gate.
+## Running as a service
 
-This keeps the Codex execution loop simple and leaves the final merge decision
-in a narrow, auditable gate.
+Use a separate service instance per independent configuration. Set a bounded
+restart delay and inspect repeated failures instead of restarting continuously.
+The service user must own the tmux server and `gh` authentication state used by
+the bridge.
 
-## Suggested target setup
-
-If you only want the two AI-audited repositories, start with `targets` mode:
-
-- `snapshot-audit` for your monthly snapshot/reporting repo
-- `execution-audit` for your monthly execution/audit repo
-
-If you want the GitHub Actions control plane to drive a single Codex runner,
-switch to `orchestrator` mode and point `source_repo` at that control plane
-repository.
-
-Do not use this bridge to self-update `telegram-agent-bot`; keep the bridge focused on the
-external repositories listed in your local config file.
-
-## Usage
-
-Run once:
-
-```bash
-telegram-agent-bridge --config ~/.telegram-agent-bot/github_codex_bridge.json --once
-```
-
-Watch continuously:
-
-```bash
-telegram-agent-bridge --config ~/.telegram-agent-bot/github_codex_bridge.json --watch --interval 300
-```
-
-Dispatch a specific issue:
-
-```bash
-telegram-agent-bridge --config ~/.telegram-agent-bot/github_codex_bridge.json --issue-number 123
-```
-
-Dry run:
-
-```bash
-telegram-agent-bridge --config ~/.telegram-agent-bot/github_codex_bridge.json --dry-run
-```
-
-## Operational notes
-
-- `gh` must already be authenticated on the VPS.
-- The tmux window must be running a Codex session.
-- The bridge tracks the last dispatched issue fingerprint in
-  `~/.telegram-agent-bot/github_codex_bridge_state.json` so it does not resend the same
-  issue repeatedly.
-- `gh` and `tmux` calls are retried only for transient subprocess failures.
-  Logical failures still fail fast.
-- For a true event listener, use a webhook receiver plus a public endpoint.
-  This bridge intentionally stays polling-first for VPS simplicity.
+Start with `--dry-run` and `--once`. Enable `--watch` only after repository
+access, issue filters, destination windows, and generated prompts have been
+verified.
