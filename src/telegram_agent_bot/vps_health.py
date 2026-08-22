@@ -119,9 +119,36 @@ def _format_bytes(value: int) -> str:
 def format_health_snapshot(
     snapshot: HealthSnapshot,
     issues: tuple[HealthIssue, ...] = (),
+    *,
+    language: str = "en",
 ) -> str:
     """Render one compact operator-facing health report."""
     host = snapshot.host
+    if language != "zh":
+        lines = ["🩺 AgentBot health", ""]
+        if issues:
+            lines.extend(["Issue:", *(f"• {issue.message}" for issue in issues), ""])
+        lines.extend(
+            [
+                "Resources: "
+                f"{_format_bytes(host.memory_available_bytes)} / "
+                f"{_format_bytes(host.memory_total_bytes)} memory available; "
+                f"swap {host.swap_used_percent:.0f}%; "
+                f"disk {host.disk_used_percent:.0f}% "
+                f"({_format_bytes(host.disk_free_bytes)} free)",
+                "Tasks: "
+                f"{snapshot.active_turns} running, "
+                f"{snapshot.queue_depth} queued, "
+                f"{snapshot.hibernated_sessions} sleeping",
+                "Delivery: "
+                f"{snapshot.transcript_backlog_sessions} session(s) pending, "
+                f"{_format_bytes(snapshot.transcript_backlog_bytes)} total",
+            ]
+        )
+        if not issues:
+            lines.extend(["", "Status: healthy"])
+        return "\n".join(lines)
+
     lines = [
         "🩺 AgentBot 运行状态",
         "",
@@ -270,6 +297,7 @@ class VpsHealthMonitor:
     def issues(snapshot: HealthSnapshot, config: Any) -> tuple[HealthIssue, ...]:
         """Evaluate one snapshot against configurable small-host thresholds."""
         found: list[HealthIssue] = []
+        chinese = getattr(config, "health_notification_language", "en") == "zh"
         memory_limit = float(config.health_memory_available_mb) * 1024 * 1024
         if (
             snapshot.host.memory_available_bytes > 0
@@ -278,8 +306,8 @@ class VpsHealthMonitor:
             found.append(
                 HealthIssue(
                     "memory",
-                    "可用内存偏低："
-                    f"{_format_bytes(snapshot.host.memory_available_bytes)}",
+                    ("可用内存偏低：" if chinese else "Available memory is low: ")
+                    + _format_bytes(snapshot.host.memory_available_bytes),
                 )
             )
         if (
@@ -289,15 +317,21 @@ class VpsHealthMonitor:
             found.append(
                 HealthIssue(
                     "swap",
-                    f"Swap 使用率较高：{snapshot.host.swap_used_percent:.0f}%",
+                    ("Swap 使用率较高：" if chinese else "Swap usage is high: ")
+                    + f"{snapshot.host.swap_used_percent:.0f}%",
                 )
             )
         if snapshot.host.disk_used_percent >= config.health_disk_used_percent:
             found.append(
                 HealthIssue(
                     "disk",
-                    f"磁盘使用率较高：{snapshot.host.disk_used_percent:.0f}%"
-                    f"（剩余 {_format_bytes(snapshot.host.disk_free_bytes)}）",
+                    (
+                        f"磁盘使用率较高：{snapshot.host.disk_used_percent:.0f}%"
+                        f"（剩余 {_format_bytes(snapshot.host.disk_free_bytes)}）"
+                        if chinese
+                        else f"Disk usage is high: {snapshot.host.disk_used_percent:.0f}% "
+                        f"({_format_bytes(snapshot.host.disk_free_bytes)} free)"
+                    ),
                 )
             )
         if (
@@ -307,8 +341,13 @@ class VpsHealthMonitor:
             found.append(
                 HealthIssue(
                     "agent_queue",
-                    "最早的排队任务已等待 "
-                    f"{snapshot.oldest_queue_age_seconds / 60:.0f} 分钟",
+                    (
+                        "最早的排队任务已等待 "
+                        f"{snapshot.oldest_queue_age_seconds / 60:.0f} 分钟"
+                        if chinese
+                        else "Oldest queued task has waited "
+                        f"{snapshot.oldest_queue_age_seconds / 60:.0f} min"
+                    ),
                 )
             )
         if (
@@ -319,10 +358,17 @@ class VpsHealthMonitor:
             found.append(
                 HealthIssue(
                     "transcript_lag",
-                    "Telegram 消息同步已连续 "
-                    f"{snapshot.oldest_transcript_lag_seconds / 60:.0f} 分钟没有进展"
-                    f"（{snapshot.transcript_backlog_sessions} 个会话，"
-                    f"待发送 {_format_bytes(snapshot.transcript_backlog_bytes)}）",
+                    (
+                        "Telegram 消息同步已连续 "
+                        f"{snapshot.oldest_transcript_lag_seconds / 60:.0f} 分钟没有进展"
+                        f"（{snapshot.transcript_backlog_sessions} 个会话，"
+                        f"待发送 {_format_bytes(snapshot.transcript_backlog_bytes)}）"
+                        if chinese
+                        else "Telegram delivery has made no progress for "
+                        f"{snapshot.oldest_transcript_lag_seconds / 60:.0f} min "
+                        f"({snapshot.transcript_backlog_sessions} session(s), "
+                        f"{_format_bytes(snapshot.transcript_backlog_bytes)} pending)"
+                    ),
                 )
             )
         return tuple(found)
@@ -417,17 +463,32 @@ class VpsHealthMonitor:
                         config.health_recovery_stable_seconds
                     ),
                 )
+                language = getattr(config, "health_notification_language", "en")
                 if decision.event == "alert":
-                    text = "⚠️ AgentBot 需要关注\n\n" + format_health_snapshot(
-                        snapshot,
-                        decision.issues,
+                    if language == "zh":
+                        text = "⚠️ AgentBot 需要关注\n\n"
+                        note = "Bot 会自动重试；同一问题状态不变时不会频繁提醒。"
+                    else:
+                        text = "⚠️ AgentBot needs attention\n\n"
+                        note = (
+                            "The bot will retry automatically; unchanged issues "
+                            "will not trigger frequent reminders."
+                        )
+                    text += format_health_snapshot(
+                        snapshot, decision.issues, language=language
                     )
-                    text += "\n\nBot 会自动重试；同一问题状态不变时不会频繁提醒。"
+                    text += f"\n\n{note}"
                 elif decision.event == "recovery":
-                    text = (
-                        "✅ AgentBot 已恢复\n\n"
-                        "此前的问题已连续一段时间未再出现，当前运行正常。"
-                    )
+                    if language == "zh":
+                        text = (
+                            "✅ AgentBot 已恢复\n\n"
+                            "此前的问题已连续一段时间未再出现，当前运行正常。"
+                        )
+                    else:
+                        text = (
+                            "✅ AgentBot recovered\n\n"
+                            "The previous issue has remained clear and the bot is healthy."
+                        )
                 else:
                     text = ""
 

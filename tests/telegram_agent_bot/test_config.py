@@ -33,6 +33,7 @@ def _base_env(monkeypatch, tmp_path):
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_IDLE_SESSION_TIMEOUT_SECONDS", raising=False)
     for key in (
         "TELEGRAM_AGENT_BOT_HEALTH_ALERTS_ENABLED",
+        "TELEGRAM_AGENT_BOT_HEALTH_NOTIFICATION_LANGUAGE",
         "TELEGRAM_AGENT_BOT_HEALTH_CHECK_INTERVAL_SECONDS",
         "TELEGRAM_AGENT_BOT_HEALTH_ALERT_COOLDOWN_SECONDS",
         "TELEGRAM_AGENT_BOT_HEALTH_RECOVERY_STABLE_SECONDS",
@@ -102,6 +103,7 @@ class TestConfigValid:
     def test_small_host_health_defaults(self):
         cfg = Config()
         assert cfg.health_alerts_enabled is True
+        assert cfg.health_notification_language == "en"
         assert cfg.health_check_interval_seconds == 60.0
         assert cfg.health_alert_cooldown_seconds == 86400.0
         assert cfg.health_recovery_stable_seconds == 300.0
@@ -110,6 +112,18 @@ class TestConfigValid:
         assert cfg.health_disk_used_percent == 85.0
         assert cfg.health_queue_oldest_seconds == 600.0
         assert cfg.health_transcript_lag_seconds == 300.0
+
+    def test_health_notification_language_can_be_selected(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_HEALTH_NOTIFICATION_LANGUAGE", "zh")
+
+        assert Config().health_notification_language == "zh"
+
+    def test_unknown_health_notification_language_falls_back_to_english(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_HEALTH_NOTIFICATION_LANGUAGE", "xx")
+
+        assert Config().health_notification_language == "en"
 
     def test_claude_agent_defaults(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "claude")

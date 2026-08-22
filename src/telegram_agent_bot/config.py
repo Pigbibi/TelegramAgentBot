@@ -308,6 +308,21 @@ class Config:
             "TELEGRAM_AGENT_BOT_HEALTH_ALERTS_ENABLED",
             "true",
         ).strip().lower() not in {"0", "false", "no", "off"}
+        health_notification_language = (
+            os.getenv(
+                "TELEGRAM_AGENT_BOT_HEALTH_NOTIFICATION_LANGUAGE",
+                "en",
+            )
+            .strip()
+            .lower()
+        )
+        if health_notification_language not in {"en", "zh"}:
+            logger.warning(
+                "Unsupported health notification language %r; using English",
+                health_notification_language,
+            )
+            health_notification_language = "en"
+        self.health_notification_language = health_notification_language
         self.health_check_interval_seconds = max(
             30.0,
             float(

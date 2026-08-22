@@ -1383,7 +1383,14 @@ async def health_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
     try:
         snapshot = await _health_monitor.snapshot(session_monitor)
         issues = _health_monitor.issues(snapshot, config)
-        await safe_reply(update.message, format_health_snapshot(snapshot, issues))
+        await safe_reply(
+            update.message,
+            format_health_snapshot(
+                snapshot,
+                issues,
+                language=config.health_notification_language,
+            ),
+        )
     except Exception:
         logger.exception("Failed to build on-demand host health snapshot")
         await safe_reply(update.message, "❌ Host health snapshot is unavailable.")
