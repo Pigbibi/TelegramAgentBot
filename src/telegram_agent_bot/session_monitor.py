@@ -849,11 +849,11 @@ class SessionMonitor:
                 cleared,
             )
 
-    def delivery_backlog_bytes(self) -> dict[str, int]:
-        """Return undelivered transcript bytes for currently bound sessions."""
+    def delivery_backlog_metrics(self) -> dict[str, tuple[int, int]]:
+        """Return pending bytes and committed offsets for bound sessions."""
         from .session import session_manager
 
-        backlog: dict[str, int] = {}
+        backlog: dict[str, tuple[int, int]] = {}
         for session_id, tracked in self.state.tracked_sessions.items():
             if session_id in self._permanent_delivery_blocks:
                 continue
@@ -865,8 +865,18 @@ class SessionMonitor:
                 continue
             pending_bytes = max(0, current_size - tracked.last_byte_offset)
             if pending_bytes:
-                backlog[session_id] = pending_bytes
+                backlog[session_id] = (pending_bytes, tracked.last_byte_offset)
         return backlog
+
+    def delivery_backlog_bytes(self) -> dict[str, int]:
+        """Return undelivered transcript bytes for currently bound sessions."""
+        return {
+            session_id: pending_bytes
+            for session_id, (
+                pending_bytes,
+                _offset,
+            ) in self.delivery_backlog_metrics().items()
+        }
 
     def _record_dispatch_results(
         self,

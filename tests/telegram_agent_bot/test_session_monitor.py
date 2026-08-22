@@ -32,6 +32,7 @@ def test_delivery_backlog_only_counts_bound_sessions(tmp_path, monkeypatch):
         lambda session_id: session_id == "bound",
     )
 
+    assert monitor.delivery_backlog_metrics() == {"bound": (6, 4)}
     assert monitor.delivery_backlog_bytes() == {"bound": 6}
 
 
