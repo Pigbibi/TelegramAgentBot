@@ -35,6 +35,29 @@ def test_delivery_backlog_only_counts_bound_sessions(tmp_path, monkeypatch):
     assert monitor.delivery_backlog_bytes() == {"bound": 6}
 
 
+def test_delivery_backlog_ignores_permanently_blocked_sessions(tmp_path, monkeypatch):
+    monitor = SessionMonitor(
+        projects_path=tmp_path / "projects",
+        state_file=tmp_path / "monitor_state.json",
+    )
+    transcript = tmp_path / "blocked.jsonl"
+    transcript.write_bytes(b"0123456789")
+    monitor.state.tracked_sessions = {
+        "blocked": TrackedSession(
+            "blocked",
+            str(transcript),
+            last_byte_offset=4,
+        ),
+    }
+    monitor._permanent_delivery_blocks["blocked"] = (12345, 42)
+    monkeypatch.setattr(
+        "telegram_agent_bot.session.session_manager.has_bound_thread_for_session",
+        lambda _session_id: True,
+    )
+
+    assert monitor.delivery_backlog_bytes() == {}
+
+
 class TestSessionMonitorDispatch:
     """Tests for monitor dispatch fairness across sessions."""
 

@@ -105,7 +105,7 @@ class TestConfigValid:
         assert cfg.health_alert_cooldown_seconds == 3600.0
         assert cfg.health_memory_available_mb == 256.0
         assert cfg.health_swap_used_percent == 75.0
-        assert cfg.health_disk_used_percent == 80.0
+        assert cfg.health_disk_used_percent == 85.0
         assert cfg.health_queue_oldest_seconds == 600.0
         assert cfg.health_transcript_lag_seconds == 120.0
 

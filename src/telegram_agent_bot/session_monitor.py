@@ -855,6 +855,8 @@ class SessionMonitor:
 
         backlog: dict[str, int] = {}
         for session_id, tracked in self.state.tracked_sessions.items():
+            if session_id in self._permanent_delivery_blocks:
+                continue
             if not session_manager.has_bound_thread_for_session(session_id):
                 continue
             try:
