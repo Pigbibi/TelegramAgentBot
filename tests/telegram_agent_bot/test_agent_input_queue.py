@@ -1,7 +1,7 @@
 import asyncio
 from collections import deque
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
@@ -172,6 +172,63 @@ async def test_deferred_confirmation_deletes_submitted_record(monkeypatch):
     )
 
     assert bot_module._runtime_store.get_agent_input(record.id) is None
+
+
+@pytest.mark.asyncio
+async def test_deferred_confirmation_reports_delay_without_failure(monkeypatch):
+    record = bot_module._runtime_store.enqueue_agent_input(
+        user_id=12345,
+        thread_id=42,
+        window_id="@1",
+        text="already submitted",
+        max_pending=20,
+    )
+    assert record is not None
+    assert bot_module._runtime_store.mark_agent_input_submitted(record.id)
+    delayed = AsyncMock()
+    monkeypatch.setattr(bot_module, "_AGENT_INPUT_CONFIRM_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "wait_for_transcript_user_message",
+        AsyncMock(side_effect=[False, True]),
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_notify_agent_input_confirmation_delayed",
+        delayed,
+    )
+
+    await bot_module._run_agent_input_confirmation(
+        MagicMock(),
+        record.id,
+        (12345, 42, "@1"),
+        recover_submission=False,
+        notify_on_first_delay=True,
+    )
+
+    delayed.assert_awaited_once_with(ANY, 12345, 42)
+    assert bot_module._runtime_store.get_agent_input(record.id) is None
+
+
+@pytest.mark.asyncio
+async def test_delayed_confirmation_notice_is_neutral(monkeypatch):
+    safe_send = AsyncMock()
+    bot = MagicMock()
+    monkeypatch.setattr(bot_module, "safe_send", safe_send)
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "resolve_chat_id",
+        MagicMock(return_value=-100123),
+    )
+
+    await bot_module._notify_agent_input_confirmation_delayed(bot, 12345, 42)
+
+    safe_send.assert_awaited_once()
+    args = safe_send.await_args.args
+    assert args[:2] == (bot, -100123)
+    assert args[2].startswith("⏳ Message was submitted")
+    assert "failed" not in args[2].lower()
+    assert safe_send.await_args.kwargs == {"message_thread_id": 42}
 
 
 @pytest.mark.asyncio
@@ -754,7 +811,7 @@ async def test_drain_keeps_unconfirmed_submission_durable_without_resend(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_drain_agent_input_queue_notifies_when_submit_confirmation_fails(
+async def test_drain_agent_input_queue_reports_delayed_submit_confirmation(
     monkeypatch,
 ):
     key = (12345, 42, "@1")
@@ -780,14 +837,16 @@ async def test_drain_agent_input_queue_notifies_when_submit_confirmation_fails(
         "_refresh_session_map_after_first_prompt",
         AsyncMock(return_value=False),
     )
-    monkeypatch.setattr(bot_module, "_notify_queued_input_failure", notify)
+    monkeypatch.setattr(
+        bot_module,
+        "_notify_agent_input_confirmation_delayed",
+        notify,
+    )
     monkeypatch.setattr(bot_module.asyncio, "sleep", AsyncMock())
 
     await bot_module._drain_agent_input_queue(MagicMock(), key)
 
-    notify.assert_awaited_once()
-    assert "not confirmed" in notify.await_args.args[3]
-    assert "avoid a duplicate" in notify.await_args.args[3]
+    notify.assert_awaited_once_with(ANY, 12345, 42)
     assert key not in bot_module._agent_input_queues
 
 
