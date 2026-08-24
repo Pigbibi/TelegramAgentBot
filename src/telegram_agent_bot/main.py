@@ -151,10 +151,10 @@ def main() -> None:
         print("Get your user ID from @userinfobot on Telegram.")
         sys.exit(1)
 
-    # Keep third-party libraries at WARNING while retaining AgentBot lifecycle
-    # and safeguard diagnostics. Package loggers use underscores, not the CLI's
-    # hyphenated distribution name.
-    logging.getLogger("telegram_agent_bot").setLevel(logging.INFO)
+    # Keep routine package and third-party logs at WARNING while retaining a
+    # small set of lifecycle and effective-safeguard diagnostics.
+    logging.getLogger("telegram_agent_bot.main").setLevel(logging.INFO)
+    logging.getLogger("telegram_agent_bot.runtime").setLevel(logging.INFO)
     # AIORateLimiter (max_retries=5) handles retries itself; keep INFO for visibility
     logging.getLogger("telegram.ext.AIORateLimiter").setLevel(logging.INFO)
     logger = logging.getLogger(__name__)

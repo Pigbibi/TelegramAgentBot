@@ -253,6 +253,7 @@ from .utils import atomic_write_json
 from .vps_health import VpsHealthMonitor, format_health_snapshot
 
 logger = logging.getLogger(__name__)
+runtime_logger = logging.getLogger("telegram_agent_bot.runtime")
 
 POLL_TIMEOUT_SECONDS = 30
 DEFAULT_REQUEST_CONNECT_TIMEOUT_SECONDS = 10.0
@@ -6666,7 +6667,7 @@ async def post_init(application: Application) -> None:
             "remains available but busy inputs cannot be queued safely"
         )
 
-    logger.info(
+    runtime_logger.info(
         "Runtime safeguards: agent_input_queue_max_size=%d "
         "agent_input_queue_max_wait_seconds=%.1f agent_max_active_turns=%d "
         "health_alert_cooldown_seconds=%.1f "
