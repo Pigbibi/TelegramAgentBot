@@ -1,8 +1,8 @@
 """Small SQLite-backed runtime state for restart-safe message handling.
 
-The bot intentionally keeps this store narrow: queued prompts that have not yet
-reached an agent, plus Telegram update IDs used for duplicate suppression.  It
-does not replace the existing session or transcript state files.
+The bot intentionally keeps this store narrow: prompt submission lifecycles,
+bounded continuation retries, and Telegram update IDs used for duplicate
+suppression. It does not replace the existing session or transcript state files.
 """
 
 from __future__ import annotations
@@ -15,17 +15,36 @@ from pathlib import Path
 
 
 _COMPLETED_UPDATE_RETENTION_SECONDS = 7 * 24 * 60 * 60
+AGENT_INPUT_QUEUED = "queued"
+AGENT_INPUT_SUBMITTED_UNCONFIRMED = "submitted_unconfirmed"
+TRANSIENT_RETRY_SCHEDULED = "scheduled"
+TRANSIENT_RETRY_WAITING_RESULT = "waiting_result"
 
 
 @dataclass(frozen=True, slots=True)
 class PendingAgentInput:
-    """One prompt accepted by Telegram but not yet submitted to the agent."""
+    """One prompt accepted by Telegram and still awaiting durable confirmation."""
 
     id: int
     user_id: int
     thread_id: int
     window_id: str
     text: str
+    created_at_epoch: float
+    state: str = AGENT_INPUT_QUEUED
+    submitted_at_epoch: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TransientAgentRetry:
+    """Restart-safe continuation retry for one agent window."""
+
+    user_id: int
+    thread_id: int
+    window_id: str
+    attempt: int
+    state: str
+    not_before_epoch: float
     created_at_epoch: float
 
 
@@ -69,10 +88,24 @@ class DurableRuntimeStore:
                     thread_id INTEGER NOT NULL,
                     window_id TEXT NOT NULL,
                     text TEXT NOT NULL,
-                    created_at_epoch REAL NOT NULL
+                    created_at_epoch REAL NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'queued'
+                        CHECK (state IN ('queued', 'submitted_unconfirmed')),
+                    submitted_at_epoch REAL
                 );
                 CREATE INDEX IF NOT EXISTS agent_input_queue_target_idx
                     ON agent_input_queue(user_id, thread_id, window_id, id);
+
+                CREATE TABLE IF NOT EXISTS transient_agent_retries (
+                    window_id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    thread_id INTEGER NOT NULL,
+                    attempt INTEGER NOT NULL,
+                    state TEXT NOT NULL
+                        CHECK (state IN ('scheduled', 'waiting_result')),
+                    not_before_epoch REAL NOT NULL,
+                    created_at_epoch REAL NOT NULL
+                );
 
                 CREATE TABLE IF NOT EXISTS telegram_updates (
                     update_id INTEGER PRIMARY KEY,
@@ -88,6 +121,24 @@ class DurableRuntimeStore:
                     last_sent_at_epoch REAL NOT NULL
                 );
                 """
+            )
+            agent_input_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(agent_input_queue)")
+            }
+            if "state" not in agent_input_columns:
+                connection.execute(
+                    "ALTER TABLE agent_input_queue ADD COLUMN state TEXT NOT NULL "
+                    "DEFAULT 'queued' CHECK "
+                    "(state IN ('queued', 'submitted_unconfirmed'))"
+                )
+            if "submitted_at_epoch" not in agent_input_columns:
+                connection.execute(
+                    "ALTER TABLE agent_input_queue ADD COLUMN submitted_at_epoch REAL"
+                )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS agent_input_queue_state_idx "
+                "ON agent_input_queue(state, created_at_epoch)"
             )
             if reset_inflight_updates:
                 connection.execute(
@@ -108,6 +159,24 @@ class DurableRuntimeStore:
             thread_id=int(row["thread_id"]),
             window_id=str(row["window_id"]),
             text=str(row["text"]),
+            created_at_epoch=float(row["created_at_epoch"]),
+            state=str(row["state"]),
+            submitted_at_epoch=(
+                float(row["submitted_at_epoch"])
+                if row["submitted_at_epoch"] is not None
+                else None
+            ),
+        )
+
+    @staticmethod
+    def _retry_from_row(row: sqlite3.Row) -> TransientAgentRetry:
+        return TransientAgentRetry(
+            user_id=int(row["user_id"]),
+            thread_id=int(row["thread_id"]),
+            window_id=str(row["window_id"]),
+            attempt=int(row["attempt"]),
+            state=str(row["state"]),
+            not_before_epoch=float(row["not_before_epoch"]),
             created_at_epoch=float(row["created_at_epoch"]),
         )
 
@@ -151,16 +220,27 @@ class DurableRuntimeStore:
         )
 
     def list_pending_agent_inputs(self) -> list[PendingAgentInput]:
-        """Return all queued prompts in stable FIFO order."""
+        """Return queued and submitted-unconfirmed prompts in FIFO order."""
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT id, user_id, thread_id, window_id, text, created_at_epoch "
+                "SELECT id, user_id, thread_id, window_id, text, created_at_epoch, "
+                "state, submitted_at_epoch "
                 "FROM agent_input_queue ORDER BY id"
             ).fetchall()
         return [self._record_from_row(row) for row in rows]
 
+    def get_agent_input(self, record_id: int) -> PendingAgentInput | None:
+        """Return one active input lifecycle record, if it still exists."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id, user_id, thread_id, window_id, text, created_at_epoch, "
+                "state, submitted_at_epoch FROM agent_input_queue WHERE id = ?",
+                (record_id,),
+            ).fetchone()
+        return self._record_from_row(row) if row is not None else None
+
     def pending_agent_input_stats(self) -> PendingAgentInputStats:
-        """Return queue depth and oldest enqueue time without reading prompt text."""
+        """Return active lifecycle depth and oldest age without reading text."""
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT COUNT(*) AS count, MIN(created_at_epoch) AS oldest "
@@ -214,11 +294,33 @@ class DurableRuntimeStore:
                 (window_id, record_id),
             )
 
-    def mark_agent_input_submitted(self, record_id: int) -> None:
-        """Remove a prompt only after it has been accepted by the agent pane."""
+    def mark_agent_input_submitted(
+        self,
+        record_id: int,
+        *,
+        submitted_at_epoch: float | None = None,
+    ) -> bool:
+        """Move a queued prompt to the no-auto-resend confirmation state."""
+        submitted_at = time.time() if submitted_at_epoch is None else submitted_at_epoch
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE agent_input_queue SET state = ?, submitted_at_epoch = ? "
+                "WHERE id = ? AND state = ?",
+                (
+                    AGENT_INPUT_SUBMITTED_UNCONFIRMED,
+                    submitted_at,
+                    record_id,
+                    AGENT_INPUT_QUEUED,
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def confirm_agent_input(self, record_id: int) -> None:
+        """Remove a submitted prompt after its transcript entry is observed."""
         with self._connect() as connection:
             connection.execute(
-                "DELETE FROM agent_input_queue WHERE id = ?", (record_id,)
+                "DELETE FROM agent_input_queue WHERE id = ? AND state = ?",
+                (record_id, AGENT_INPUT_SUBMITTED_UNCONFIRMED),
             )
 
     def delete_agent_inputs(self, record_ids: list[int]) -> None:
@@ -241,6 +343,94 @@ class DurableRuntimeStore:
                 "DELETE FROM agent_input_queue "
                 "WHERE user_id = ? AND thread_id = ? AND window_id = ?",
                 (user_id, thread_id, window_id),
+            )
+
+    def save_transient_agent_retry(
+        self,
+        *,
+        user_id: int,
+        thread_id: int,
+        window_id: str,
+        attempt: int,
+        state: str,
+        not_before_epoch: float,
+        created_at_epoch: float | None = None,
+    ) -> TransientAgentRetry:
+        """Upsert one restart-safe continuation retry per agent window."""
+        if state not in {TRANSIENT_RETRY_SCHEDULED, TRANSIENT_RETRY_WAITING_RESULT}:
+            raise ValueError(f"Unsupported transient retry state: {state}")
+        created_at = time.time() if created_at_epoch is None else created_at_epoch
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO transient_agent_retries "
+                "(window_id, user_id, thread_id, attempt, state, "
+                "not_before_epoch, created_at_epoch) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(window_id) DO UPDATE SET "
+                "user_id = excluded.user_id, thread_id = excluded.thread_id, "
+                "attempt = excluded.attempt, state = excluded.state, "
+                "not_before_epoch = excluded.not_before_epoch",
+                (
+                    window_id,
+                    user_id,
+                    thread_id,
+                    attempt,
+                    state,
+                    not_before_epoch,
+                    created_at,
+                ),
+            )
+        return TransientAgentRetry(
+            user_id=user_id,
+            thread_id=thread_id,
+            window_id=window_id,
+            attempt=attempt,
+            state=state,
+            not_before_epoch=not_before_epoch,
+            created_at_epoch=created_at,
+        )
+
+    def get_transient_agent_retry(self, window_id: str) -> TransientAgentRetry | None:
+        """Return the retry lifecycle for one window."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT user_id, thread_id, window_id, attempt, state, "
+                "not_before_epoch, created_at_epoch "
+                "FROM transient_agent_retries WHERE window_id = ?",
+                (window_id,),
+            ).fetchone()
+        return self._retry_from_row(row) if row is not None else None
+
+    def list_transient_agent_retries(self) -> list[TransientAgentRetry]:
+        """Return all retry lifecycles for restart recovery."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT user_id, thread_id, window_id, attempt, state, "
+                "not_before_epoch, created_at_epoch "
+                "FROM transient_agent_retries ORDER BY created_at_epoch, window_id"
+            ).fetchall()
+        return [self._retry_from_row(row) for row in rows]
+
+    def mark_transient_agent_retry_waiting(self, window_id: str, attempt: int) -> bool:
+        """Prevent an already-due retry from being resubmitted after restart."""
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE transient_agent_retries SET state = ? "
+                "WHERE window_id = ? AND attempt = ? AND state = ?",
+                (
+                    TRANSIENT_RETRY_WAITING_RESULT,
+                    window_id,
+                    attempt,
+                    TRANSIENT_RETRY_SCHEDULED,
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def delete_transient_agent_retry(self, window_id: str) -> None:
+        """Clear retry history when a real user input supersedes it."""
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM transient_agent_retries WHERE window_id = ?",
+                (window_id,),
             )
 
     def claim_telegram_update(self, update_id: int) -> bool:

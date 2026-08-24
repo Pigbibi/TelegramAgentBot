@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from telegram_agent_bot import bot as bot_module
-from telegram_agent_bot.durable_state import DurableRuntimeStore
+from telegram_agent_bot.durable_state import (
+    AGENT_INPUT_SUBMITTED_UNCONFIRMED,
+    TRANSIENT_RETRY_SCHEDULED,
+    TRANSIENT_RETRY_WAITING_RESULT,
+    DurableRuntimeStore,
+)
 from telegram_agent_bot.turn_admission import turn_admission
 
 
@@ -18,15 +23,21 @@ def clear_agent_input_queue_state(monkeypatch, tmp_path):
     bot_module._agent_input_queues.clear()
     bot_module._agent_input_tasks.clear()
     bot_module._agent_input_locks.clear()
+    bot_module._agent_input_confirmation_tasks.clear()
+    bot_module._agent_input_confirmation_targets.clear()
     bot_module._transient_agent_retry_attempts.clear()
     bot_module._transient_agent_retry_tasks.clear()
     turn_admission.reset()
     yield
     for task in bot_module._transient_agent_retry_tasks.values():
         task.cancel()
+    for task in bot_module._agent_input_confirmation_tasks.values():
+        task.cancel()
     bot_module._agent_input_queues.clear()
     bot_module._agent_input_tasks.clear()
     bot_module._agent_input_locks.clear()
+    bot_module._agent_input_confirmation_tasks.clear()
+    bot_module._agent_input_confirmation_targets.clear()
     bot_module._transient_agent_retry_attempts.clear()
     bot_module._transient_agent_retry_tasks.clear()
     turn_admission.reset()
@@ -56,6 +67,73 @@ def test_restore_agent_input_queues_after_restart(monkeypatch):
         item.text for item in bot_module._agent_input_queues[(12345, 42, "@1")]
     ] == ["queued before restart"]
     assert ensured == [(12345, 42, "@1")]
+
+
+def test_restore_submitted_input_only_starts_confirmation(monkeypatch):
+    record = bot_module._runtime_store.enqueue_agent_input(
+        user_id=12345,
+        thread_id=42,
+        window_id="@1",
+        text="already submitted",
+        max_pending=20,
+        created_at_epoch=1000.0,
+    )
+    assert record is not None
+    assert bot_module._runtime_store.mark_agent_input_submitted(record.id)
+    confirmations: list[tuple[int, tuple[int, int, str], bool]] = []
+    drainers: list[tuple[int, int, str]] = []
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "resolve_window_for_thread",
+        lambda _user_id, _thread_id: "@1",
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_ensure_agent_input_confirmation_task",
+        lambda _bot, record_id, key, *, recover_submission: confirmations.append(
+            (record_id, key, recover_submission)
+        ),
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_ensure_agent_input_drain_task",
+        lambda _bot, key: drainers.append(key),
+    )
+
+    restored = bot_module._restore_agent_input_queues(MagicMock())
+
+    assert restored == 1
+    assert confirmations == [(record.id, (12345, 42, "@1"), True)]
+    assert drainers == []
+    assert bot_module._agent_input_queues == {}
+
+
+@pytest.mark.asyncio
+async def test_deferred_confirmation_deletes_submitted_record(monkeypatch):
+    record = bot_module._runtime_store.enqueue_agent_input(
+        user_id=12345,
+        thread_id=42,
+        window_id="@1",
+        text="already submitted",
+        max_pending=20,
+    )
+    assert record is not None
+    assert bot_module._runtime_store.mark_agent_input_submitted(record.id)
+    monkeypatch.setattr(bot_module, "_AGENT_INPUT_CONFIRM_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "wait_for_transcript_user_message",
+        AsyncMock(return_value=True),
+    )
+
+    await bot_module._run_agent_input_confirmation(
+        MagicMock(),
+        record.id,
+        (12345, 42, "@1"),
+        recover_submission=False,
+    )
+
+    assert bot_module._runtime_store.get_agent_input(record.id) is None
 
 
 @pytest.mark.asyncio
@@ -260,6 +338,60 @@ async def test_transient_agent_failure_retries_with_bounded_continuation(monkeyp
     assert (
         bot_module._schedule_transient_agent_retry(MagicMock(), 12345, 42, "@1") is None
     )
+    bot_module._reset_transient_agent_retry("@1")
+    assert bot_module._runtime_store.get_transient_agent_retry("@1") is None
+
+
+@pytest.mark.asyncio
+async def test_scheduled_transient_retry_resumes_after_restart(monkeypatch):
+    bot_module._runtime_store.save_transient_agent_retry(
+        user_id=12345,
+        thread_id=42,
+        window_id="@1",
+        attempt=2,
+        state=TRANSIENT_RETRY_SCHEDULED,
+        not_before_epoch=0.0,
+    )
+    send_or_queue = AsyncMock(return_value=(True, "Sent", False))
+    monkeypatch.setattr(bot_module, "_send_or_queue_agent_input", send_or_queue)
+    monkeypatch.setattr(bot_module, "mark_window_working", AsyncMock())
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "resolve_window_for_thread",
+        lambda _user_id, _thread_id: "@1",
+    )
+
+    restored = bot_module._restore_transient_agent_retries(MagicMock())
+
+    assert restored == 1
+    await bot_module._transient_agent_retry_tasks["@1"]
+    send_or_queue.assert_awaited_once()
+    retry = bot_module._runtime_store.get_transient_agent_retry("@1")
+    assert retry is not None
+    assert retry.attempt == 2
+    assert retry.state == TRANSIENT_RETRY_WAITING_RESULT
+
+
+def test_submitted_transient_retry_is_not_replayed_after_restart(monkeypatch):
+    bot_module._runtime_store.save_transient_agent_retry(
+        user_id=12345,
+        thread_id=42,
+        window_id="@1",
+        attempt=2,
+        state=TRANSIENT_RETRY_WAITING_RESULT,
+        not_before_epoch=0.0,
+    )
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "resolve_window_for_thread",
+        lambda _user_id, _thread_id: "@1",
+    )
+
+    restored = bot_module._restore_transient_agent_retries(MagicMock())
+
+    assert restored == 1
+    assert bot_module._transient_agent_retry_attempts == {"@1": 2}
+    assert bot_module._transient_agent_retry_tasks == {}
 
 
 @pytest.mark.asyncio
@@ -436,6 +568,51 @@ async def test_drain_agent_input_queue_waits_until_ready(monkeypatch):
         confirm_existing_session=True,
     )
     assert key not in bot_module._agent_input_queues
+
+
+@pytest.mark.asyncio
+async def test_drain_keeps_unconfirmed_submission_durable_without_resend(monkeypatch):
+    key = (12345, 42, "@1")
+    queued, _depth, _limit = bot_module._queue_agent_input(key, "queued prompt")
+    assert queued is True
+    item = bot_module._agent_input_queues[key][0]
+    assert item.store_id is not None
+    capture_ready = SimpleNamespace(
+        text="previous output\n\n›\n\n  gpt-5.5 · ~/repo", missing=False
+    )
+
+    async def assert_submitted_before_tmux(*_args):
+        persisted = bot_module._runtime_store.get_agent_input(item.store_id)
+        assert persisted is not None
+        assert persisted.state == AGENT_INPUT_SUBMITTED_UNCONFIRMED
+        return True, "Sent"
+
+    monkeypatch.setattr(
+        bot_module,
+        "capture_agent_output",
+        AsyncMock(return_value=capture_ready),
+    )
+    monkeypatch.setattr(
+        bot_module, "_send_message_to_agent", assert_submitted_before_tmux
+    )
+    monkeypatch.setattr(bot_module, "mark_window_working", AsyncMock())
+    monkeypatch.setattr(
+        bot_module,
+        "_refresh_session_map_after_first_prompt",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(bot_module, "_notify_queued_input_failure", AsyncMock())
+
+    await bot_module._drain_agent_input_queue(MagicMock(), key)
+
+    persisted = bot_module._runtime_store.get_agent_input(item.store_id)
+    assert persisted is not None
+    assert persisted.state == AGENT_INPUT_SUBMITTED_UNCONFIRMED
+    assert key not in bot_module._agent_input_queues
+    confirmation = bot_module._agent_input_confirmation_tasks[item.store_id]
+    confirmation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await confirmation
 
 
 @pytest.mark.asyncio
