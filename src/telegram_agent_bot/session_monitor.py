@@ -56,6 +56,7 @@ class NewMessage:
     tool_name: str | None = None
     image_data: list[tuple[str, bytes]] | None = None
     source_offset: int = 0
+    error_code: str | None = None
 
 
 class SessionMonitor:
@@ -668,6 +669,7 @@ class SessionMonitor:
                             tool_name=entry.tool_name,
                             image_data=entry.image_data,
                             source_offset=entry.source_offset,
+                            error_code=entry.error_code,
                         )
                     )
 

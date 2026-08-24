@@ -50,6 +50,7 @@ class ParsedEntry:
         None  # For tool_result entries with images: (media_type, raw_bytes)
     )
     source_offset: int = 0
+    error_code: str | None = None
 
 
 @dataclass
@@ -380,6 +381,27 @@ class TranscriptParser:
                 last_agent_message = payload.get("last_agent_message")
                 if isinstance(last_agent_message, str) and last_agent_message.strip():
                     return None
+
+                error = payload.get("error")
+                if isinstance(error, dict):
+                    message = error.get("message")
+                    if not isinstance(message, str) or not message.strip():
+                        message = "The agent stopped before completing the task."
+                    entry = cls._build_message_entry(
+                        role="assistant",
+                        timestamp=timestamp,
+                        content=(
+                            "⚠️ Agent stopped before completing the task: "
+                            f"{message.strip()}"
+                        ),
+                    )
+                    if entry is not None:
+                        entry["agent_error"] = True
+                        error_code = error.get("codex_error_info")
+                        if isinstance(error_code, str) and error_code:
+                            entry["agent_error_code"] = error_code
+                    return entry
+
                 return cls._build_message_entry(
                     role="assistant",
                     timestamp=timestamp,
@@ -819,6 +841,13 @@ class TranscriptParser:
             if msg_type == "assistant":
                 # Process content blocks
                 has_text = False
+                is_agent_error = data.get("agent_error") is True
+                raw_error_code = data.get("agent_error_code")
+                error_code = (
+                    raw_error_code
+                    if isinstance(raw_error_code, str) and raw_error_code
+                    else None
+                )
                 for block in content:
                     if not isinstance(block, dict):
                         continue
@@ -831,8 +860,11 @@ class TranscriptParser:
                                 ParsedEntry(
                                     role="assistant",
                                     text=t,
-                                    content_type="text",
+                                    content_type=(
+                                        "agent_error" if is_agent_error else "text"
+                                    ),
                                     timestamp=entry_timestamp,
+                                    error_code=error_code,
                                 )
                             )
                             has_text = True

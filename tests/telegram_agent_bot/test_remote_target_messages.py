@@ -9,6 +9,63 @@ from telegram_agent_bot.session_monitor import NewMessage
 
 
 @pytest.mark.asyncio
+async def test_handle_new_message_retries_server_overload_without_false_success() -> (
+    None
+):
+    bot = AsyncMock()
+    msg = NewMessage(
+        session_id="local-1",
+        text=(
+            "⚠️ Agent stopped before completing the task: Selected model is at capacity."
+        ),
+        is_complete=True,
+        content_type="agent_error",
+        source_offset=123,
+        error_code="server_overloaded",
+    )
+
+    with (
+        patch("telegram_agent_bot.bot.session_manager") as mock_sm,
+        patch("telegram_agent_bot.bot.turn_admission") as turn_admission,
+        patch(
+            "telegram_agent_bot.bot._schedule_transient_agent_retry",
+            return_value=(1, 15.0),
+        ) as schedule_retry,
+        patch(
+            "telegram_agent_bot.bot.enqueue_status_update",
+            new_callable=AsyncMock,
+        ) as enqueue_status_update,
+        patch(
+            "telegram_agent_bot.bot.enqueue_content_message",
+            new_callable=AsyncMock,
+        ) as enqueue_content_message,
+    ):
+        mock_sm.find_users_for_session = AsyncMock(return_value=[(12345, "@1", 42)])
+        mock_sm.find_users_for_target_session.return_value = []
+
+        from telegram_agent_bot.bot import handle_new_message
+
+        await handle_new_message(msg, bot)
+
+    turn_admission.observe.assert_called_once_with("@1", active=False)
+    schedule_retry.assert_called_once_with(bot, 12345, 42, "@1")
+    enqueue_status_update.assert_awaited_once_with(
+        bot,
+        12345,
+        "@1",
+        (
+            "⚠️ Agent stopped before finishing because the selected model is "
+            "temporarily at capacity.\nAutomatic retry 1/3 in 15s."
+        ),
+        thread_id=42,
+    )
+    enqueue_content_message.assert_not_awaited()
+    mock_sm.update_user_window_offset.assert_called_once_with(
+        12345, "@1", 123, "local-1"
+    )
+
+
+@pytest.mark.asyncio
 async def test_handle_new_message_routes_remote_target_session() -> None:
     bot = AsyncMock()
     msg = NewMessage(

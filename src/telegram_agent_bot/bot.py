@@ -298,9 +298,18 @@ class _QueuedAgentInput:
 
 
 _AGENT_INPUT_POLL_INTERVAL_SECONDS = 1.0
+_TRANSIENT_AGENT_RETRY_DELAYS_SECONDS = (15.0, 45.0, 120.0)
+_TRANSIENT_AGENT_ERROR_CODES = frozenset({"server_overloaded"})
+_TRANSIENT_AGENT_RETRY_PROMPT = (
+    "Continue the previous user request from where it stopped. The previous turn "
+    "ended because the selected model was temporarily at capacity. Do not repeat "
+    "completed work; finish the unfinished task and provide a final answer."
+)
 _agent_input_queues: dict[tuple[int, int, str], deque[_QueuedAgentInput]] = {}
 _agent_input_tasks: dict[tuple[int, int, str], asyncio.Task] = {}
 _agent_input_locks: dict[tuple[int, int, str], asyncio.Lock] = {}
+_transient_agent_retry_attempts: dict[str, int] = {}
+_transient_agent_retry_tasks: dict[str, asyncio.Task[None]] = {}
 _runtime_store = DurableRuntimeStore(config.config_dir / "runtime.sqlite3")
 _health_monitor = VpsHealthMonitor(_runtime_store)
 
@@ -1955,6 +1964,14 @@ def _agent_input_lock(key: tuple[int, int, str]) -> asyncio.Lock:
     return lock
 
 
+def _reset_transient_agent_retry(window_id: str) -> None:
+    """Cancel a pending automatic retry when a real user sends new input."""
+    task = _transient_agent_retry_tasks.pop(window_id, None)
+    if task and task is not asyncio.current_task() and not task.done():
+        task.cancel()
+    _transient_agent_retry_attempts.pop(window_id, None)
+
+
 def _agent_input_queue_max_size() -> int:
     return max(1, int(getattr(config, "agent_input_queue_max_size", 20)))
 
@@ -2165,9 +2182,13 @@ async def _send_or_queue_agent_input(
     thread_id: int | None,
     window_id: str,
     text: str,
+    *,
+    transient_retry: bool = False,
 ) -> tuple[bool, str, bool]:
     """Send when ready; otherwise preserve input in the bot-side FIFO queue."""
     key = _agent_input_key(user_id, thread_id, window_id)
+    if not transient_retry:
+        _reset_transient_agent_retry(window_id)
     result: tuple[bool, str, bool]
     async with _agent_input_lock(key):
         queue = _agent_input_queues.get(key)
@@ -2294,6 +2315,106 @@ async def _send_or_queue_agent_input(
     if key not in _agent_input_queues and key not in _agent_input_tasks:
         _agent_input_locks.pop(key, None)
     return result
+
+
+async def _run_transient_agent_retry(
+    bot: Bot,
+    key: tuple[int, int, str],
+    *,
+    delay_seconds: float,
+) -> None:
+    """Resume an unfinished turn after a bounded transient-capacity backoff."""
+    user_id, thread_key, window_id = key
+    thread_id = thread_key or None
+    current_task = asyncio.current_task()
+    try:
+        await asyncio.sleep(delay_seconds)
+        success, message, _queued = await _send_or_queue_agent_input(
+            bot,
+            user_id,
+            thread_id,
+            window_id,
+            _TRANSIENT_AGENT_RETRY_PROMPT,
+            transient_retry=True,
+        )
+        if not success:
+            logger.warning(
+                "Automatic agent retry could not be submitted "
+                "(user=%d thread=%s window=%s): %s",
+                user_id,
+                thread_id,
+                window_id,
+                message,
+            )
+            await safe_send(
+                bot,
+                session_manager.resolve_chat_id(user_id, thread_id),
+                f"❌ The unfinished task could not be retried automatically: {message}",
+                message_thread_id=thread_id,
+            )
+            return
+        await mark_window_working(bot, user_id, window_id, thread_id)
+        logger.info(
+            "Automatically retried transient agent failure "
+            "(user=%d thread=%s window=%s)",
+            user_id,
+            thread_id,
+            window_id,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(
+            "Automatic agent retry failed (user=%d thread=%s window=%s)",
+            user_id,
+            thread_id,
+            window_id,
+        )
+    finally:
+        if _transient_agent_retry_tasks.get(window_id) is current_task:
+            _transient_agent_retry_tasks.pop(window_id, None)
+
+
+def _schedule_transient_agent_retry(
+    bot: Bot,
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+) -> tuple[int, float] | None:
+    """Schedule one bounded retry, returning its attempt number and delay."""
+    key = _agent_input_key(user_id, thread_id, window_id)
+    existing = _transient_agent_retry_tasks.get(window_id)
+    if existing and not existing.done():
+        attempt = _transient_agent_retry_attempts.get(window_id, 1)
+        return attempt, 0.0
+
+    attempt = _transient_agent_retry_attempts.get(window_id, 0) + 1
+    if attempt > len(_TRANSIENT_AGENT_RETRY_DELAYS_SECONDS):
+        return None
+
+    delay_seconds = _TRANSIENT_AGENT_RETRY_DELAYS_SECONDS[attempt - 1]
+    _transient_agent_retry_attempts[window_id] = attempt
+    task = asyncio.create_task(
+        _run_transient_agent_retry(
+            bot,
+            key,
+            delay_seconds=delay_seconds,
+        )
+    )
+    _transient_agent_retry_tasks[window_id] = task
+    return attempt, delay_seconds
+
+
+async def _cancel_transient_agent_retry_tasks() -> None:
+    """Cancel delayed retries during shutdown without touching agent sessions."""
+    tasks = [task for task in _transient_agent_retry_tasks.values() if not task.done()]
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    _transient_agent_retry_tasks.clear()
+    _transient_agent_retry_attempts.clear()
 
 
 async def _notify_queued_input_failure(
@@ -6220,6 +6341,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     delivery_failed = False
     for user_id, wid, thread_id in active_users:
         is_remote_target = not wid
+        agent_error_notice: str | None = None
         if not is_remote_target and _transcript_message_already_delivered(
             user_id,
             wid,
@@ -6235,6 +6357,38 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 msg.source_offset,
             )
             continue
+
+        if msg.content_type == "agent_error":
+            if not is_remote_target:
+                turn_admission.observe(wid, active=False)
+            if not is_remote_target and msg.error_code in _TRANSIENT_AGENT_ERROR_CODES:
+                scheduled = _schedule_transient_agent_retry(
+                    bot,
+                    user_id,
+                    thread_id,
+                    wid,
+                )
+                if scheduled is not None:
+                    attempt, delay_seconds = scheduled
+                    await enqueue_status_update(
+                        bot,
+                        user_id,
+                        wid,
+                        "⚠️ Agent stopped before finishing because the selected "
+                        "model is temporarily at capacity.\n"
+                        f"Automatic retry {attempt}/"
+                        f"{len(_TRANSIENT_AGENT_RETRY_DELAYS_SECONDS)} in "
+                        f"{int(delay_seconds)}s.",
+                        thread_id=thread_id,
+                    )
+                    if msg.source_offset > 0:
+                        await _mark_transcript_message_delivered(user_id, wid, msg)
+                    continue
+                agent_error_notice = (
+                    f"{msg.text}\n\nAutomatic retries were exhausted "
+                    f"({len(_TRANSIENT_AGENT_RETRY_DELAYS_SECONDS)} attempts). "
+                    "Send the request again or switch models."
+                )
 
         if msg.content_type == "usage_limit":
             if is_remote_target:
@@ -6355,10 +6509,12 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         ):
             continue
 
+        delivery_text = agent_error_notice or msg.text
+        delivery_content_type = "text" if agent_error_notice else msg.content_type
         parts = build_response_parts(
-            msg.text,
+            delivery_text,
             msg.is_complete,
-            msg.content_type,
+            delivery_content_type,
             msg.role,
         )
 
@@ -6373,9 +6529,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 parts=parts,
                 tool_use_id=msg.tool_use_id,
                 tool_name=msg.tool_name,
-                content_type=msg.content_type,
+                content_type=delivery_content_type,
                 role=msg.role,
-                text=msg.text,
+                text=delivery_text,
                 thread_id=thread_id,
                 image_data=msg.image_data,
                 wait_until_sent=True,
@@ -6545,6 +6701,7 @@ async def _stop_runtime(
         _health_task = None
         logger.info("Host health monitor stopped")
 
+    await _cancel_transient_agent_retry_tasks()
     await _cancel_agent_input_drain_tasks()
 
     if agent_backend:
