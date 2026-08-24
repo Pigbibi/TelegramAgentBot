@@ -2186,7 +2186,7 @@ async def _run_agent_input_confirmation(
     *,
     recover_submission: bool,
     initial_delay_seconds: float | None = None,
-    notify_on_first_failure: bool = False,
+    notify_on_first_delay: bool = False,
 ) -> None:
     """Confirm a submitted prompt without ever replaying its text."""
     current_task = asyncio.current_task()
@@ -2230,16 +2230,13 @@ async def _run_agent_input_confirmation(
                         record.window_id,
                     )
                     return
-                if notify_on_first_failure:
-                    await _notify_queued_input_failure(
+                if notify_on_first_delay:
+                    await _notify_agent_input_confirmation_delayed(
                         bot,
                         key[0],
                         key[1] or None,
-                        "Delivery was not confirmed in the agent transcript. The bot "
-                        "will keep checking but will not resend automatically to avoid "
-                        "a duplicate. Use /interrupt if you want to replace it.",
                     )
-                    notify_on_first_failure = False
+                    notify_on_first_delay = False
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -2271,7 +2268,7 @@ def _ensure_agent_input_confirmation_task(
     *,
     recover_submission: bool,
     initial_delay_seconds: float | None = None,
-    notify_on_first_failure: bool = False,
+    notify_on_first_delay: bool = False,
 ) -> None:
     task = _agent_input_confirmation_tasks.get(record_id)
     if task and not task.done():
@@ -2284,7 +2281,7 @@ def _ensure_agent_input_confirmation_task(
             key,
             recover_submission=recover_submission,
             initial_delay_seconds=initial_delay_seconds,
-            notify_on_first_failure=notify_on_first_failure,
+            notify_on_first_delay=notify_on_first_delay,
         )
     )
 
@@ -2625,7 +2622,7 @@ async def _send_or_queue_agent_input(
                                 key,
                                 recover_submission=True,
                                 initial_delay_seconds=0.0,
-                                notify_on_first_failure=True,
+                                notify_on_first_delay=True,
                             )
                         result = success, message, False
                     else:
@@ -2903,6 +2900,34 @@ async def _notify_queued_input_failure(
         )
 
 
+async def _notify_agent_input_confirmation_delayed(
+    bot: Bot,
+    user_id: int,
+    thread_id: int | None,
+) -> None:
+    """Report a recoverable confirmation delay without calling it a failure."""
+    logger.warning(
+        "Agent input transcript confirmation delayed (user=%d thread=%s)",
+        user_id,
+        thread_id,
+    )
+    try:
+        await safe_send(
+            bot,
+            session_manager.resolve_chat_id(user_id, thread_id),
+            "⏳ Message was submitted, but transcript confirmation is delayed. "
+            "The bot is still tracking it and will not resend automatically, "
+            "avoiding duplicate input.",
+            message_thread_id=thread_id,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to notify delayed agent input confirmation (user=%d thread=%s)",
+            user_id,
+            thread_id,
+        )
+
+
 async def _drain_agent_input_queue(
     bot: Bot,
     key: tuple[int, int, str],
@@ -3026,13 +3051,10 @@ async def _drain_agent_input_queue(
                         key,
                         recover_submission=False,
                     )
-                await _notify_queued_input_failure(
+                await _notify_agent_input_confirmation_delayed(
                     bot,
                     user_id,
                     thread_id,
-                    "Delivery was not confirmed in the agent transcript. The bot "
-                    "will keep checking but will not resend automatically to avoid "
-                    "a duplicate. Use /interrupt if you want to replace it.",
                 )
                 return
             await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
