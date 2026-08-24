@@ -128,10 +128,14 @@ Source installations may enable idle-only updates in `.env`:
 ```ini
 TELEGRAM_AGENT_BOT_AUTO_UPDATE=true
 TELEGRAM_AGENT_BOT_UPDATE_REQUIRE_IDLE=true
+TELEGRAM_AGENT_BOT_UPDATE_MAX_BUSY_DEFERRAL_SECONDS=1800
 ```
 
 Use `telegram-agent-bot update --check` to inspect availability without applying
-an update. See [Configuration](configuration.md#updates) for all update options.
+an update. A positive busy-deferral limit allows the AgentBot source checkout to
+update and restart after the deadline while preserving active tmux agents and
+durable message state. Agent CLI package updates still wait for full idleness.
+See [Configuration](configuration.md#updates) for all update options.
 
 ## Small VPS settings
 
