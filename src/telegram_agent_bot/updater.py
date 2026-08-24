@@ -105,6 +105,15 @@ class UpdateResult:
 
 
 @dataclass(frozen=True)
+class UpdateRuntimeStatus:
+    """Small operator-facing status persisted by the background updater."""
+
+    waiting_for_idle: bool = False
+    blocker_count: int = 0
+    deferred_at_epoch: int | None = None
+
+
+@dataclass(frozen=True)
 class CodexUpdateResult:
     """Result of a Codex CLI update check."""
 
@@ -354,6 +363,59 @@ def _write_update_state(path: Path | None, now: float, result: UpdateResult) -> 
         atomic_write_json(path, payload)
     except OSError as exc:
         logger.debug("Failed to write update state %s: %s", path, exc)
+
+
+def _write_update_deferred_state(
+    path: Path | None,
+    now: float,
+    blockers: Sequence[str],
+) -> None:
+    """Persist why the updater is waiting without advancing its check interval."""
+    if path is None:
+        return
+    payload = _read_update_state(path)
+    payload["deferred"] = {
+        "waiting_for_idle": True,
+        "at": int(now),
+        "blockers": list(blockers[:5]),
+        "blocker_count": len(blockers),
+    }
+    try:
+        atomic_write_json(path, payload)
+    except OSError as exc:
+        logger.debug("Failed to write deferred update state %s: %s", path, exc)
+
+
+def _clear_update_deferred_state(path: Path | None) -> None:
+    """Clear a stale busy marker once the updater observes an idle host."""
+    if path is None:
+        return
+    payload = _read_update_state(path)
+    if "deferred" not in payload:
+        return
+    payload.pop("deferred", None)
+    try:
+        atomic_write_json(path, payload)
+    except OSError as exc:
+        logger.debug("Failed to clear deferred update state %s: %s", path, exc)
+
+
+def read_update_runtime_status(path: Path | None) -> UpdateRuntimeStatus:
+    """Read the bounded updater status used by health reports."""
+    deferred = _read_update_state(path).get("deferred")
+    if not isinstance(deferred, dict) or deferred.get("waiting_for_idle") is not True:
+        return UpdateRuntimeStatus()
+    blocker_count = deferred.get("blocker_count")
+    deferred_at = deferred.get("at")
+    return UpdateRuntimeStatus(
+        waiting_for_idle=True,
+        blocker_count=(
+            max(0, int(blocker_count)) if isinstance(blocker_count, int | float) else 0
+        ),
+        deferred_at_epoch=(
+            int(deferred_at) if isinstance(deferred_at, int | float) else None
+        ),
+    )
 
 
 def _check_due(settings: UpdateSettings, now: float) -> bool:
@@ -960,12 +1022,14 @@ async def auto_update_loop_with_notifier(
         if settings.require_idle:
             blockers = await get_update_blockers()
             if blockers:
+                _write_update_deferred_state(settings.state_file, time.time(), blockers)
                 logger.info(
                     "Auto-update deferred; telegram-agent-bot is not idle: %s",
                     "; ".join(blockers[:5]),
                 )
                 next_delay = settings.busy_retry_seconds
                 continue
+            _clear_update_deferred_state(settings.state_file)
 
         if settings.enabled:
             result = await asyncio.to_thread(

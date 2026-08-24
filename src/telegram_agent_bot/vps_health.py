@@ -14,6 +14,7 @@ from telegram import Bot
 
 from .durable_state import DurableRuntimeStore, HealthAlertState
 from .turn_admission import turn_admission
+from .updater import load_update_settings, read_update_runtime_status
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,8 @@ class HealthSnapshot:
     active_turns: int
     pending_windows: int
     hibernated_sessions: int
+    update_waiting_for_idle: bool = False
+    update_blocker_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +148,10 @@ def format_health_snapshot(
                 f"{_format_bytes(snapshot.transcript_backlog_bytes)} total",
             ]
         )
+        if snapshot.update_waiting_for_idle:
+            lines.append(
+                f"Update: waiting for idle ({snapshot.update_blocker_count} blocker(s))"
+            )
         if not issues:
             lines.extend(["", "Status: healthy"])
         return "\n".join(lines)
@@ -172,6 +179,8 @@ def format_health_snapshot(
             f"共 {_format_bytes(snapshot.transcript_backlog_bytes)}",
         ]
     )
+    if snapshot.update_waiting_for_idle:
+        lines.append(f"更新：等待空闲（{snapshot.update_blocker_count} 个阻塞项）")
     if not issues:
         lines.extend(["", "状态：正常"])
     return "\n".join(lines)
@@ -281,6 +290,14 @@ class VpsHealthMonitor:
         hibernated = sum(
             1 for state in session_manager.window_states.values() if state.hibernated_at
         )
+        try:
+            update_status = await asyncio.to_thread(
+                read_update_runtime_status,
+                load_update_settings().state_file,
+            )
+        except Exception:
+            logger.exception("Failed to collect background updater state")
+            update_status = None
         return HealthSnapshot(
             host=host,
             queue_depth=queue_depth,
@@ -291,6 +308,12 @@ class VpsHealthMonitor:
             active_turns=len(scheduler.active_windows | scheduler.reserved_windows),
             pending_windows=len(scheduler.pending_windows),
             hibernated_sessions=hibernated,
+            update_waiting_for_idle=(
+                update_status.waiting_for_idle if update_status is not None else False
+            ),
+            update_blocker_count=(
+                update_status.blocker_count if update_status is not None else 0
+            ),
         )
 
     @staticmethod
@@ -401,10 +424,8 @@ class VpsHealthMonitor:
             self._recovery_candidate_since = None
             return HealthDecision("none", ())
         self._recovery_candidate_since = None
-        newly_active = current_keys - previously_active
-        due = bool(newly_active) or any(
+        due = any(
             key not in states
-            or not states[key].active
             or current_time - states[key].last_sent_at_epoch >= cooldown_seconds
             for key in current_keys
         )

@@ -30,10 +30,18 @@ def test_agent_input_survives_store_reopen(tmp_path):
     second.initialize(reset_inflight_updates=True)
     assert second.list_pending_agent_inputs() == [record]
 
-    assert second.mark_agent_input_submitted(record.id, submitted_at_epoch=1001.0)
+    assert second.mark_agent_input_submitted(
+        record.id,
+        submitted_at_epoch=1001.0,
+        transcript_session_id="sid-4",
+        transcript_offset=2048,
+    )
     submitted = second.list_pending_agent_inputs()[0]
     assert submitted.state == AGENT_INPUT_SUBMITTED_UNCONFIRMED
     assert submitted.submitted_at_epoch == 1001.0
+    assert submitted.transcript_session_id == "sid-4"
+    assert submitted.transcript_offset == 2048
+    assert second.has_unconfirmed_agent_input(12345, 42) is True
 
     third = DurableRuntimeStore(path)
     third.initialize()
@@ -64,6 +72,8 @@ def test_legacy_agent_input_schema_migrates_without_losing_queue(tmp_path):
     assert record.text == "legacy prompt"
     assert record.state == AGENT_INPUT_QUEUED
     assert record.submitted_at_epoch is None
+    assert record.transcript_session_id is None
+    assert record.transcript_offset is None
 
 
 def test_transient_agent_retry_survives_state_transitions_and_reopen(tmp_path):

@@ -33,6 +33,8 @@ class PendingAgentInput:
     created_at_epoch: float
     state: str = AGENT_INPUT_QUEUED
     submitted_at_epoch: float | None = None
+    transcript_session_id: str | None = None
+    transcript_offset: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +93,9 @@ class DurableRuntimeStore:
                     created_at_epoch REAL NOT NULL,
                     state TEXT NOT NULL DEFAULT 'queued'
                         CHECK (state IN ('queued', 'submitted_unconfirmed')),
-                    submitted_at_epoch REAL
+                    submitted_at_epoch REAL,
+                    transcript_session_id TEXT,
+                    transcript_offset INTEGER
                 );
                 CREATE INDEX IF NOT EXISTS agent_input_queue_target_idx
                     ON agent_input_queue(user_id, thread_id, window_id, id);
@@ -136,6 +140,14 @@ class DurableRuntimeStore:
                 connection.execute(
                     "ALTER TABLE agent_input_queue ADD COLUMN submitted_at_epoch REAL"
                 )
+            if "transcript_session_id" not in agent_input_columns:
+                connection.execute(
+                    "ALTER TABLE agent_input_queue ADD COLUMN transcript_session_id TEXT"
+                )
+            if "transcript_offset" not in agent_input_columns:
+                connection.execute(
+                    "ALTER TABLE agent_input_queue ADD COLUMN transcript_offset INTEGER"
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS agent_input_queue_state_idx "
                 "ON agent_input_queue(state, created_at_epoch)"
@@ -164,6 +176,16 @@ class DurableRuntimeStore:
             submitted_at_epoch=(
                 float(row["submitted_at_epoch"])
                 if row["submitted_at_epoch"] is not None
+                else None
+            ),
+            transcript_session_id=(
+                str(row["transcript_session_id"])
+                if row["transcript_session_id"] is not None
+                else None
+            ),
+            transcript_offset=(
+                int(row["transcript_offset"])
+                if row["transcript_offset"] is not None
                 else None
             ),
         )
@@ -224,7 +246,7 @@ class DurableRuntimeStore:
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT id, user_id, thread_id, window_id, text, created_at_epoch, "
-                "state, submitted_at_epoch "
+                "state, submitted_at_epoch, transcript_session_id, transcript_offset "
                 "FROM agent_input_queue ORDER BY id"
             ).fetchall()
         return [self._record_from_row(row) for row in rows]
@@ -234,7 +256,8 @@ class DurableRuntimeStore:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT id, user_id, thread_id, window_id, text, created_at_epoch, "
-                "state, submitted_at_epoch FROM agent_input_queue WHERE id = ?",
+                "state, submitted_at_epoch, transcript_session_id, transcript_offset "
+                "FROM agent_input_queue WHERE id = ?",
                 (record_id,),
             ).fetchone()
         return self._record_from_row(row) if row is not None else None
@@ -253,6 +276,20 @@ class DurableRuntimeStore:
             count=int(row["count"]),
             oldest_created_at_epoch=float(oldest) if oldest is not None else None,
         )
+
+    def has_unconfirmed_agent_input(
+        self,
+        user_id: int,
+        thread_id: int,
+    ) -> bool:
+        """Return whether this Telegram route has an unresolved submission."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM agent_input_queue "
+                "WHERE user_id = ? AND thread_id = ? AND state = ? LIMIT 1",
+                (user_id, thread_id, AGENT_INPUT_SUBMITTED_UNCONFIRMED),
+            ).fetchone()
+        return row is not None
 
     def load_health_alert_states(self) -> dict[str, HealthAlertState]:
         """Load issue cooldown state so restarts do not repeat alerts."""
@@ -299,16 +336,21 @@ class DurableRuntimeStore:
         record_id: int,
         *,
         submitted_at_epoch: float | None = None,
+        transcript_session_id: str | None = None,
+        transcript_offset: int | None = None,
     ) -> bool:
         """Move a queued prompt to the no-auto-resend confirmation state."""
         submitted_at = time.time() if submitted_at_epoch is None else submitted_at_epoch
         with self._connect() as connection:
             cursor = connection.execute(
-                "UPDATE agent_input_queue SET state = ?, submitted_at_epoch = ? "
+                "UPDATE agent_input_queue SET state = ?, submitted_at_epoch = ?, "
+                "transcript_session_id = ?, transcript_offset = ? "
                 "WHERE id = ? AND state = ?",
                 (
                     AGENT_INPUT_SUBMITTED_UNCONFIRMED,
                     submitted_at,
+                    transcript_session_id or None,
+                    transcript_offset,
                     record_id,
                     AGENT_INPUT_QUEUED,
                 ),
@@ -343,6 +385,14 @@ class DurableRuntimeStore:
                 "DELETE FROM agent_input_queue "
                 "WHERE user_id = ? AND thread_id = ? AND window_id = ?",
                 (user_id, thread_id, window_id),
+            )
+
+    def delete_agent_inputs_for_route(self, user_id: int, thread_id: int) -> None:
+        """Discard all prompt lifecycles for one Telegram topic."""
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM agent_input_queue WHERE user_id = ? AND thread_id = ?",
+                (user_id, thread_id),
             )
 
     def save_transient_agent_retry(

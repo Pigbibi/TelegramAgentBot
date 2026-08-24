@@ -993,6 +993,38 @@ class SessionManager:
     def _normalize_transcript_text(text: str) -> str:
         return "\n".join(line.rstrip() for line in text.strip().splitlines())
 
+    async def transcript_confirmation_baseline(
+        self,
+        window_id: str,
+    ) -> tuple[str | None, int | None]:
+        """Capture the transcript identity and size before an input is submitted."""
+        state = self.get_window_state(window_id)
+        session_id = state.session_id or None
+        if session_id is None:
+            return None, None
+
+        def _find_size() -> int | None:
+            file_path = self._find_session_file(
+                session_id,
+                state.cwd,
+                account_name=state.account_name,
+            )
+            if file_path is None:
+                return None
+            try:
+                return file_path.stat().st_size
+            except OSError:
+                return None
+
+        return session_id, await asyncio.to_thread(_find_size)
+
+    def window_matches_session(self, window_id: str, session_id: str) -> bool:
+        """Return whether a window still owns the expected transcript session."""
+        return _session_ids_match(
+            self.get_window_state(window_id).session_id,
+            session_id,
+        )
+
     @classmethod
     def _user_text_matches(cls, actual: str, expected: str) -> bool:
         actual_norm = cls._normalize_transcript_text(actual)
@@ -1011,14 +1043,20 @@ class SessionManager:
         file_path: Path,
         expected_text: str,
         *,
+        after_offset: int | None = None,
         max_bytes: int = 262_144,
     ) -> bool:
-        """Return whether the transcript tail contains the expected user input."""
+        """Return whether new transcript bytes contain the expected user input."""
         try:
             with file_path.open("rb") as f:
                 f.seek(0, 2)
                 size = f.tell()
-                f.seek(max(0, size - max_bytes))
+                if after_offset is not None and size < after_offset:
+                    return False
+                start = max(0, size - max_bytes)
+                if after_offset is not None:
+                    start = max(start, after_offset)
+                f.seek(start)
                 raw = f.read()
         except OSError:
             return False
@@ -1048,14 +1086,22 @@ class SessionManager:
         *,
         timeout: float = 5.0,
         interval: float = 0.5,
+        expected_session_id: str | None = None,
+        after_offset: int | None = None,
     ) -> bool:
-        """Poll the bound Codex transcript until the submitted user text appears."""
+        """Poll for the submitted text after its pre-dispatch transcript cursor."""
         if not text.strip():
             return False
 
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
             state = self.get_window_state(window_id)
+            if expected_session_id and not _session_ids_match(
+                state.session_id,
+                expected_session_id,
+            ):
+                await asyncio.sleep(interval)
+                continue
             file_path = self._find_session_file(
                 state.session_id,
                 state.cwd,
@@ -1065,6 +1111,7 @@ class SessionManager:
                 self._transcript_tail_contains_user_text,
                 file_path,
                 text,
+                after_offset=after_offset,
             ):
                 logger.debug(
                     "Transcript user message confirmed for window_id %s", window_id

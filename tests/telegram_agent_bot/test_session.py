@@ -445,6 +445,64 @@ class TestTranscriptConfirmation:
             "hello from telegram",
         )
 
+    def test_transcript_confirmation_ignores_matching_text_before_cursor(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = tmp_path / "sid-1.jsonl"
+        event = {
+            "type": "event_msg",
+            "payload": {"type": "user_message", "message": "repeat this prompt"},
+        }
+        transcript.write_text(json.dumps(event) + "\n", encoding="utf-8")
+        baseline = transcript.stat().st_size
+
+        assert not SessionManager._transcript_tail_contains_user_text(
+            transcript,
+            "repeat this prompt",
+            after_offset=baseline,
+        )
+
+        with transcript.open("a", encoding="utf-8") as output:
+            output.write(json.dumps(event) + "\n")
+
+        assert SessionManager._transcript_tail_contains_user_text(
+            transcript,
+            "repeat this prompt",
+            after_offset=baseline,
+        )
+
+    @pytest.mark.asyncio
+    async def test_wait_for_transcript_rejects_rebound_session(
+        self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        transcript = tmp_path / "sid-new.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "same prompt"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        state = mgr.get_window_state("@1")
+        state.session_id = "sid-new"
+        state.cwd = "/tmp/project"
+        monkeypatch.setattr(
+            mgr, "_find_session_file", lambda *_args, **_kwargs: transcript
+        )
+
+        ok = await mgr.wait_for_transcript_user_message(
+            "@1",
+            "same prompt",
+            expected_session_id="sid-old",
+            timeout=0.02,
+            interval=0.005,
+        )
+
+        assert ok is False
+
     @pytest.mark.asyncio
     async def test_wait_for_transcript_user_message_uses_bound_window_state(
         self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

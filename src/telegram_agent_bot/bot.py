@@ -303,6 +303,8 @@ class _QueuedAgentInput:
     created_at_epoch: float = field(default_factory=time.time)
     store_id: int | None = None
     state: str = AGENT_INPUT_QUEUED
+    transcript_session_id: str | None = None
+    transcript_offset: int | None = None
 
 
 _AGENT_INPUT_POLL_INTERVAL_SECONDS = 1.0
@@ -317,7 +319,7 @@ _TRANSIENT_AGENT_RETRY_PROMPT = (
 )
 _agent_input_queues: dict[tuple[int, int, str], deque[_QueuedAgentInput]] = {}
 _agent_input_tasks: dict[tuple[int, int, str], asyncio.Task] = {}
-_agent_input_locks: dict[tuple[int, int, str], asyncio.Lock] = {}
+_agent_input_locks: dict[tuple[int, int], asyncio.Lock] = {}
 _agent_input_confirmation_tasks: dict[int, asyncio.Task[None]] = {}
 _agent_input_confirmation_targets: dict[int, tuple[int, int, str]] = {}
 _transient_agent_retry_attempts: dict[str, int] = {}
@@ -1326,11 +1328,9 @@ async def interrupt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
 
     pane_text = None
-    input_was_ready = False
     if wid:
         capture = await capture_agent_output(user.id, thread_id, wid)
         pane_text = capture.text if capture and not capture.missing else None
-        input_was_ready = is_codex_input_ready(pane_text or "")
         if pane_text and is_interactive_ui(pane_text):
             await handle_interactive_ui(context.bot, user.id, wid, thread_id)
             await asyncio.sleep(0.3)
@@ -1348,56 +1348,42 @@ async def interrupt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 return
 
     queued_replacement = False
-    if input_was_ready:
-        success, message = await _send_message_to_agent(
+    if wid:
+        if not is_codex_input_ready(pane_text or ""):
+            ok, control_message = await _send_control_to_agent(
+                user.id,
+                thread_id,
+                wid,
+                "Escape",
+            )
+            if not ok:
+                await safe_reply(update.message, f"❌ {control_message}")
+                return
+            await asyncio.sleep(0.3)
+        success, message, queued_replacement = await _send_or_queue_agent_input(
+            context.bot,
             user.id,
             thread_id,
-            wid or "",
+            wid,
             payload,
         )
     else:
         ok, control_message = await _send_control_to_agent(
             user.id,
             thread_id,
-            wid or "",
+            "",
             "Escape",
         )
         if not ok:
             await safe_reply(update.message, f"❌ {control_message}")
             return
-
         await asyncio.sleep(0.3)
-        if wid:
-            success, message = await _send_to_window_when_codex_ready(
-                user.id,
-                thread_id,
-                wid,
-                payload,
-                timeout=15.0,
-                interval=0.25,
-            )
-            if not success:
-                logger.warning(
-                    "Agent did not become ready after interrupt in window %s: %s; "
-                    "queuing replacement until ready",
-                    wid,
-                    message,
-                )
-                success, message = await _queue_agent_input_after_interrupt(
-                    context.bot,
-                    user.id,
-                    thread_id,
-                    wid,
-                    payload,
-                )
-                queued_replacement = success
-        else:
-            success, message = await _send_message_to_agent(
-                user.id,
-                thread_id,
-                "",
-                payload,
-            )
+        success, message = await _send_message_to_agent(
+            user.id,
+            thread_id,
+            "",
+            payload,
+        )
 
     if not success:
         await safe_reply(update.message, f"❌ {message}")
@@ -1408,7 +1394,6 @@ async def interrupt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await safe_reply(update.message, f"⎋ {message}")
             return
         await mark_window_working(context.bot, user.id, wid, thread_id)
-        await _refresh_session_map_after_first_prompt(wid)
 
 
 async def health_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1984,10 +1969,11 @@ def _agent_input_key(
 
 
 def _agent_input_lock(key: tuple[int, int, str]) -> asyncio.Lock:
-    lock = _agent_input_locks.get(key)
+    route = key[:2]
+    lock = _agent_input_locks.get(route)
     if lock is None:
         lock = asyncio.Lock()
-        _agent_input_locks[key] = lock
+        _agent_input_locks[route] = lock
     return lock
 
 
@@ -2069,13 +2055,33 @@ def _delete_persisted_agent_inputs(items: list[_QueuedAgentInput]) -> None:
         )
 
 
-def _mark_persisted_agent_input_submitted(item: _QueuedAgentInput) -> bool:
+async def _mark_persisted_agent_input_submitted(
+    item: _QueuedAgentInput,
+    window_id: str,
+) -> bool:
     """Durably enter the no-auto-resend state before touching tmux."""
+    try:
+        (
+            session_id,
+            transcript_offset,
+        ) = await session_manager.transcript_confirmation_baseline(window_id)
+    except Exception:
+        logger.exception(
+            "Failed to capture transcript confirmation baseline (window=%s)",
+            window_id,
+        )
+        return False
     if item.store_id is None:
         item.state = AGENT_INPUT_SUBMITTED_UNCONFIRMED
+        item.transcript_session_id = session_id
+        item.transcript_offset = transcript_offset
         return True
     try:
-        changed = _runtime_store.mark_agent_input_submitted(item.store_id)
+        changed = _runtime_store.mark_agent_input_submitted(
+            item.store_id,
+            transcript_session_id=session_id,
+            transcript_offset=transcript_offset,
+        )
     except Exception:
         logger.exception(
             "Failed to persist agent input submission state (record=%d)",
@@ -2089,6 +2095,8 @@ def _mark_persisted_agent_input_submitted(item: _QueuedAgentInput) -> bool:
         )
         return False
     item.state = AGENT_INPUT_SUBMITTED_UNCONFIRMED
+    item.transcript_session_id = session_id
+    item.transcript_offset = transcript_offset
     return True
 
 
@@ -2117,12 +2125,58 @@ def _clear_persisted_agent_input_target(key: tuple[int, int, str]) -> None:
         )
 
 
+def _clear_persisted_agent_input_route(key: tuple[int, int, str]) -> None:
+    try:
+        _runtime_store.delete_agent_inputs_for_route(key[0], key[1])
+    except Exception:
+        logger.exception(
+            "Failed to clear persisted agent input route (user=%d thread=%d)",
+            key[0],
+            key[1],
+        )
+
+
+def _same_agent_input_route(
+    left: tuple[int, int, str],
+    right: tuple[int, int, str],
+) -> bool:
+    return left[:2] == right[:2]
+
+
 def _target_has_agent_input_confirmation(key: tuple[int, int, str]) -> bool:
     return any(
-        target == key and not task.done()
+        _same_agent_input_route(target, key) and not task.done()
         for record_id, task in _agent_input_confirmation_tasks.items()
         if (target := _agent_input_confirmation_targets.get(record_id)) is not None
     )
+
+
+def _route_has_agent_input_queue(key: tuple[int, int, str]) -> bool:
+    return any(
+        queue and _same_agent_input_route(queued_key, key)
+        for queued_key, queue in _agent_input_queues.items()
+    )
+
+
+def _route_has_agent_input_drain(key: tuple[int, int, str]) -> bool:
+    return any(
+        _same_agent_input_route(task_key, key) and not task.done()
+        for task_key, task in _agent_input_tasks.items()
+    )
+
+
+def _route_has_persisted_agent_input_confirmation(
+    key: tuple[int, int, str],
+) -> bool:
+    try:
+        return _runtime_store.has_unconfirmed_agent_input(key[0], key[1])
+    except Exception:
+        logger.exception(
+            "Failed to inspect persisted agent input confirmations (user=%d thread=%d)",
+            key[0],
+            key[1],
+        )
+        return True
 
 
 async def _run_agent_input_confirmation(
@@ -2131,12 +2185,17 @@ async def _run_agent_input_confirmation(
     key: tuple[int, int, str],
     *,
     recover_submission: bool,
+    initial_delay_seconds: float | None = None,
+    notify_on_first_failure: bool = False,
 ) -> None:
     """Confirm a submitted prompt without ever replaying its text."""
     current_task = asyncio.current_task()
     confirmed = False
     try:
-        if not recover_submission:
+        if initial_delay_seconds is not None:
+            if initial_delay_seconds > 0:
+                await asyncio.sleep(initial_delay_seconds)
+        elif not recover_submission:
             await asyncio.sleep(_AGENT_INPUT_CONFIRM_RETRY_SECONDS)
         while True:
             try:
@@ -2150,6 +2209,8 @@ async def _run_agent_input_confirmation(
                         record.window_id,
                         text=record.text,
                         confirm_existing_session=True,
+                        transcript_session_id=record.transcript_session_id,
+                        transcript_after_offset=record.transcript_offset,
                     )
                     recover_submission = False
                 else:
@@ -2157,6 +2218,8 @@ async def _run_agent_input_confirmation(
                         record.window_id,
                         record.text,
                         timeout=config.transcript_confirm_timeout_seconds,
+                        expected_session_id=record.transcript_session_id,
+                        after_offset=record.transcript_offset,
                     )
                 if confirmed:
                     _runtime_store.confirm_agent_input(record_id)
@@ -2167,6 +2230,16 @@ async def _run_agent_input_confirmation(
                         record.window_id,
                     )
                     return
+                if notify_on_first_failure:
+                    await _notify_queued_input_failure(
+                        bot,
+                        key[0],
+                        key[1] or None,
+                        "Delivery was not confirmed in the agent transcript. The bot "
+                        "will keep checking but will not resend automatically to avoid "
+                        "a duplicate. Use /interrupt if you want to replace it.",
+                    )
+                    notify_on_first_failure = False
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -2185,12 +2258,10 @@ async def _run_agent_input_confirmation(
         if _agent_input_confirmation_tasks.get(record_id) is current_task:
             _agent_input_confirmation_tasks.pop(record_id, None)
             _agent_input_confirmation_targets.pop(record_id, None)
-        if (
-            confirmed
-            and not _target_has_agent_input_confirmation(key)
-            and _agent_input_queues.get(key)
-        ):
-            _ensure_agent_input_drain_task(bot, key)
+        if confirmed and not _target_has_agent_input_confirmation(key):
+            for queued_key, queue in list(_agent_input_queues.items()):
+                if queue and _same_agent_input_route(queued_key, key):
+                    _ensure_agent_input_drain_task(bot, queued_key)
 
 
 def _ensure_agent_input_confirmation_task(
@@ -2199,6 +2270,8 @@ def _ensure_agent_input_confirmation_task(
     key: tuple[int, int, str],
     *,
     recover_submission: bool,
+    initial_delay_seconds: float | None = None,
+    notify_on_first_failure: bool = False,
 ) -> None:
     task = _agent_input_confirmation_tasks.get(record_id)
     if task and not task.done():
@@ -2210,6 +2283,8 @@ def _ensure_agent_input_confirmation_task(
             record_id,
             key,
             recover_submission=recover_submission,
+            initial_delay_seconds=initial_delay_seconds,
+            notify_on_first_failure=notify_on_first_failure,
         )
     )
 
@@ -2220,7 +2295,7 @@ async def _cancel_agent_input_confirmations_for_target(
     record_ids = [
         record_id
         for record_id, target in _agent_input_confirmation_targets.items()
-        if target == key
+        if _same_agent_input_route(target, key)
     ]
     tasks = [
         task
@@ -2261,7 +2336,11 @@ def _restore_agent_input_queues(bot: Bot) -> int:
             record.user_id,
             record.thread_id or None,
         )
-        if resolved_window_id and resolved_window_id != window_id:
+        if (
+            record.state == AGENT_INPUT_QUEUED
+            and resolved_window_id
+            and resolved_window_id != window_id
+        ):
             window_id = resolved_window_id
             try:
                 _runtime_store.retarget_agent_input(record.id, window_id)
@@ -2296,6 +2375,8 @@ def _restore_agent_input_queues(bot: Bot) -> int:
                 created_at_epoch=record.created_at_epoch,
                 store_id=record.id,
                 state=record.state,
+                transcript_session_id=record.transcript_session_id,
+                transcript_offset=record.transcript_offset,
             )
         )
         turn_admission.set_pending(window_id, pending=True)
@@ -2345,10 +2426,11 @@ def _ensure_agent_input_drain_task(
     bot: Bot,
     key: tuple[int, int, str],
 ) -> None:
-    if _target_has_agent_input_confirmation(key):
+    if _target_has_agent_input_confirmation(
+        key
+    ) or _route_has_persisted_agent_input_confirmation(key):
         return
-    task = _agent_input_tasks.get(key)
-    if task and not task.done():
+    if _route_has_agent_input_drain(key):
         return
     _agent_input_tasks[key] = asyncio.create_task(_drain_agent_input_queue(bot, key))
 
@@ -2387,14 +2469,19 @@ async def _send_or_queue_agent_input(
     *,
     transient_retry: bool = False,
 ) -> tuple[bool, str, bool]:
-    """Send when ready; otherwise preserve input in the bot-side FIFO queue."""
+    """Persist one input, then send its queue head when the target is ready."""
     key = _agent_input_key(user_id, thread_id, window_id)
     if not transient_retry:
         _reset_transient_agent_retry(window_id)
     result: tuple[bool, str, bool]
     async with _agent_input_lock(key):
         queue = _agent_input_queues.get(key)
-        if queue is not None:
+        if (
+            _route_has_agent_input_queue(key)
+            or _route_has_agent_input_drain(key)
+            or _target_has_agent_input_confirmation(key)
+            or _route_has_persisted_agent_input_confirmation(key)
+        ):
             queued, depth, limit = _queue_agent_input(key, text)
             if not queued:
                 _ensure_agent_input_drain_task(bot, key)
@@ -2413,7 +2500,22 @@ async def _send_or_queue_agent_input(
                 )
             return result
 
-        capture = await capture_agent_output(user_id, thread_id, window_id)
+        queued, depth, limit = _queue_agent_input(key, text)
+        if not queued:
+            return (
+                False,
+                "The input could not be saved safely. Please try again; it was not "
+                "sent to the agent.",
+                False,
+            )
+        queue = _agent_input_queues[key]
+        item = queue[0]
+
+        try:
+            capture = await capture_agent_output(user_id, thread_id, window_id)
+        except BaseException:
+            _ensure_agent_input_drain_task(bot, key)
+            raise
         if capture is None:
             result = False, "No session bound", False
         elif capture.missing:
@@ -2424,12 +2526,19 @@ async def _send_or_queue_agent_input(
             if auth_error:
                 result = False, _codex_auth_recovery_message(auth_error), False
             elif is_interactive_ui(pane_text):
-                ok, control_message = await _send_control_to_agent(
-                    user_id,
-                    thread_id,
-                    window_id,
-                    "Escape",
-                )
+                interactive = extract_interactive_content(pane_text)
+                if interactive is not None and interactive.name == "DirectoryTrust":
+                    ok, control_message = await _maybe_confirm_startup_trust_prompt(
+                        window_id,
+                        pane_text,
+                    )
+                else:
+                    ok, control_message = await _send_control_to_agent(
+                        user_id,
+                        thread_id,
+                        window_id,
+                        "Escape",
+                    )
                 if not ok:
                     logger.warning(
                         "Failed to interrupt Codex interactive prompt before "
@@ -2439,40 +2548,21 @@ async def _send_or_queue_agent_input(
                         window_id,
                         control_message,
                     )
-                queued, depth, limit = _queue_agent_input(key, text)
-                if not queued:
-                    result = (
-                        False,
-                        "The agent is waiting for an interactive choice and the input "
-                        "queue is full "
-                        f"({limit} pending). Wait for it to finish or use /interrupt.",
-                        False,
-                    )
-                else:
-                    _ensure_agent_input_drain_task(bot, key)
-                    result = (
-                        True,
-                        "Interrupted agent prompt and queued until the agent is ready "
-                        f"({depth}/{limit})",
-                        True,
-                    )
+                _ensure_agent_input_drain_task(bot, key)
+                result = (
+                    True,
+                    "Interrupted agent prompt and queued until the agent is ready "
+                    f"({depth}/{limit})",
+                    True,
+                )
             elif not is_codex_input_ready(pane_text):
                 turn_admission.observe(window_id, active=True)
-                queued, depth, limit = _queue_agent_input(key, text)
-                if not queued:
-                    result = (
-                        False,
-                        "Agent is busy and the input queue is full "
-                        f"({limit} pending). Wait for it to finish or use /interrupt.",
-                        False,
-                    )
-                else:
-                    _ensure_agent_input_drain_task(bot, key)
-                    result = (
-                        True,
-                        f"Agent is busy; queued until ready ({depth}/{limit})",
-                        True,
-                    )
+                _ensure_agent_input_drain_task(bot, key)
+                result = (
+                    True,
+                    f"Agent is busy; queued until ready ({depth}/{limit})",
+                    True,
+                )
             else:
                 turn_admission.observe(window_id, active=False)
                 admitted = await turn_admission.try_acquire(
@@ -2480,22 +2570,25 @@ async def _send_or_queue_agent_input(
                     limit=_agent_max_active_turns(),
                 )
                 if not admitted:
-                    queued, depth, limit = _queue_agent_input(key, text)
-                    if not queued:
-                        result = (
-                            False,
-                            "Server task capacity is full and the input queue is "
-                            f"also full ({limit} pending).",
-                            False,
-                        )
-                    else:
-                        _ensure_agent_input_drain_task(bot, key)
-                        result = (
-                            True,
-                            "Server is at its active-task limit; queued for the "
-                            f"next available slot ({depth}/{limit})",
-                            True,
-                        )
+                    _ensure_agent_input_drain_task(bot, key)
+                    result = (
+                        True,
+                        "Server is at its active-task limit; queued for the "
+                        f"next available slot ({depth}/{limit})",
+                        True,
+                    )
+                elif not await _mark_persisted_agent_input_submitted(
+                    item,
+                    window_id,
+                ):
+                    turn_admission.release(window_id)
+                    _ensure_agent_input_drain_task(bot, key)
+                    result = (
+                        True,
+                        "Saved safely; waiting for the delivery state to become "
+                        f"available ({depth}/{limit})",
+                        True,
+                    )
                 else:
                     try:
                         success, message = await _send_message_to_agent(
@@ -2506,16 +2599,50 @@ async def _send_or_queue_agent_input(
                         )
                     except BaseException:
                         turn_admission.release(window_id)
+                        if queue and queue[0] is item:
+                            queue.popleft()
+                        if not queue:
+                            _agent_input_queues.pop(key, None)
+                        if item.store_id is not None:
+                            _ensure_agent_input_confirmation_task(
+                                bot,
+                                item.store_id,
+                                key,
+                                recover_submission=True,
+                            )
                         raise
                     if success:
                         turn_admission.mark_submitted(window_id)
                         idle_session_hibernator.forget(window_id)
+                        queue.popleft()
+                        if not queue:
+                            _agent_input_queues.pop(key, None)
+                        turn_admission.set_pending(window_id, pending=False)
+                        if item.store_id is not None:
+                            _ensure_agent_input_confirmation_task(
+                                bot,
+                                item.store_id,
+                                key,
+                                recover_submission=True,
+                                initial_delay_seconds=0.0,
+                                notify_on_first_failure=True,
+                            )
+                        result = success, message, False
                     else:
                         turn_admission.release(window_id)
-                    result = success, message, False
+                        queue.popleft()
+                        _delete_persisted_agent_inputs([item])
+                        turn_admission.set_pending(window_id, pending=False)
+                        result = success, message, False
 
-    if key not in _agent_input_queues and key not in _agent_input_tasks:
-        _agent_input_locks.pop(key, None)
+        if not result[0]:
+            if queue and queue[0] is item:
+                queue.popleft()
+                _delete_persisted_agent_inputs([item])
+            if not queue:
+                _agent_input_queues.pop(key, None)
+                turn_admission.set_pending(window_id, pending=False)
+
     return result
 
 
@@ -2827,6 +2954,13 @@ async def _drain_agent_input_queue(
                 turn_admission.set_pending(window_id, pending=False)
                 return
             if not is_codex_input_ready(pane_text) or is_interactive_ui(pane_text):
+                if is_interactive_ui(pane_text):
+                    interactive = extract_interactive_content(pane_text)
+                    if interactive is not None and interactive.name == "DirectoryTrust":
+                        await _maybe_confirm_startup_trust_prompt(
+                            window_id,
+                            pane_text,
+                        )
                 turn_admission.observe(window_id, active=True)
                 await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
                 continue
@@ -2839,7 +2973,7 @@ async def _drain_agent_input_queue(
                 await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
                 continue
             item = queue[0]
-            if not _mark_persisted_agent_input_submitted(item):
+            if not await _mark_persisted_agent_input_submitted(item, window_id):
                 turn_admission.release(window_id)
                 await asyncio.sleep(_AGENT_INPUT_PERSIST_RETRY_SECONDS)
                 continue
@@ -2850,13 +2984,11 @@ async def _drain_agent_input_queue(
                     window_id,
                     item.text,
                 )
-            except BaseException as exc:
+            except BaseException:
                 turn_admission.release(window_id)
                 if queue and queue[0] is item:
                     queue.popleft()
-                if item.store_id is not None and not isinstance(
-                    exc, asyncio.CancelledError
-                ):
+                if item.store_id is not None:
                     _ensure_agent_input_confirmation_task(
                         bot,
                         item.store_id,
@@ -2881,6 +3013,8 @@ async def _drain_agent_input_queue(
                 window_id,
                 text=item.text,
                 confirm_existing_session=True,
+                transcript_session_id=item.transcript_session_id,
+                transcript_after_offset=item.transcript_offset,
             )
             if confirmed:
                 _confirm_persisted_agent_input(submitted_item)
@@ -2918,8 +3052,11 @@ async def _drain_agent_input_queue(
             turn_admission.set_pending(window_id, pending=False)
         if _agent_input_tasks.get(key) is asyncio.current_task():
             _agent_input_tasks.pop(key, None)
-        if key not in _agent_input_queues and key not in _agent_input_tasks:
-            _agent_input_locks.pop(key, None)
+        if not _target_has_agent_input_confirmation(key):
+            for queued_key, queued in list(_agent_input_queues.items()):
+                if queued and _same_agent_input_route(queued_key, key):
+                    _ensure_agent_input_drain_task(bot, queued_key)
+                    break
 
 
 async def _cancel_agent_input_drain_tasks() -> None:
@@ -2958,23 +3095,27 @@ async def _discard_queued_agent_input(
     """Drop pending user prompts for a target before an explicit interrupt."""
     key = _agent_input_key(user_id, thread_id, window_id)
     async with _agent_input_lock(key):
-        task = _agent_input_tasks.pop(key, None)
-        if task and not task.done() and task is not asyncio.current_task():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-
         await _cancel_agent_input_confirmations_for_target(key)
-        queue = _agent_input_queues.pop(key, None)
-        dropped = len(queue) if queue else 0
-        if queue:
-            _delete_persisted_agent_inputs(list(queue))
-        _clear_persisted_agent_input_target(key)
+        route_keys = {
+            candidate
+            for candidate in set(_agent_input_queues) | set(_agent_input_tasks)
+            if _same_agent_input_route(candidate, key)
+        }
+        route_keys.add(key)
+        dropped = 0
+        for route_key in route_keys:
+            task = _agent_input_tasks.pop(route_key, None)
+            if task and not task.done() and task is not asyncio.current_task():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            queue = _agent_input_queues.pop(route_key, None)
+            dropped += len(queue) if queue else 0
+            if queue:
+                _delete_persisted_agent_inputs(list(queue))
+            turn_admission.set_pending(route_key[2], pending=False)
+        _clear_persisted_agent_input_route(key)
         _reset_transient_agent_retry(window_id)
-        turn_admission.set_pending(window_id, pending=False)
-
-    if key not in _agent_input_queues and key not in _agent_input_tasks:
-        _agent_input_locks.pop(key, None)
 
     return dropped
 
@@ -4191,11 +4332,6 @@ async def _rotate_thread_after_usage_limit(
     )
     if send_ok and not queued:
         await mark_window_working(context.bot, user_id, created_wid, thread_id)
-        await _refresh_session_map_after_first_prompt(
-            created_wid,
-            text=text,
-            confirm_existing_session=True,
-        )
     if send_ok:
         delivery = (
             "queued your message there" if queued else "forwarded your message there"
@@ -4335,35 +4471,14 @@ async def _send_or_queue_to_starting_window(
     *,
     auto_confirm_startup_trust: bool = False,
 ) -> tuple[bool, str, bool]:
-    """Send a first prompt after startup, durably queueing capacity waits."""
-    send_ok, send_msg = await _send_to_window_when_codex_ready(
+    """Persist a first prompt and use the same lifecycle as bound-window input."""
+    del auto_confirm_startup_trust
+    return await _send_or_queue_agent_input(
+        bot,
         user_id,
         thread_id,
         window_id,
         text,
-        auto_confirm_startup_trust=auto_confirm_startup_trust,
-        return_on_capacity_full=True,
-    )
-    if send_ok:
-        return True, send_msg, False
-    if "active-task limit" not in send_msg:
-        return False, send_msg, False
-
-    key = _agent_input_key(user_id, thread_id, window_id)
-    queued, depth, limit = _queue_agent_input(key, text)
-    if not queued:
-        return (
-            False,
-            "Server task capacity is full and the input queue is also full "
-            f"({limit} pending).",
-            False,
-        )
-    _ensure_agent_input_drain_task(bot, key)
-    return (
-        True,
-        "Server is at its active-task limit; queued for the next available "
-        f"slot ({depth}/{limit})",
-        True,
     )
 
 
@@ -4409,18 +4524,35 @@ async def _refresh_session_map_after_first_prompt(
     text: str | None = None,
     confirm_existing_session: bool = False,
     timeout: float = 20.0,
+    transcript_session_id: str | None = None,
+    transcript_after_offset: int | None = None,
 ) -> bool:
     """Load the session_map entry that Codex writes after the first prompt starts."""
+    if transcript_session_id and not session_manager.window_matches_session(
+        window_id,
+        transcript_session_id,
+    ):
+        return False
     if session_manager.get_window_state(window_id).session_id:
         if text and confirm_existing_session:
-            return await _confirm_first_prompt_delivery(window_id, text)
+            return await _confirm_first_prompt_delivery(
+                window_id,
+                text,
+                transcript_session_id=transcript_session_id,
+                transcript_after_offset=transcript_after_offset,
+            )
         return True
     hook_ok = await session_manager.wait_for_session_map_entry(
         window_id, timeout=timeout
     )
     if hook_ok:
         if text:
-            return await _confirm_first_prompt_delivery(window_id, text)
+            return await _confirm_first_prompt_delivery(
+                window_id,
+                text,
+                transcript_session_id=transcript_session_id,
+                transcript_after_offset=transcript_after_offset,
+            )
         return True
 
     if text:
@@ -4436,7 +4568,12 @@ async def _refresh_session_map_after_first_prompt(
                     timeout=min(timeout, 10.0),
                 )
                 if hook_ok:
-                    return await _confirm_first_prompt_delivery(window_id, text)
+                    return await _confirm_first_prompt_delivery(
+                        window_id,
+                        text,
+                        transcript_session_id=transcript_session_id,
+                        transcript_after_offset=transcript_after_offset,
+                    )
         logger.warning(
             "Codex window %s accepted input but did not register session_map",
             window_id,
@@ -4454,6 +4591,8 @@ async def _confirm_first_prompt_delivery(
     text: str,
     *,
     transcript_timeout: float | None = None,
+    transcript_session_id: str | None = None,
+    transcript_after_offset: int | None = None,
 ) -> bool:
     """Confirm that the first forwarded prompt reached the Codex transcript."""
     if transcript_timeout is None:
@@ -4462,6 +4601,8 @@ async def _confirm_first_prompt_delivery(
         window_id,
         text,
         timeout=transcript_timeout,
+        expected_session_id=transcript_session_id,
+        after_offset=transcript_after_offset,
     )
     if transcript_ok:
         return True
@@ -4485,6 +4626,8 @@ async def _confirm_first_prompt_delivery(
         window_id,
         text,
         timeout=transcript_timeout,
+        expected_session_id=transcript_session_id,
+        after_offset=transcript_after_offset,
     )
     if transcript_ok:
         return True
@@ -4510,6 +4653,7 @@ async def _confirm_first_prompt_delivery(
 
 async def _recover_missing_bound_window(
     *,
+    bot: Bot,
     user_id: int,
     thread_id: int,
     old_window_id: str,
@@ -4684,20 +4828,18 @@ async def _recover_missing_bound_window(
         session_manager.remove_window_state(old_window_id)
     forget_missing_bound_window(user_id, thread_id, old_window_id)
 
-    send_ok, send_msg = await _send_to_window_when_codex_ready(
+    send_ok, send_msg, queued = await _send_or_queue_agent_input(
+        bot,
         user_id,
         thread_id,
         created_wid,
         text,
-        auto_confirm_startup_trust=True,
     )
     if send_ok:
-        await _refresh_session_map_after_first_prompt(
-            created_wid,
-            text=text,
-            confirm_existing_session=True,
-        )
-        return True, f"Recovered window `{created_wname}` and forwarded your message."
+        if not queued:
+            await mark_window_working(bot, user_id, created_wid, thread_id)
+        delivery = "queued" if queued else "forwarded"
+        return True, f"Recovered window `{created_wname}` and {delivery} your message."
     return (
         False,
         "recovered the tmux window, but forwarding failed: "
@@ -4736,6 +4878,7 @@ async def _handle_missing_bound_window_input(
             ),
         )
         recovered, recovery_message = await _recover_missing_bound_window(
+            bot=update_message.get_bot(),
             user_id=user_id,
             thread_id=thread_id,
             old_window_id=window_id,
@@ -4841,6 +4984,7 @@ async def _handle_non_codex_bound_window(
         )
         await tmux_manager.kill_window(window_id)
         recovered, recovery_message = await _recover_missing_bound_window(
+            bot=update_message.get_bot(),
             user_id=user_id,
             thread_id=thread_id,
             old_window_id=window_id,
@@ -4901,6 +5045,7 @@ async def _handle_auth_error_bound_window(
         )
         await tmux_manager.kill_window(window_id)
         recovered, recovery_message = await _recover_missing_bound_window(
+            bot=update_message.get_bot(),
             user_id=user_id,
             thread_id=thread_id,
             old_window_id=window_id,
@@ -5184,18 +5329,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     if not queued:
         await mark_window_working(context.bot, user.id, wid, thread_id)
-        confirmed = await _refresh_session_map_after_first_prompt(
-            wid,
-            text=text,
-            confirm_existing_session=True,
-        )
-        if not confirmed:
-            await safe_reply(
-                update.message,
-                "⚠️ Delivery was not confirmed in the agent transcript. The bot "
-                "did not resend automatically to avoid a duplicate. If no reply "
-                "appears, send the message again or use /interrupt.",
-            )
 
     # Start background capture for ! bash command output
     if not queued and input_was_ready and text.startswith("!") and len(text) > 1:
@@ -5498,27 +5631,6 @@ async def _create_and_bind_window(
                         created_wid,
                         pending_thread_id,
                     )
-                    confirmed = await _refresh_session_map_after_first_prompt(
-                        created_wid,
-                        text=pending_text,
-                        confirm_existing_session=True,
-                    )
-                    if not confirmed:
-                        await safe_send(
-                            context.bot,
-                            resolved_chat,
-                            "⚠️ I sent the first message, but the agent did not "
-                            "confirm it reached the transcript after a submit "
-                            "retry. I will show any pending agent prompt below; "
-                            "if the topic stays idle, send the message again.",
-                            message_thread_id=pending_thread_id,
-                        )
-                        await handle_interactive_ui(
-                            context.bot,
-                            query.from_user.id,
-                            created_wid,
-                            pending_thread_id,
-                        )
                 elif queued:
                     await safe_send(
                         context.bot,
