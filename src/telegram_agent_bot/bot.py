@@ -5327,7 +5327,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
-    if not queued:
+    if queued:
+        await safe_reply(update.message, f"⏳ {message}")
+    else:
         await mark_window_working(context.bot, user.id, wid, thread_id)
 
     # Start background capture for ! bash command output
