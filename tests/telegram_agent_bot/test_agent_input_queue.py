@@ -18,11 +18,17 @@ def clear_agent_input_queue_state(monkeypatch, tmp_path):
     bot_module._agent_input_queues.clear()
     bot_module._agent_input_tasks.clear()
     bot_module._agent_input_locks.clear()
+    bot_module._transient_agent_retry_attempts.clear()
+    bot_module._transient_agent_retry_tasks.clear()
     turn_admission.reset()
     yield
+    for task in bot_module._transient_agent_retry_tasks.values():
+        task.cancel()
     bot_module._agent_input_queues.clear()
     bot_module._agent_input_tasks.clear()
     bot_module._agent_input_locks.clear()
+    bot_module._transient_agent_retry_attempts.clear()
+    bot_module._transient_agent_retry_tasks.clear()
     turn_admission.reset()
 
 
@@ -209,6 +215,51 @@ async def test_send_or_queue_agent_input_sends_immediately_when_ready(monkeypatc
     send_message.assert_awaited_once_with(12345, 42, "@1", "prompt")
     assert bot_module._agent_input_queues == {}
     assert bot_module._agent_input_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_transient_agent_failure_retries_with_bounded_continuation(monkeypatch):
+    send_or_queue = AsyncMock(return_value=(True, "Sent", False))
+    mark_working = AsyncMock()
+    monkeypatch.setattr(
+        bot_module,
+        "_TRANSIENT_AGENT_RETRY_DELAYS_SECONDS",
+        (0.0,),
+    )
+    monkeypatch.setattr(bot_module, "_send_or_queue_agent_input", send_or_queue)
+    monkeypatch.setattr(bot_module, "mark_window_working", mark_working)
+
+    scheduled = bot_module._schedule_transient_agent_retry(
+        MagicMock(),
+        12345,
+        42,
+        "@1",
+    )
+
+    assert scheduled == (1, 0.0)
+    task = bot_module._transient_agent_retry_tasks["@1"]
+    duplicate_route = bot_module._schedule_transient_agent_retry(
+        MagicMock(),
+        67890,
+        84,
+        "@1",
+    )
+    assert duplicate_route == (1, 0.0)
+    assert bot_module._transient_agent_retry_tasks["@1"] is task
+    await task
+
+    send_or_queue.assert_awaited_once()
+    assert send_or_queue.await_args.args[1:5] == (
+        12345,
+        42,
+        "@1",
+        bot_module._TRANSIENT_AGENT_RETRY_PROMPT,
+    )
+    assert send_or_queue.await_args.kwargs == {"transient_retry": True}
+    mark_working.assert_awaited_once()
+    assert (
+        bot_module._schedule_transient_agent_retry(MagicMock(), 12345, 42, "@1") is None
+    )
 
 
 @pytest.mark.asyncio

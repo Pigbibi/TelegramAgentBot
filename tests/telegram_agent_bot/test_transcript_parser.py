@@ -82,6 +82,33 @@ class TestParseLine:
             "✅ Agent finished. No additional final message was emitted."
         )
 
+    def test_task_complete_with_error_emits_failure_with_error_code(self):
+        event = {
+            "type": "event_msg",
+            "timestamp": "2026-08-24T05:38:09.355Z",
+            "payload": {
+                "type": "task_complete",
+                "last_agent_message": None,
+                "error": {
+                    "message": "Selected model is at capacity. Please try again.",
+                    "codex_error_info": "server_overloaded",
+                },
+            },
+        }
+
+        parsed = TranscriptParser.parse_line(json.dumps(event))
+
+        assert parsed is not None
+        assert parsed["agent_error"] is True
+        assert parsed["agent_error_code"] == "server_overloaded"
+        assert "stopped before completing" in parsed["text"]
+        assert "✅" not in parsed["text"]
+
+        entries, _pending = TranscriptParser.parse_entries([parsed])
+        assert len(entries) == 1
+        assert entries[0].content_type == "agent_error"
+        assert entries[0].error_code == "server_overloaded"
+
     def test_task_complete_with_final_message_is_skipped_to_avoid_duplicate(self):
         event = {
             "type": "event_msg",
