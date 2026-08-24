@@ -668,6 +668,19 @@ async def application_error_handler(
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
     """Log Telegram polling/handler errors with lightweight update context."""
+    error = context.error
+    if not isinstance(update, Update) and isinstance(error, (NetworkError, TimedOut)):
+        logger.warning(
+            "Transient Telegram polling error; polling will retry automatically: %s",
+            error,
+        )
+        return
+    if isinstance(error, BadRequest):
+        message = str(error).lower()
+        if "query is too old" in message or "query id is invalid" in message:
+            logger.info("Ignored expired Telegram callback query: %s", error)
+            return
+
     update_type = type(update).__name__
     chat_id = None
     thread_id = None
@@ -685,11 +698,11 @@ async def application_error_handler(
         chat_id,
         thread_id,
         exc_info=(
-            type(context.error),
-            context.error,
-            context.error.__traceback__,
+            type(error),
+            error,
+            error.__traceback__,
         )
-        if context.error
+        if error
         else None,
     )
 
@@ -3808,14 +3821,15 @@ async def _rotate_thread_after_usage_limit(
 
     resolved_chat = session_manager.resolve_chat_id(user_id, thread_id)
 
-    send_ok, send_msg = await _send_to_window_when_codex_ready(
+    send_ok, send_msg, queued = await _send_or_queue_to_starting_window(
+        context.bot,
         user_id,
         thread_id,
         created_wid,
         text,
         auto_confirm_startup_trust=True,
     )
-    if send_ok:
+    if send_ok and not queued:
         await mark_window_working(context.bot, user_id, created_wid, thread_id)
         await _refresh_session_map_after_first_prompt(
             created_wid,
@@ -3823,11 +3837,14 @@ async def _rotate_thread_after_usage_limit(
             confirm_existing_session=True,
         )
     if send_ok:
+        delivery = (
+            "queued your message there" if queued else "forwarded your message there"
+        )
         await safe_send(
             context.bot,
             resolved_chat,
             f"♻️ This session hit its usage limit, so I switched to a new "
-            f"`{next_account}` session and forwarded your message there.",
+            f"`{next_account}` session and {delivery}.",
             message_thread_id=thread_id,
         )
     else:
@@ -3867,6 +3884,7 @@ async def _send_to_window_when_codex_ready(
     timeout: float | None = None,
     interval: float = 0.5,
     auto_confirm_startup_trust: bool = False,
+    return_on_capacity_full: bool = False,
 ) -> tuple[bool, str]:
     """Send text once the new Codex TUI is ready to accept input."""
     startup_timeout = (
@@ -3919,6 +3937,8 @@ async def _send_to_window_when_codex_ready(
             last_message = (
                 "Server is at its active-task limit; waiting for an available slot"
             )
+            if return_on_capacity_full:
+                return False, last_message
             await asyncio.sleep(interval)
             continue
         try:
@@ -3944,6 +3964,47 @@ async def _send_to_window_when_codex_ready(
             return False, send_msg
         await asyncio.sleep(interval)
     return False, last_message or "Agent did not become ready"
+
+
+async def _send_or_queue_to_starting_window(
+    bot: Bot,
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+    text: str,
+    *,
+    auto_confirm_startup_trust: bool = False,
+) -> tuple[bool, str, bool]:
+    """Send a first prompt after startup, durably queueing capacity waits."""
+    send_ok, send_msg = await _send_to_window_when_codex_ready(
+        user_id,
+        thread_id,
+        window_id,
+        text,
+        auto_confirm_startup_trust=auto_confirm_startup_trust,
+        return_on_capacity_full=True,
+    )
+    if send_ok:
+        return True, send_msg, False
+    if "active-task limit" not in send_msg:
+        return False, send_msg, False
+
+    key = _agent_input_key(user_id, thread_id, window_id)
+    queued, depth, limit = _queue_agent_input(key, text)
+    if not queued:
+        return (
+            False,
+            "Server task capacity is full and the input queue is also full "
+            f"({limit} pending).",
+            False,
+        )
+    _ensure_agent_input_drain_task(bot, key)
+    return (
+        True,
+        "Server is at its active-task limit; queued for the next available "
+        f"slot ({depth}/{limit})",
+        True,
+    )
 
 
 async def _enable_fast_mode_if_requested(
@@ -5058,14 +5119,15 @@ async def _create_and_bind_window(
                 if context.user_data is not None:
                     context.user_data.pop("_pending_thread_text", None)
                     context.user_data.pop("_pending_thread_id", None)
-                send_ok, send_msg = await _send_to_window_when_codex_ready(
+                send_ok, send_msg, queued = await _send_or_queue_to_starting_window(
+                    context.bot,
                     query.from_user.id,
                     pending_thread_id,
                     created_wid,
                     pending_text,
                     auto_confirm_startup_trust=True,
                 )
-                if send_ok:
+                if send_ok and not queued:
                     await mark_window_working(
                         context.bot,
                         query.from_user.id,
@@ -5093,6 +5155,13 @@ async def _create_and_bind_window(
                             created_wid,
                             pending_thread_id,
                         )
+                elif queued:
+                    await safe_send(
+                        context.bot,
+                        resolved_chat,
+                        f"⏳ {send_msg}",
+                        message_thread_id=pending_thread_id,
+                    )
                 if not send_ok:
                     logger.warning("Failed to forward pending text: %s", send_msg)
                     await safe_send(
@@ -5253,6 +5322,19 @@ async def _apply_codex_update_from_callback(query: Any) -> None:
     await safe_edit(query, f"⚠️ {result.message}")
 
 
+async def _safe_answer_callback(query: Any, *args: Any, **kwargs: Any) -> bool:
+    """Answer a callback while treating an expired query as harmless."""
+    try:
+        await query.answer(*args, **kwargs)
+        return True
+    except BadRequest as exc:
+        message = str(exc).lower()
+        if "query is too old" in message or "query id is invalid" in message:
+            logger.debug("Callback query answer skipped because it expired")
+            return False
+        raise
+
+
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -5278,7 +5360,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     if data == CB_CODEX_UPDATE_DISMISS:
-        await query.answer("Dismissed")
+        await _safe_answer_callback(query, "Dismissed")
         await safe_edit(query, "Codex CLI update dismissed.")
         return
 
@@ -5975,18 +6057,26 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data.pop("_pending_thread_text", None)
             context.user_data.pop("_pending_thread_id", None)
         if pending_text:
-            send_ok, send_msg = await _send_message_to_agent(
+            send_ok, send_msg, queued = await _send_or_queue_agent_input(
+                context.bot,
                 user.id,
                 thread_id,
                 selected_wid,
                 pending_text,
             )
-            if send_ok:
+            if send_ok and not queued:
                 await mark_window_working(
                     context.bot,
                     user.id,
                     selected_wid,
                     thread_id,
+                )
+            elif queued:
+                await safe_send(
+                    context.bot,
+                    resolved_chat,
+                    f"⏳ {send_msg}",
+                    message_thread_id=thread_id,
                 )
             else:
                 logger.warning("Failed to forward pending text: %s", send_msg)
@@ -6575,6 +6665,19 @@ async def post_init(application: Application) -> None:
             "Durable runtime store unavailable at startup; immediate agent input "
             "remains available but busy inputs cannot be queued safely"
         )
+
+    logger.info(
+        "Runtime safeguards: agent_input_queue_max_size=%d "
+        "agent_input_queue_max_wait_seconds=%.1f agent_max_active_turns=%d "
+        "health_alert_cooldown_seconds=%.1f "
+        "health_queue_oldest_seconds=%.1f health_recovery_stable_seconds=%.1f",
+        _agent_input_queue_max_size(),
+        _agent_input_queue_max_wait_seconds(),
+        _agent_max_active_turns(),
+        float(config.health_alert_cooldown_seconds),
+        float(config.health_queue_oldest_seconds),
+        float(config.health_recovery_stable_seconds),
+    )
 
     await refresh_model_catalog()
 

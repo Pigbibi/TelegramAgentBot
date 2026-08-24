@@ -401,7 +401,8 @@ class VpsHealthMonitor:
             self._recovery_candidate_since = None
             return HealthDecision("none", ())
         self._recovery_candidate_since = None
-        due = current_keys != previously_active or any(
+        newly_active = current_keys - previously_active
+        due = bool(newly_active) or any(
             key not in states
             or not states[key].active
             or current_time - states[key].last_sent_at_epoch >= cooldown_seconds
@@ -441,6 +442,20 @@ class VpsHealthMonitor:
             self._recovery_candidate_since = None
             for key, old in list(states.items()):
                 if not old.active:
+                    continue
+                states[key] = HealthAlertState(False, old.last_sent_at_epoch)
+                self.store.save_health_alert_state(
+                    key,
+                    active=False,
+                    last_sent_at_epoch=old.last_sent_at_epoch,
+                )
+        elif decision.event == "none" and current_keys:
+            # A partial recovery should not emit another alert merely because
+            # one issue disappeared while another remains active. Persist the
+            # resolved subset so the next sample compares against current
+            # reality without changing cooldown timestamps for live issues.
+            for key, old in list(states.items()):
+                if not old.active or key in current_keys:
                     continue
                 states[key] = HealthAlertState(False, old.last_sent_at_epoch)
                 self.store.save_health_alert_state(
@@ -505,6 +520,8 @@ class VpsHealthMonitor:
                             )
                     if delivered:
                         self.record(decision)
+                elif decision.issues:
+                    self.record(decision)
             except asyncio.CancelledError:
                 raise
             except Exception:

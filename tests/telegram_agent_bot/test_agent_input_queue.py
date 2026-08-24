@@ -595,6 +595,42 @@ async def test_send_to_window_when_ready_sends_with_visible_idle_prompt(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_starting_window_prompt_is_durably_queued_at_turn_limit(monkeypatch):
+    capture = SimpleNamespace(
+        text="previous output\n\n›\n\n  gpt-5.5 · ~/repo",
+        missing=False,
+    )
+    ensured: list[tuple[int, int, str]] = []
+    monkeypatch.setattr(
+        bot_module, "capture_agent_output", AsyncMock(return_value=capture)
+    )
+    monkeypatch.setattr(bot_module.config, "agent_max_active_turns", 2)
+    monkeypatch.setattr(
+        bot_module,
+        "_ensure_agent_input_drain_task",
+        lambda _bot, key: ensured.append(key),
+    )
+    turn_admission.observe("@2", active=True)
+    turn_admission.observe("@3", active=True)
+
+    ok, message, queued = await bot_module._send_or_queue_to_starting_window(
+        MagicMock(),
+        12345,
+        42,
+        "@1",
+        "first prompt",
+        auto_confirm_startup_trust=True,
+    )
+
+    assert (ok, queued) == (True, True)
+    assert "active-task limit" in message
+    assert ensured == [(12345, 42, "@1")]
+    assert [
+        item.text for item in bot_module._runtime_store.list_pending_agent_inputs()
+    ] == ["first prompt"]
+
+
+@pytest.mark.asyncio
 async def test_send_to_window_when_ready_uses_configured_startup_timeout(monkeypatch):
     capture = SimpleNamespace(
         text="starting agent",
