@@ -3060,15 +3060,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     w = None
     if wid is not None:
         w = await tmux_manager.find_window_by_id(wid)
-        if not w:
-            display = session_manager.get_display_name(wid)
-            session_manager.unbind_thread(user.id, thread_id)
-            await safe_reply(
-                update.message,
-                f"❌ Window '{display}' no longer exists. Binding removed.\n"
-                "Send a message to start a new session.",
-            )
-            return
 
     # Download the highest-resolution photo
     photo = update.message.photo[-1]
@@ -3109,6 +3100,17 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         text_to_send = f"{caption}\n\n(image attached: {agent_file_path})"
     else:
         text_to_send = f"(image attached: {agent_file_path})"
+
+    if wid and not w:
+        await _handle_missing_bound_window_input(
+            update_message=update.message,
+            user_id=user.id,
+            thread_id=thread_id,
+            window_id=wid,
+            text=text_to_send,
+            success_reply=PHOTO_CONFIRMATION_MESSAGE,
+        )
+        return
 
     if wid and w:
         pane_cmd = (getattr(w, "pane_current_command", "") or "").strip()
@@ -3232,15 +3234,6 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     w = None
     if wid is not None:
         w = await tmux_manager.find_window_by_id(wid)
-        if not w:
-            display = session_manager.get_display_name(wid)
-            session_manager.unbind_thread(user.id, thread_id)
-            await safe_reply(
-                update.message,
-                f"❌ Window '{display}' no longer exists. Binding removed.\n"
-                "Send a message to start a new session.",
-            )
-            return
 
     document = update.message.document
     document_name = _safe_upload_filename(
@@ -3281,6 +3274,17 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         text_to_send = f"{caption}\n\n(file attached: {agent_file_path})"
     else:
         text_to_send = f"(file attached: {agent_file_path})"
+
+    if wid and not w:
+        await _handle_missing_bound_window_input(
+            update_message=update.message,
+            user_id=user.id,
+            thread_id=thread_id,
+            window_id=wid,
+            text=text_to_send,
+            success_reply=FILE_CONFIRMATION_MESSAGE,
+        )
+        return
 
     if wid and w:
         pane_cmd = (getattr(w, "pane_current_command", "") or "").strip()
@@ -3406,15 +3410,6 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     w = None
     if wid:
         w = await tmux_manager.find_window_by_id(wid)
-        if not w:
-            display = session_manager.get_display_name(wid)
-            session_manager.unbind_thread(user.id, thread_id)
-            await safe_reply(
-                update.message,
-                f"❌ Window '{display}' no longer exists. Binding removed.\n"
-                "Send a message to start a new session.",
-            )
-            return
 
     # Download voice as in-memory bytes
     voice_file = await update.message.voice.get_file()
@@ -3429,6 +3424,17 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         logger.error("Voice transcription failed: %s", e)
         await safe_reply(update.message, f"⚠ Transcription failed: {e}")
+        return
+
+    if wid and not w:
+        await _handle_missing_bound_window_input(
+            update_message=update.message,
+            user_id=user.id,
+            thread_id=thread_id,
+            window_id=wid,
+            text=text,
+            success_reply=f'🎤 "{text}"',
+        )
         return
 
     await _safe_send_typing_action(update.message.chat, source="voice_handler")
@@ -4157,6 +4163,61 @@ async def _recover_missing_bound_window(
     )
 
 
+async def _handle_missing_bound_window_input(
+    *,
+    update_message: Any,
+    user_id: int,
+    thread_id: int,
+    window_id: str,
+    text: str,
+    success_reply: str | None = None,
+) -> None:
+    """Recover a missing bound window and forward the triggering input."""
+    display = session_manager.get_display_name(window_id)
+    state = session_manager.window_states.get(window_id)
+    if state and state.session_id and state.cwd:
+        logger.info(
+            "Recovering missing bound window %s (user=%d, thread=%d)",
+            display,
+            user_id,
+            thread_id,
+        )
+        await safe_reply(
+            update_message,
+            (
+                f"💤 Session `{display}` was paused while idle. Waking it and "
+                "resuming your previous context..."
+                if state.hibernated_at
+                else f"♻️ Window `{display}` disappeared. Recreating it and "
+                "resuming the previous session..."
+            ),
+        )
+        recovered, recovery_message = await _recover_missing_bound_window(
+            user_id=user_id,
+            thread_id=thread_id,
+            old_window_id=window_id,
+            text=text,
+        )
+        if not recovered:
+            await safe_reply(update_message, f"❌ {recovery_message}")
+        elif success_reply:
+            await safe_reply(update_message, success_reply)
+        return
+
+    logger.info(
+        "Stale binding: window %s gone, unbinding (user=%d, thread=%d)",
+        display,
+        user_id,
+        thread_id,
+    )
+    session_manager.unbind_thread(user_id, thread_id)
+    await safe_reply(
+        update_message,
+        f"❌ Window '{display}' no longer exists. Binding removed.\n"
+        "Send a message to start a new session.",
+    )
+
+
 async def _recovered_agent_process_status(window_id: str) -> tuple[bool, str]:
     """Return whether a recovery window still owns a live agent process."""
     window = await tmux_manager.find_window_by_id(window_id)
@@ -4499,46 +4560,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Bound topic — forward to bound window
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
-        display = session_manager.get_display_name(wid)
-        state = session_manager.window_states.get(wid)
-        if state and state.session_id and state.cwd:
-            logger.info(
-                "Recovering missing bound window %s (user=%d, thread=%d)",
-                display,
-                user.id,
-                thread_id,
-            )
-            await safe_reply(
-                update.message,
-                (
-                    f"💤 Session `{display}` was paused while idle. Waking it and "
-                    "resuming your previous context..."
-                    if state.hibernated_at
-                    else f"♻️ Window `{display}` disappeared. Recreating it and "
-                    "resuming the previous session..."
-                ),
-            )
-            recovered, recovery_message = await _recover_missing_bound_window(
-                user_id=user.id,
-                thread_id=thread_id,
-                old_window_id=wid,
-                text=text,
-            )
-            if not recovered:
-                await safe_reply(update.message, f"❌ {recovery_message}")
-            return
-
-        logger.info(
-            "Stale binding: window %s gone, unbinding (user=%d, thread=%d)",
-            display,
-            user.id,
-            thread_id,
-        )
-        session_manager.unbind_thread(user.id, thread_id)
-        await safe_reply(
-            update.message,
-            f"❌ Window '{display}' no longer exists. Binding removed.\n"
-            "Send a message to start a new session.",
+        await _handle_missing_bound_window_input(
+            update_message=update.message,
+            user_id=user.id,
+            thread_id=thread_id,
+            window_id=wid,
+            text=text,
         )
         return
 

@@ -133,6 +133,60 @@ async def test_photo_prompt_recreates_working_status_after_confirmation(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_photo_prompt_recovers_hibernated_missing_window(tmp_path):
+    update = _make_base_update()
+    context = _make_context()
+    update.message.caption = "check this"
+
+    photo = MagicMock()
+    photo.file_unique_id = "photo1"
+    tg_file = MagicMock()
+    tg_file.download_to_drive = AsyncMock()
+    photo.get_file = AsyncMock(return_value=tg_file)
+    update.message.photo = [photo]
+
+    with (
+        patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
+        patch("telegram_agent_bot.bot._get_thread_id", return_value=42),
+        patch("telegram_agent_bot.bot._IMAGES_DIR", tmp_path),
+        patch("telegram_agent_bot.bot.session_manager") as session_manager,
+        patch("telegram_agent_bot.bot.tmux_manager") as tmux_manager,
+        patch(
+            "telegram_agent_bot.bot._handle_missing_bound_window_input",
+            new_callable=AsyncMock,
+        ) as handle_missing_window,
+        patch(
+            "telegram_agent_bot.bot.safe_reply", new_callable=AsyncMock
+        ) as safe_reply,
+    ):
+        session_manager.get_window_for_thread.return_value = "@1"
+        session_manager.get_display_name.return_value = "QuantStrategyLab"
+        session_manager.window_states = {
+            "@1": SimpleNamespace(
+                session_id="session-1",
+                cwd="/tmp/project",
+                hibernated_at=123.0,
+            )
+        }
+        tmux_manager.find_window_by_id = AsyncMock(return_value=None)
+
+        from telegram_agent_bot.bot import PHOTO_CONFIRMATION_MESSAGE, photo_handler
+
+        await photo_handler(update, context)
+
+    recovery_kwargs = handle_missing_window.await_args.kwargs
+    assert recovery_kwargs["update_message"] is update.message
+    assert recovery_kwargs["user_id"] == 12345
+    assert recovery_kwargs["thread_id"] == 42
+    assert recovery_kwargs["window_id"] == "@1"
+    assert recovery_kwargs["text"].startswith("check this\n\n(image attached: ")
+    assert recovery_kwargs["text"].endswith("_photo1.jpg)")
+    assert recovery_kwargs["success_reply"] == PHOTO_CONFIRMATION_MESSAGE
+    session_manager.unbind_thread.assert_not_called()
+    safe_reply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_photo_prompt_uploads_file_for_remote_target(tmp_path):
     update = _make_base_update()
     context = _make_context()
