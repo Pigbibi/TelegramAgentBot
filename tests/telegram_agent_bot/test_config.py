@@ -209,7 +209,7 @@ class TestConfigValid:
     def test_agent_input_queue_defaults(self):
         cfg = Config()
         assert cfg.agent_input_queue_max_size == 20
-        assert cfg.agent_input_queue_max_wait_seconds == 1800
+        assert cfg.agent_input_queue_max_wait_seconds == 0
         assert cfg.transcript_confirm_timeout_seconds == 15
 
     def test_custom_agent_input_queue_limits(self, monkeypatch):

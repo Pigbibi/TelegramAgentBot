@@ -1979,7 +1979,7 @@ def _agent_input_queue_max_size() -> int:
 def _agent_input_queue_max_wait_seconds() -> float:
     return max(
         0.0,
-        float(getattr(config, "agent_input_queue_max_wait_seconds", 1800.0)),
+        float(getattr(config, "agent_input_queue_max_wait_seconds", 0.0)),
     )
 
 

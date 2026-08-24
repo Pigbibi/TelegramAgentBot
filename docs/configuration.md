@@ -92,7 +92,7 @@ plugin for remote execution.
 | `TELEGRAM_AGENT_BOT_MAX_CONCURRENT_UPDATES` | `4` | Telegram topics that may be processed concurrently |
 | `TELEGRAM_AGENT_BOT_MAX_ACTIVE_TURNS` | `2` | Local agent turns allowed to work simultaneously; `0` is unlimited |
 | `TELEGRAM_AGENT_BOT_AGENT_INPUT_QUEUE_MAX_SIZE` | `20` | Maximum durable queued inputs per session |
-| `TELEGRAM_AGENT_BOT_AGENT_INPUT_QUEUE_MAX_WAIT_SECONDS` | `1800` | Queue expiry; `0` disables expiry |
+| `TELEGRAM_AGENT_BOT_AGENT_INPUT_QUEUE_MAX_WAIT_SECONDS` | `0` | Queue expiry in seconds; disabled by default so durable inputs wait until delivery or explicit cancellation |
 | `TELEGRAM_AGENT_BOT_TRANSCRIPT_CONFIRM_TIMEOUT_SECONDS` | `15` | Wait for Codex to persist a submitted prompt before reporting unconfirmed delivery; minimum `5` |
 | `TELEGRAM_AGENT_BOT_AGENT_STARTUP_TIMEOUT_SECONDS` | `180` | Maximum wait for a newly started agent UI |
 | `TELEGRAM_AGENT_BOT_IDLE_SESSION_TIMEOUT_SECONDS` | `1800` | Stop an idle resumable process; `0` disables hibernation |
