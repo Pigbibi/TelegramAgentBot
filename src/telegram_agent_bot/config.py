@@ -274,7 +274,7 @@ class Config:
             float(
                 os.getenv(
                     "TELEGRAM_AGENT_BOT_AGENT_INPUT_QUEUE_MAX_WAIT_SECONDS",
-                    "1800",
+                    "0",
                 )
             ),
         )
