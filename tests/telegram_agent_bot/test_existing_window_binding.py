@@ -662,6 +662,57 @@ class TestExistingWindowBinding:
         safe_reply.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_bound_topic_acknowledges_queued_text(self):
+        update = _make_text_update("hi")
+        context = _make_context()
+
+        fake_window = MagicMock()
+        fake_window.window_id = "@1"
+        fake_window.window_name = "Projects"
+        fake_window.cwd = "/tmp/project"
+
+        with (
+            patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_agent_bot.bot._get_thread_id", return_value=42),
+            patch("telegram_agent_bot.bot.session_manager") as mock_sm,
+            patch("telegram_agent_bot.bot.tmux_manager") as mock_tmux,
+            patch(
+                "telegram_agent_bot.bot.enqueue_status_update", new_callable=AsyncMock
+            ),
+            patch(
+                "telegram_agent_bot.bot.safe_reply", new_callable=AsyncMock
+            ) as safe_reply,
+            patch(
+                "telegram_agent_bot.bot._send_or_queue_agent_input",
+                new_callable=AsyncMock,
+                return_value=(
+                    True,
+                    "Agent is busy; queued until ready (1/20)",
+                    True,
+                ),
+            ),
+            patch(
+                "telegram_agent_bot.bot.mark_window_working",
+                new_callable=AsyncMock,
+            ) as mark_working,
+            patch("telegram_agent_bot.bot._cancel_bash_capture"),
+        ):
+            mock_sm.get_window_for_thread.return_value = "@1"
+            mock_sm.window_has_usage_limit_exceeded = AsyncMock(return_value=False)
+            mock_tmux.find_window_by_id = AsyncMock(return_value=fake_window)
+            mock_tmux.capture_pane = AsyncMock(return_value="")
+
+            from telegram_agent_bot.bot import text_handler
+
+            await text_handler(update, context)
+
+        safe_reply.assert_awaited_once_with(
+            update.message,
+            "⏳ Agent is busy; queued until ready (1/20)",
+        )
+        mark_working.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_bound_topic_reports_when_direct_send_fails(self):
         update = _make_text_update("hi")
         context = _make_context()
