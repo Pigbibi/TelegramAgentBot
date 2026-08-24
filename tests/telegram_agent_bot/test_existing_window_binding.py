@@ -585,6 +585,7 @@ class TestExistingWindowBinding:
                 "telegram_agent_bot.bot.mark_window_working",
                 new_callable=AsyncMock,
             ),
+            patch("telegram_agent_bot.bot._reset_transient_agent_retry"),
             patch(
                 "telegram_agent_bot.bot._refresh_session_map_after_first_prompt",
                 new_callable=AsyncMock,
@@ -609,15 +610,11 @@ class TestExistingWindowBinding:
         enqueue_status_update.assert_awaited_once()
         send_when_ready.assert_not_awaited()
         send_or_queue.assert_awaited_once_with(context.bot, 12345, 42, "@1", "hi")
-        refresh_session_map.assert_awaited_once_with(
-            "@1",
-            text="hi",
-            confirm_existing_session=True,
-        )
+        refresh_session_map.assert_not_awaited()
         safe_reply.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_bound_topic_reports_when_submit_confirmation_fails(self):
+    async def test_bound_topic_does_not_block_on_background_confirmation(self):
         update = _make_text_update("hi")
         context = _make_context()
 
@@ -662,9 +659,7 @@ class TestExistingWindowBinding:
 
             await text_handler(update, context)
 
-        safe_reply.assert_awaited_once()
-        assert "not confirmed" in safe_reply.await_args.args[1]
-        assert "avoid a duplicate" in safe_reply.await_args.args[1]
+        safe_reply.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_bound_topic_reports_when_direct_send_fails(self):
@@ -749,10 +744,10 @@ class TestExistingWindowBinding:
                 return_value=(True, ""),
             ) as send_control,
             patch(
-                "telegram_agent_bot.bot._send_to_window_when_codex_ready",
+                "telegram_agent_bot.bot._send_or_queue_agent_input",
                 new_callable=AsyncMock,
-                return_value=(True, "Sent"),
-            ) as send_when_ready,
+                return_value=(True, "Sent", False),
+            ) as send_or_queue,
             patch(
                 "telegram_agent_bot.bot._send_message_to_agent",
                 new_callable=AsyncMock,
@@ -785,13 +780,12 @@ class TestExistingWindowBinding:
 
         send_control.assert_awaited_once_with(12345, 42, "@1", "Escape")
         discard_queue.assert_awaited_once_with(12345, 42, "@1")
-        send_when_ready.assert_awaited_once_with(
+        send_or_queue.assert_awaited_once_with(
+            context.bot,
             12345,
             42,
             "@1",
             "interrupt me",
-            timeout=15.0,
-            interval=0.25,
         )
         send_message.assert_not_awaited()
         safe_reply.assert_not_awaited()
@@ -831,18 +825,14 @@ class TestExistingWindowBinding:
                 return_value=(True, ""),
             ) as send_control,
             patch(
-                "telegram_agent_bot.bot._send_to_window_when_codex_ready",
-                new_callable=AsyncMock,
-                return_value=(False, "Timed out waiting for the agent to become ready"),
-            ) as send_when_ready,
-            patch(
-                "telegram_agent_bot.bot._queue_agent_input_after_interrupt",
+                "telegram_agent_bot.bot._send_or_queue_agent_input",
                 new_callable=AsyncMock,
                 return_value=(
                     True,
                     "Interrupt requested; queued message until the agent is ready (1/20)",
+                    True,
                 ),
-            ) as queue_after_interrupt,
+            ) as send_or_queue,
             patch(
                 "telegram_agent_bot.bot._send_message_to_agent",
                 new_callable=AsyncMock,
@@ -876,15 +866,7 @@ class TestExistingWindowBinding:
             await interrupt_command(update, context)
 
         send_control.assert_awaited_once_with(12345, 42, "@1", "Escape")
-        send_when_ready.assert_awaited_once_with(
-            12345,
-            42,
-            "@1",
-            "replace me",
-            timeout=15.0,
-            interval=0.25,
-        )
-        queue_after_interrupt.assert_awaited_once_with(
+        send_or_queue.assert_awaited_once_with(
             context.bot,
             12345,
             42,
@@ -969,10 +951,10 @@ class TestExistingWindowBinding:
                 "telegram_agent_bot.bot.safe_reply", new_callable=AsyncMock
             ) as safe_reply,
             patch(
-                "telegram_agent_bot.bot._send_to_window_when_codex_ready",
+                "telegram_agent_bot.bot._send_or_queue_agent_input",
                 new_callable=AsyncMock,
-                return_value=(True, "Sent"),
-            ) as send_when_ready,
+                return_value=(True, "Sent", False),
+            ) as send_or_queue,
             patch(
                 "telegram_agent_bot.bot._refresh_session_map_after_first_prompt",
                 new_callable=AsyncMock,
@@ -991,6 +973,10 @@ class TestExistingWindowBinding:
                 "telegram_agent_bot.bot.create_agent_session",
                 new_callable=AsyncMock,
             ) as create_agent_session,
+            patch(
+                "telegram_agent_bot.bot.mark_window_working",
+                new_callable=AsyncMock,
+            ),
         ):
             mock_sm.get_window_for_thread.return_value = "@2"
             mock_sm.get_display_name.return_value = "Projects-2"
@@ -1051,18 +1037,14 @@ class TestExistingWindowBinding:
         assert mock_sm.user_window_offsets == {12345: {"@3": 99}}
         assert new_state.session_id == "session-1"
         assert new_state.cwd == "/tmp/project"
-        send_when_ready.assert_awaited_once_with(
+        send_or_queue.assert_awaited_once_with(
+            update.message.get_bot(),
             12345,
             42,
             "@3",
             "continue",
-            auto_confirm_startup_trust=True,
         )
-        refresh_session_map.assert_awaited_once_with(
-            "@3",
-            text="continue",
-            confirm_existing_session=True,
-        )
+        refresh_session_map.assert_not_awaited()
         safe_reply.assert_awaited_once()
 
 
@@ -1085,6 +1067,8 @@ async def test_confirm_first_prompt_delivery_prefers_transcript_confirmation():
         "@9",
         "hello",
         timeout=15.0,
+        expected_session_id=None,
+        after_offset=None,
     )
     mock_tmux.prompt_still_pending.assert_not_awaited()
     mock_tmux.send_control_key.assert_not_awaited()
@@ -1110,6 +1094,8 @@ async def test_confirm_first_prompt_delivery_rejects_cleared_unrecorded_input():
         "@9",
         "silently dropped",
         timeout=15.0,
+        expected_session_id=None,
+        after_offset=None,
     )
     mock_tmux.prompt_still_pending.assert_awaited_once_with("@9", "silently dropped")
     mock_tmux.send_control_key.assert_not_awaited()
@@ -1143,6 +1129,8 @@ async def test_refresh_session_map_retries_enter_when_first_prompt_is_pending():
         "@9",
         "hello",
         timeout=15.0,
+        expected_session_id=None,
+        after_offset=None,
     )
 
 

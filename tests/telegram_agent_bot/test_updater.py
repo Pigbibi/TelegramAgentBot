@@ -11,11 +11,14 @@ from telegram_agent_bot.updater import (
     CodexUpdateResult,
     CommandResult,
     UpdateSettings,
+    _clear_update_deferred_state,
     _report_codex_update_result,
+    _write_update_deferred_state,
     check_codex_update,
     check_and_apply_update,
     load_codex_update_settings,
     load_update_settings,
+    read_update_runtime_status,
 )
 
 
@@ -100,6 +103,24 @@ def test_auto_check_respects_interval(tmp_path: Path) -> None:
     assert result.checked is False
     assert result.skipped_reason == "interval"
     assert runner.calls == []
+
+
+def test_update_busy_state_is_visible_and_cleared(tmp_path: Path) -> None:
+    state_file = tmp_path / "update_state.json"
+
+    _write_update_deferred_state(
+        state_file,
+        1234.9,
+        ["Projects: working", "Projects-2: waiting for input"],
+    )
+
+    waiting = read_update_runtime_status(state_file)
+    assert waiting.waiting_for_idle is True
+    assert waiting.blocker_count == 2
+    assert waiting.deferred_at_epoch == 1234
+
+    _clear_update_deferred_state(state_file)
+    assert read_update_runtime_status(state_file).waiting_for_idle is False
 
 
 def test_check_only_reports_available_update(tmp_path: Path) -> None:

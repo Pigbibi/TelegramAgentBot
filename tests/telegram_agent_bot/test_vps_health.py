@@ -103,6 +103,31 @@ def test_health_recovery_is_emitted_once(tmp_path):
     )
 
 
+def test_same_health_issue_recurrence_respects_last_alert_cooldown(tmp_path):
+    store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+    store.initialize()
+    monitor = VpsHealthMonitor(store)
+    disk = (HealthIssue("disk", "disk"),)
+    first = monitor.decide(disk, cooldown_seconds=3600, now_epoch=1000)
+    monitor.record(first, now_epoch=1000)
+    recovery = monitor.decide((), cooldown_seconds=3600, now_epoch=1100)
+    monitor.record(recovery, now_epoch=1100)
+
+    quiet_recurrence = monitor.decide(
+        disk,
+        cooldown_seconds=3600,
+        now_epoch=1200,
+    )
+    due_recurrence = monitor.decide(
+        disk,
+        cooldown_seconds=3600,
+        now_epoch=4600,
+    )
+
+    assert quiet_recurrence.event == "none"
+    assert due_recurrence.event == "alert"
+
+
 def test_health_report_includes_runtime_counts():
     report = format_health_snapshot(_snapshot())
 
@@ -117,6 +142,15 @@ def test_health_report_supports_chinese_when_selected():
     assert "1 个运行中" in report
     assert "2 个休眠" in report
     assert "状态：正常" in report
+
+
+def test_health_report_shows_update_waiting_for_idle():
+    report = format_health_snapshot(
+        _snapshot(update_waiting_for_idle=True, update_blocker_count=2),
+        language="zh",
+    )
+
+    assert "更新：等待空闲（2 个阻塞项）" in report
 
 
 def test_health_recovery_waits_until_state_is_stable(tmp_path):

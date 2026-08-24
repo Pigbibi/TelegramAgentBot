@@ -108,6 +108,44 @@ def test_restore_submitted_input_only_starts_confirmation(monkeypatch):
     assert bot_module._agent_input_queues == {}
 
 
+def test_restore_submitted_input_does_not_retarget_rebound_topic(monkeypatch):
+    record = bot_module._runtime_store.enqueue_agent_input(
+        user_id=12345,
+        thread_id=42,
+        window_id="@old",
+        text="already submitted",
+        max_pending=20,
+    )
+    assert record is not None
+    assert bot_module._runtime_store.mark_agent_input_submitted(
+        record.id,
+        transcript_session_id="sid-old",
+        transcript_offset=512,
+    )
+    confirmations: list[tuple[int, tuple[int, int, str], bool]] = []
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "resolve_window_for_thread",
+        lambda _user_id, _thread_id: "@new",
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_ensure_agent_input_confirmation_task",
+        lambda _bot, record_id, key, *, recover_submission: confirmations.append(
+            (record_id, key, recover_submission)
+        ),
+    )
+
+    restored = bot_module._restore_agent_input_queues(MagicMock())
+
+    assert restored == 1
+    assert confirmations == [(record.id, (12345, 42, "@old"), True)]
+    persisted = bot_module._runtime_store.get_agent_input(record.id)
+    assert persisted is not None
+    assert persisted.window_id == "@old"
+    assert persisted.transcript_session_id == "sid-old"
+
+
 @pytest.mark.asyncio
 async def test_deferred_confirmation_deletes_submitted_record(monkeypatch):
     record = bot_module._runtime_store.enqueue_agent_input(
@@ -274,12 +312,25 @@ async def test_send_or_queue_agent_input_sends_immediately_when_ready(monkeypatc
     capture = SimpleNamespace(
         text="previous output\n\n›\n\n  gpt-5.5 · ~/repo", missing=False
     )
-    send_message = AsyncMock(return_value=(True, "Sent"))
+    confirmation_requests: list[tuple[int, tuple[int, int, str], bool]] = []
+
+    async def send_message(*_args):
+        persisted = bot_module._runtime_store.list_pending_agent_inputs()
+        assert len(persisted) == 1
+        assert persisted[0].state == AGENT_INPUT_SUBMITTED_UNCONFIRMED
+        return True, "Sent"
 
     monkeypatch.setattr(
         bot_module, "capture_agent_output", AsyncMock(return_value=capture)
     )
     monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+    monkeypatch.setattr(
+        bot_module,
+        "_ensure_agent_input_confirmation_task",
+        lambda _bot, record_id, key, *, recover_submission, **_kwargs: (
+            confirmation_requests.append((record_id, key, recover_submission))
+        ),
+    )
 
     ok, message, queued = await bot_module._send_or_queue_agent_input(
         MagicMock(),
@@ -290,9 +341,94 @@ async def test_send_or_queue_agent_input_sends_immediately_when_ready(monkeypatc
     )
 
     assert (ok, message, queued) == (True, "Sent", False)
-    send_message.assert_awaited_once_with(12345, 42, "@1", "prompt")
     assert bot_module._agent_input_queues == {}
-    assert bot_module._agent_input_locks == {}
+    assert set(bot_module._agent_input_locks) == {(12345, 42)}
+    persisted = bot_module._runtime_store.list_pending_agent_inputs()
+    assert len(persisted) == 1
+    assert confirmation_requests == [(persisted[0].id, (12345, 42, "@1"), True)]
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_input_blocks_later_input_across_rebound_window(monkeypatch):
+    first = bot_module._runtime_store.enqueue_agent_input(
+        user_id=12345,
+        thread_id=42,
+        window_id="@old",
+        text="first prompt",
+        max_pending=20,
+    )
+    assert first is not None
+    assert bot_module._runtime_store.mark_agent_input_submitted(first.id)
+    capture = AsyncMock()
+    send_message = AsyncMock()
+    monkeypatch.setattr(bot_module, "capture_agent_output", capture)
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+
+    ok, message, queued = await bot_module._send_or_queue_agent_input(
+        MagicMock(),
+        12345,
+        42,
+        "@new",
+        "second prompt",
+    )
+
+    assert (ok, queued) == (True, True)
+    assert "queued" in message.lower()
+    capture.assert_not_awaited()
+    send_message.assert_not_awaited()
+    records = bot_module._runtime_store.list_pending_agent_inputs()
+    assert [(record.window_id, record.text, record.state) for record in records] == [
+        ("@old", "first prompt", AGENT_INPUT_SUBMITTED_UNCONFIRMED),
+        ("@new", "second prompt", "queued"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_route_lock_prevents_concurrent_send_across_rebound_windows(monkeypatch):
+    capture = SimpleNamespace(
+        text="previous output\n\n›\n\n  gpt-5.5 · ~/repo",
+        missing=False,
+    )
+    first_send_started = asyncio.Event()
+    release_first_send = asyncio.Event()
+    send_calls: list[tuple[int, int | None, str, str]] = []
+
+    async def send_message(user_id, thread_id, window_id, text):
+        send_calls.append((user_id, thread_id, window_id, text))
+        first_send_started.set()
+        await release_first_send.wait()
+        return True, "Sent"
+
+    capture_output = AsyncMock(return_value=capture)
+    monkeypatch.setattr(bot_module, "capture_agent_output", capture_output)
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+    monkeypatch.setattr(
+        bot_module,
+        "_ensure_agent_input_confirmation_task",
+        lambda *_args, **_kwargs: None,
+    )
+
+    first_task = asyncio.create_task(
+        bot_module._send_or_queue_agent_input(
+            MagicMock(), 12345, 42, "@old", "first prompt"
+        )
+    )
+    await first_send_started.wait()
+    second_task = asyncio.create_task(
+        bot_module._send_or_queue_agent_input(
+            MagicMock(), 12345, 42, "@new", "second prompt"
+        )
+    )
+    await asyncio.sleep(0)
+    assert second_task.done() is False
+
+    release_first_send.set()
+    first_result, second_result = await asyncio.gather(first_task, second_task)
+
+    assert first_result == (True, "Sent", False)
+    assert second_result[0::2] == (True, True)
+    assert send_calls == [(12345, 42, "@old", "first prompt")]
+    capture_output.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -566,6 +702,8 @@ async def test_drain_agent_input_queue_waits_until_ready(monkeypatch):
         "@1",
         text="queued prompt",
         confirm_existing_session=True,
+        transcript_session_id=None,
+        transcript_after_offset=None,
     )
     assert key not in bot_module._agent_input_queues
 
@@ -940,6 +1078,7 @@ async def test_handle_non_codex_bound_window_recovers_resumable_shell(monkeypatc
     assert handled is True
     kill_window.assert_awaited_once_with("@1")
     recover.assert_awaited_once_with(
+        bot=update_message.get_bot(),
         user_id=12345,
         thread_id=42,
         old_window_id="@1",
@@ -980,6 +1119,7 @@ async def test_recovery_detects_active_writer_without_rebinding(monkeypatch):
     session_manager.remove_session_map_entry = remove_map
 
     ok, message = await bot_module._recover_missing_bound_window(
+        bot=MagicMock(),
         user_id=12345,
         thread_id=42,
         old_window_id="@8",
@@ -1040,18 +1180,12 @@ async def test_recovery_skips_window_id_reserved_by_another_topic(monkeypatch):
         "_recovered_agent_process_status",
         AsyncMock(return_value=(True, "")),
     )
-    monkeypatch.setattr(
-        bot_module,
-        "_send_to_window_when_codex_ready",
-        AsyncMock(return_value=(True, "Sent")),
-    )
-    monkeypatch.setattr(
-        bot_module,
-        "_refresh_session_map_after_first_prompt",
-        AsyncMock(),
-    )
+    send_or_queue = AsyncMock(return_value=(True, "Sent", False))
+    monkeypatch.setattr(bot_module, "_send_or_queue_agent_input", send_or_queue)
+    monkeypatch.setattr(bot_module, "mark_window_working", AsyncMock())
 
     ok, message = await bot_module._recover_missing_bound_window(
+        bot=MagicMock(),
         user_id=12345,
         thread_id=42,
         old_window_id="@8",
@@ -1107,18 +1241,12 @@ async def test_recovery_accepts_original_window_id_after_tmux_server_restart(
         "_recovered_agent_process_status",
         AsyncMock(return_value=(True, "")),
     )
-    monkeypatch.setattr(
-        bot_module,
-        "_send_to_window_when_codex_ready",
-        AsyncMock(return_value=(True, "Sent")),
-    )
-    monkeypatch.setattr(
-        bot_module,
-        "_refresh_session_map_after_first_prompt",
-        AsyncMock(),
-    )
+    send_or_queue = AsyncMock(return_value=(True, "Sent", False))
+    monkeypatch.setattr(bot_module, "_send_or_queue_agent_input", send_or_queue)
+    monkeypatch.setattr(bot_module, "mark_window_working", AsyncMock())
 
     ok, message = await bot_module._recover_missing_bound_window(
+        bot=MagicMock(),
         user_id=12345,
         thread_id=42,
         old_window_id="@8",
@@ -1166,6 +1294,7 @@ async def test_recovery_failure_after_original_id_reuse_keeps_saved_state(monkey
     monkeypatch.setattr(bot_module.tmux_manager, "kill_window", kill_window)
 
     ok, message = await bot_module._recover_missing_bound_window(
+        bot=MagicMock(),
         user_id=12345,
         thread_id=42,
         old_window_id="@8",
@@ -1215,19 +1344,12 @@ async def test_recovery_commits_binding_only_after_validation(monkeypatch):
         "_recovered_agent_process_status",
         AsyncMock(return_value=(True, "")),
     )
-    monkeypatch.setattr(
-        bot_module,
-        "_send_to_window_when_codex_ready",
-        AsyncMock(return_value=(True, "Sent")),
-    )
-    refresh_map = AsyncMock()
-    monkeypatch.setattr(
-        bot_module,
-        "_refresh_session_map_after_first_prompt",
-        refresh_map,
-    )
+    send_or_queue = AsyncMock(return_value=(True, "Sent", False))
+    monkeypatch.setattr(bot_module, "_send_or_queue_agent_input", send_or_queue)
+    monkeypatch.setattr(bot_module, "mark_window_working", AsyncMock())
 
     ok, message = await bot_module._recover_missing_bound_window(
+        bot=MagicMock(),
         user_id=12345,
         thread_id=42,
         old_window_id="@8",
@@ -1254,9 +1376,8 @@ async def test_recovery_commits_binding_only_after_validation(monkeypatch):
     )
     session_manager.remove_session_map_entry.assert_awaited_once_with("@8")
     session_manager.remove_window_state.assert_called_once_with("@8")
-    refresh_map.assert_awaited_once_with(
-        "@9", text="pending prompt", confirm_existing_session=True
-    )
+    send_or_queue.assert_awaited_once()
+    assert send_or_queue.await_args.args[1:] == (12345, 42, "@9", "pending prompt")
 
 
 @pytest.mark.asyncio
@@ -1315,6 +1436,7 @@ async def test_handle_auth_error_bound_window_recovers_resumable_session(monkeyp
     assert handled is True
     kill_window.assert_awaited_once_with("@1")
     recover.assert_awaited_once_with(
+        bot=update_message.get_bot(),
         user_id=12345,
         thread_id=42,
         old_window_id="@1",
