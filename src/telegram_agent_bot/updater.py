@@ -47,6 +47,7 @@ class UpdateSettings:
     require_idle: bool = True
     interval_seconds: int = DEFAULT_UPDATE_INTERVAL_SECONDS
     busy_retry_seconds: int = DEFAULT_BUSY_RETRY_SECONDS
+    max_busy_deferral_seconds: int = 0
     remote: str | None = None
     branch: str | None = None
     state_file: Path | None = None
@@ -195,6 +196,13 @@ def load_update_settings() -> UpdateSettings:
             _parse_int(
                 os.getenv("TELEGRAM_AGENT_BOT_UPDATE_BUSY_RETRY_SECONDS"),
                 default=DEFAULT_BUSY_RETRY_SECONDS,
+            ),
+        ),
+        max_busy_deferral_seconds=max(
+            0,
+            _parse_int(
+                os.getenv("TELEGRAM_AGENT_BOT_UPDATE_MAX_BUSY_DEFERRAL_SECONDS"),
+                default=0,
             ),
         ),
         remote=(os.getenv("TELEGRAM_AGENT_BOT_UPDATE_REMOTE") or "").strip() or None,
@@ -374,9 +382,16 @@ def _write_update_deferred_state(
     if path is None:
         return
     payload = _read_update_state(path)
+    previous = payload.get("deferred")
+    deferred_at = int(now)
+    if isinstance(previous, dict) and previous.get("waiting_for_idle") is True:
+        previous_at = previous.get("at")
+        if isinstance(previous_at, int | float):
+            deferred_at = int(previous_at)
     payload["deferred"] = {
         "waiting_for_idle": True,
-        "at": int(now),
+        "at": deferred_at,
+        "last_observed_at": int(now),
         "blockers": list(blockers[:5]),
         "blocker_count": len(blockers),
     }
@@ -416,6 +431,16 @@ def read_update_runtime_status(path: Path | None) -> UpdateRuntimeStatus:
             int(deferred_at) if isinstance(deferred_at, int | float) else None
         ),
     )
+
+
+def _busy_deferral_expired(settings: UpdateSettings, now: float) -> bool:
+    """Return whether a configured source-update busy deadline has elapsed."""
+    if settings.max_busy_deferral_seconds <= 0:
+        return False
+    status = read_update_runtime_status(settings.state_file)
+    if not status.waiting_for_idle or status.deferred_at_epoch is None:
+        return False
+    return now - status.deferred_at_epoch >= settings.max_busy_deferral_seconds
 
 
 def _check_due(settings: UpdateSettings, now: float) -> bool:
@@ -1019,16 +1044,25 @@ async def auto_update_loop_with_notifier(
         await asyncio.sleep(next_delay)
         next_delay = interval_seconds
 
+        blockers: list[str] = []
         if settings.require_idle:
             blockers = await get_update_blockers()
             if blockers:
-                _write_update_deferred_state(settings.state_file, time.time(), blockers)
-                logger.info(
-                    "Auto-update deferred; telegram-agent-bot is not idle: %s",
-                    "; ".join(blockers[:5]),
+                now = time.time()
+                _write_update_deferred_state(settings.state_file, now, blockers)
+                if not settings.enabled or not _busy_deferral_expired(settings, now):
+                    logger.info(
+                        "Auto-update deferred; telegram-agent-bot is not idle: %s",
+                        "; ".join(blockers[:5]),
+                    )
+                    next_delay = settings.busy_retry_seconds
+                    continue
+                logger.warning(
+                    "Source auto-update busy deadline reached after %ds; "
+                    "continuing with restart-safe persisted state. Active agent "
+                    "processes will not be restarted",
+                    settings.max_busy_deferral_seconds,
                 )
-                next_delay = settings.busy_retry_seconds
-                continue
             _clear_update_deferred_state(settings.state_file)
 
         if settings.enabled:
@@ -1049,7 +1083,7 @@ async def auto_update_loop_with_notifier(
             codex_result = await asyncio.to_thread(
                 check_codex_update,
                 codex_settings,
-                apply_update=codex_settings.auto_update,
+                apply_update=codex_settings.auto_update and not blockers,
             )
             await _report_codex_update_result(
                 codex_result,

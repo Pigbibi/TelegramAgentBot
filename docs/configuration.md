@@ -179,6 +179,7 @@ Source-checkout installations support bounded update checks:
 | `TELEGRAM_AGENT_BOT_UPDATE_REQUIRE_IDLE` | `true` | Apply updates only when queues and agent panes are idle |
 | `TELEGRAM_AGENT_BOT_UPDATE_INTERVAL_SECONDS` | `86400` | Minimum interval between checks |
 | `TELEGRAM_AGENT_BOT_UPDATE_BUSY_RETRY_SECONDS` | `300` | Retry delay while work is active |
+| `TELEGRAM_AGENT_BOT_UPDATE_MAX_BUSY_DEFERRAL_SECONDS` | `0` | Maximum continuous busy delay before a restart-safe AgentBot source update; `0` waits indefinitely, and agent CLI updates remain idle-only |
 | `TELEGRAM_AGENT_BOT_UPDATE_RUN_UV_SYNC` | `true` | Sync dependencies after a source update |
 | `TELEGRAM_AGENT_BOT_CODEX_UPDATE_CHECK` | `false` | Check the selected agent CLI package for updates |
 | `TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE` | `false` | Install an available agent CLI package update |

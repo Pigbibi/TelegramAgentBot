@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Sequence
 
 import pytest
 
+from telegram_agent_bot import updater as updater_module
 from telegram_agent_bot.updater import (
     CodexUpdateSettings,
     CodexUpdateResult,
     CommandResult,
     UpdateSettings,
+    _busy_deferral_expired,
     _clear_update_deferred_state,
     _report_codex_update_result,
     _write_update_deferred_state,
@@ -44,6 +47,7 @@ def test_load_update_settings_reads_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("TELEGRAM_AGENT_BOT_UPDATE_INTERVAL_SECONDS", "42")
     monkeypatch.setenv("TELEGRAM_AGENT_BOT_UPDATE_REQUIRE_IDLE", "false")
     monkeypatch.setenv("TELEGRAM_AGENT_BOT_UPDATE_BUSY_RETRY_SECONDS", "90")
+    monkeypatch.setenv("TELEGRAM_AGENT_BOT_UPDATE_MAX_BUSY_DEFERRAL_SECONDS", "1800")
     monkeypatch.setenv("TELEGRAM_AGENT_BOT_UPDATE_REMOTE", "origin")
     monkeypatch.setenv("TELEGRAM_AGENT_BOT_UPDATE_BRANCH", "main")
     monkeypatch.setenv("TELEGRAM_AGENT_BOT_UPDATE_RUN_UV_SYNC", "false")
@@ -54,6 +58,7 @@ def test_load_update_settings_reads_env(monkeypatch, tmp_path: Path) -> None:
     assert settings.interval_seconds == 42
     assert settings.require_idle is False
     assert settings.busy_retry_seconds == 90
+    assert settings.max_busy_deferral_seconds == 1800
     assert settings.remote == "origin"
     assert settings.branch == "main"
     assert settings.run_uv_sync is False
@@ -119,8 +124,96 @@ def test_update_busy_state_is_visible_and_cleared(tmp_path: Path) -> None:
     assert waiting.blocker_count == 2
     assert waiting.deferred_at_epoch == 1234
 
+    _write_update_deferred_state(
+        state_file,
+        1300,
+        ["Projects: still working"],
+    )
+    still_waiting = read_update_runtime_status(state_file)
+    assert still_waiting.blocker_count == 1
+    assert still_waiting.deferred_at_epoch == 1234
+
     _clear_update_deferred_state(state_file)
     assert read_update_runtime_status(state_file).waiting_for_idle is False
+
+
+def test_busy_deferral_deadline_is_opt_in_and_persistent(tmp_path: Path) -> None:
+    state_file = tmp_path / "update_state.json"
+    disabled = UpdateSettings(
+        state_file=state_file,
+        max_busy_deferral_seconds=0,
+    )
+    enabled = UpdateSettings(
+        state_file=state_file,
+        max_busy_deferral_seconds=300,
+    )
+
+    _write_update_deferred_state(state_file, 1000, ["Projects: working"])
+
+    assert _busy_deferral_expired(disabled, 2000) is False
+    assert _busy_deferral_expired(enabled, 1299) is False
+    assert _busy_deferral_expired(enabled, 1300) is True
+
+
+@pytest.mark.asyncio
+async def test_busy_deadline_updates_source_but_not_active_agent_cli(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    state_file = tmp_path / "update_state.json"
+    settings = UpdateSettings(
+        enabled=True,
+        require_idle=True,
+        interval_seconds=60,
+        busy_retry_seconds=60,
+        max_busy_deferral_seconds=300,
+        state_file=state_file,
+    )
+    codex_settings = CodexUpdateSettings(enabled=True, auto_update=True)
+    _write_update_deferred_state(state_file, 1000, ["Projects: working"])
+    source_checks: list[UpdateSettings] = []
+    agent_apply_flags: list[bool] = []
+    sleep_calls = 0
+
+    async def fake_sleep(_delay: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls > 1:
+            raise asyncio.CancelledError
+
+    async def blockers() -> list[str]:
+        return ["Projects: working"]
+
+    def source_update(current: UpdateSettings):
+        source_checks.append(current)
+        return updater_module.UpdateResult(checked=True, supported=True)
+
+    def agent_update(
+        _settings: CodexUpdateSettings,
+        *,
+        apply_update: bool = False,
+    ) -> CodexUpdateResult:
+        agent_apply_flags.append(apply_update)
+        return CodexUpdateResult(checked=True, supported=True)
+
+    monkeypatch.setattr(updater_module, "load_update_env", lambda: None)
+    monkeypatch.setattr(updater_module, "load_update_settings", lambda: settings)
+    monkeypatch.setattr(
+        updater_module,
+        "load_codex_update_settings",
+        lambda: codex_settings,
+    )
+    monkeypatch.setattr(updater_module, "get_update_blockers", blockers)
+    monkeypatch.setattr(updater_module.time, "time", lambda: 1300)
+    monkeypatch.setattr(updater_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(updater_module, "check_and_apply_update", source_update)
+    monkeypatch.setattr(updater_module, "check_codex_update", agent_update)
+
+    with pytest.raises(asyncio.CancelledError):
+        await updater_module.auto_update_loop_with_notifier()
+
+    assert source_checks == [settings]
+    assert agent_apply_flags == [False]
 
 
 def test_check_only_reports_available_update(tmp_path: Path) -> None:
