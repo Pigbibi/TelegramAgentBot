@@ -134,7 +134,7 @@ def main() -> None:
 
     maybe_auto_update(sys.argv)
 
-    # Import config before enabling DEBUG — avoid leaking debug logs on config errors
+    # Import config before enabling package INFO logs so config errors stay concise.
     try:
         from .config import config
     except ValueError as e:
@@ -151,7 +151,10 @@ def main() -> None:
         print("Get your user ID from @userinfobot on Telegram.")
         sys.exit(1)
 
-    logging.getLogger("telegram-agent-bot").setLevel(logging.DEBUG)
+    # Keep third-party libraries at WARNING while retaining AgentBot lifecycle
+    # and safeguard diagnostics. Package loggers use underscores, not the CLI's
+    # hyphenated distribution name.
+    logging.getLogger("telegram_agent_bot").setLevel(logging.INFO)
     # AIORateLimiter (max_retries=5) handles retries itself; keep INFO for visibility
     logging.getLogger("telegram.ext.AIORateLimiter").setLevel(logging.INFO)
     logger = logging.getLogger(__name__)
