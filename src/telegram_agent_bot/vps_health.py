@@ -138,7 +138,7 @@ def format_health_snapshot(
                 f"({_format_bytes(host.disk_free_bytes)} free)",
                 "Tasks: "
                 f"{snapshot.active_turns} running, "
-                f"{snapshot.queue_depth} queued, "
+                f"{snapshot.queue_depth} input(s) pending, "
                 f"{snapshot.hibernated_sessions} sleeping",
                 "Delivery: "
                 f"{snapshot.transcript_backlog_sessions} session(s) pending, "
@@ -165,7 +165,7 @@ def format_health_snapshot(
             f"{_format_bytes(host.disk_free_bytes)}）",
             "任务："
             f"{snapshot.active_turns} 个运行中，"
-            f"{snapshot.queue_depth} 个排队，"
+            f"{snapshot.queue_depth} 个输入待处理，"
             f"{snapshot.hibernated_sessions} 个休眠",
             "消息同步："
             f"{snapshot.transcript_backlog_sessions} 个会话待发送，"
@@ -342,10 +342,10 @@ class VpsHealthMonitor:
                 HealthIssue(
                     "agent_queue",
                     (
-                        "最早的排队任务已等待 "
+                        "最早的待处理输入已等待 "
                         f"{snapshot.oldest_queue_age_seconds / 60:.0f} 分钟"
                         if chinese
-                        else "Oldest queued task has waited "
+                        else "Oldest pending agent input has waited "
                         f"{snapshot.oldest_queue_age_seconds / 60:.0f} min"
                     ),
                 )

@@ -102,7 +102,13 @@ from .backends.base import AgentBackend, AgentTarget
 from .backends.browser import AgentBrowser, DirectoryListing
 from .backends.registry import get_configured_backend
 from .config import config
-from .durable_state import DurableRuntimeStore
+from .durable_state import (
+    AGENT_INPUT_QUEUED,
+    AGENT_INPUT_SUBMITTED_UNCONFIRMED,
+    TRANSIENT_RETRY_SCHEDULED,
+    DurableRuntimeStore,
+    TransientAgentRetry,
+)
 from .handlers.callback_data import (
     CB_ASK_DOWN,
     CB_ASK_ENTER,
@@ -296,9 +302,12 @@ class _QueuedAgentInput:
     created_at: float = field(default_factory=time.monotonic)
     created_at_epoch: float = field(default_factory=time.time)
     store_id: int | None = None
+    state: str = AGENT_INPUT_QUEUED
 
 
 _AGENT_INPUT_POLL_INTERVAL_SECONDS = 1.0
+_AGENT_INPUT_PERSIST_RETRY_SECONDS = 5.0
+_AGENT_INPUT_CONFIRM_RETRY_SECONDS = 60.0
 _TRANSIENT_AGENT_RETRY_DELAYS_SECONDS = (15.0, 45.0, 120.0)
 _TRANSIENT_AGENT_ERROR_CODES = frozenset({"server_overloaded"})
 _TRANSIENT_AGENT_RETRY_PROMPT = (
@@ -309,6 +318,8 @@ _TRANSIENT_AGENT_RETRY_PROMPT = (
 _agent_input_queues: dict[tuple[int, int, str], deque[_QueuedAgentInput]] = {}
 _agent_input_tasks: dict[tuple[int, int, str], asyncio.Task] = {}
 _agent_input_locks: dict[tuple[int, int, str], asyncio.Lock] = {}
+_agent_input_confirmation_tasks: dict[int, asyncio.Task[None]] = {}
+_agent_input_confirmation_targets: dict[int, tuple[int, int, str]] = {}
 _transient_agent_retry_attempts: dict[str, int] = {}
 _transient_agent_retry_tasks: dict[str, asyncio.Task[None]] = {}
 _runtime_store = DurableRuntimeStore(config.config_dir / "runtime.sqlite3")
@@ -1145,6 +1156,7 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     ambiguous_wid = session_manager.get_ambiguous_window_for_thread(user.id, thread_id)
     if isinstance(ambiguous_wid, str) and ambiguous_wid:
+        await _discard_queued_agent_input(user.id, thread_id, ambiguous_wid)
         session_manager.unbind_thread(user.id, thread_id)
         await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
         await safe_reply(
@@ -1170,6 +1182,7 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     display = session_manager.get_display_name(wid)
+    await _discard_queued_agent_input(user.id, thread_id, wid)
     session_manager.unbind_thread(user.id, thread_id)
     await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
 
@@ -1984,6 +1997,12 @@ def _reset_transient_agent_retry(window_id: str) -> None:
     if task and task is not asyncio.current_task() and not task.done():
         task.cancel()
     _transient_agent_retry_attempts.pop(window_id, None)
+    try:
+        _runtime_store.delete_transient_agent_retry(window_id)
+    except Exception:
+        logger.exception(
+            "Failed to clear persisted transient retry for window %s", window_id
+        )
 
 
 def _agent_input_queue_max_size() -> int:
@@ -2050,6 +2069,41 @@ def _delete_persisted_agent_inputs(items: list[_QueuedAgentInput]) -> None:
         )
 
 
+def _mark_persisted_agent_input_submitted(item: _QueuedAgentInput) -> bool:
+    """Durably enter the no-auto-resend state before touching tmux."""
+    if item.store_id is None:
+        item.state = AGENT_INPUT_SUBMITTED_UNCONFIRMED
+        return True
+    try:
+        changed = _runtime_store.mark_agent_input_submitted(item.store_id)
+    except Exception:
+        logger.exception(
+            "Failed to persist agent input submission state (record=%d)",
+            item.store_id,
+        )
+        return False
+    if not changed:
+        logger.error(
+            "Queued agent input was not in a dispatchable state (record=%d)",
+            item.store_id,
+        )
+        return False
+    item.state = AGENT_INPUT_SUBMITTED_UNCONFIRMED
+    return True
+
+
+def _confirm_persisted_agent_input(item: _QueuedAgentInput) -> None:
+    """Remove one lifecycle record after transcript confirmation."""
+    if item.store_id is None:
+        return
+    try:
+        _runtime_store.confirm_agent_input(item.store_id)
+    except Exception:
+        logger.exception(
+            "Failed to confirm persisted agent input (record=%d)", item.store_id
+        )
+
+
 def _clear_persisted_agent_input_target(key: tuple[int, int, str]) -> None:
     try:
         _runtime_store.delete_agent_inputs_for_target(*key)
@@ -2061,6 +2115,127 @@ def _clear_persisted_agent_input_target(key: tuple[int, int, str]) -> None:
             key[1],
             key[2],
         )
+
+
+def _target_has_agent_input_confirmation(key: tuple[int, int, str]) -> bool:
+    return any(
+        target == key and not task.done()
+        for record_id, task in _agent_input_confirmation_tasks.items()
+        if (target := _agent_input_confirmation_targets.get(record_id)) is not None
+    )
+
+
+async def _run_agent_input_confirmation(
+    bot: Bot,
+    record_id: int,
+    key: tuple[int, int, str],
+    *,
+    recover_submission: bool,
+) -> None:
+    """Confirm a submitted prompt without ever replaying its text."""
+    current_task = asyncio.current_task()
+    confirmed = False
+    try:
+        if not recover_submission:
+            await asyncio.sleep(_AGENT_INPUT_CONFIRM_RETRY_SECONDS)
+        while True:
+            try:
+                record = _runtime_store.get_agent_input(record_id)
+                if record is None or record.state != AGENT_INPUT_SUBMITTED_UNCONFIRMED:
+                    confirmed = True
+                    return
+
+                if recover_submission:
+                    confirmed = await _refresh_session_map_after_first_prompt(
+                        record.window_id,
+                        text=record.text,
+                        confirm_existing_session=True,
+                    )
+                    recover_submission = False
+                else:
+                    confirmed = await session_manager.wait_for_transcript_user_message(
+                        record.window_id,
+                        record.text,
+                        timeout=config.transcript_confirm_timeout_seconds,
+                    )
+                if confirmed:
+                    _runtime_store.confirm_agent_input(record_id)
+                    logger.info(
+                        "Confirmed previously submitted agent input after delay "
+                        "(record=%d window=%s)",
+                        record_id,
+                        record.window_id,
+                    )
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Deferred agent input confirmation failed "
+                    "(record=%d user=%d thread=%s window=%s); retrying",
+                    record_id,
+                    key[0],
+                    key[1] or None,
+                    key[2],
+                )
+            await asyncio.sleep(_AGENT_INPUT_CONFIRM_RETRY_SECONDS)
+    except asyncio.CancelledError:
+        raise
+    finally:
+        if _agent_input_confirmation_tasks.get(record_id) is current_task:
+            _agent_input_confirmation_tasks.pop(record_id, None)
+            _agent_input_confirmation_targets.pop(record_id, None)
+        if (
+            confirmed
+            and not _target_has_agent_input_confirmation(key)
+            and _agent_input_queues.get(key)
+        ):
+            _ensure_agent_input_drain_task(bot, key)
+
+
+def _ensure_agent_input_confirmation_task(
+    bot: Bot,
+    record_id: int,
+    key: tuple[int, int, str],
+    *,
+    recover_submission: bool,
+) -> None:
+    task = _agent_input_confirmation_tasks.get(record_id)
+    if task and not task.done():
+        return
+    _agent_input_confirmation_targets[record_id] = key
+    _agent_input_confirmation_tasks[record_id] = asyncio.create_task(
+        _run_agent_input_confirmation(
+            bot,
+            record_id,
+            key,
+            recover_submission=recover_submission,
+        )
+    )
+
+
+async def _cancel_agent_input_confirmations_for_target(
+    key: tuple[int, int, str],
+) -> None:
+    record_ids = [
+        record_id
+        for record_id, target in _agent_input_confirmation_targets.items()
+        if target == key
+    ]
+    tasks = [
+        task
+        for record_id in record_ids
+        if (task := _agent_input_confirmation_tasks.get(record_id)) is not None
+        and not task.done()
+    ]
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    for record_id in record_ids:
+        _agent_input_confirmation_tasks.pop(record_id, None)
+        _agent_input_confirmation_targets.pop(record_id, None)
 
 
 def _restore_agent_input_queues(bot: Bot) -> int:
@@ -2077,7 +2252,7 @@ def _restore_agent_input_queues(bot: Bot) -> int:
         for queue in _agent_input_queues.values()
         for item in queue
         if item.store_id is not None
-    }
+    } | set(_agent_input_confirmation_tasks)
     for record in records:
         if record.id in existing_ids:
             continue
@@ -2105,21 +2280,32 @@ def _restore_agent_input_queues(bot: Bot) -> int:
             record.thread_id or None,
             window_id,
         )
+        if record.state == AGENT_INPUT_SUBMITTED_UNCONFIRMED:
+            _ensure_agent_input_confirmation_task(
+                bot,
+                record.id,
+                key,
+                recover_submission=True,
+            )
+            restored += 1
+            continue
         _agent_input_queues.setdefault(key, deque()).append(
             _QueuedAgentInput(
                 text=record.text,
                 created_at=created_at,
                 created_at_epoch=record.created_at_epoch,
                 store_id=record.id,
+                state=record.state,
             )
         )
         turn_admission.set_pending(window_id, pending=True)
         restored += 1
 
     for key in list(_agent_input_queues):
-        _ensure_agent_input_drain_task(bot, key)
+        if not _target_has_agent_input_confirmation(key):
+            _ensure_agent_input_drain_task(bot, key)
     if restored:
-        logger.info("Restored %d queued agent input(s) after restart", restored)
+        logger.info("Restored %d agent input lifecycle record(s)", restored)
     return restored
 
 
@@ -2159,6 +2345,8 @@ def _ensure_agent_input_drain_task(
     bot: Bot,
     key: tuple[int, int, str],
 ) -> None:
+    if _target_has_agent_input_confirmation(key):
+        return
     task = _agent_input_tasks.get(key)
     if task and not task.done():
         return
@@ -2335,6 +2523,7 @@ async def _run_transient_agent_retry(
     bot: Bot,
     key: tuple[int, int, str],
     *,
+    attempt: int,
     delay_seconds: float,
 ) -> None:
     """Resume an unfinished turn after a bounded transient-capacity backoff."""
@@ -2343,6 +2532,26 @@ async def _run_transient_agent_retry(
     current_task = asyncio.current_task()
     try:
         await asyncio.sleep(delay_seconds)
+        try:
+            persisted = _runtime_store.get_transient_agent_retry(window_id)
+            if persisted is None or (
+                persisted.attempt != attempt
+                or persisted.state != TRANSIENT_RETRY_SCHEDULED
+            ):
+                return
+            changed = _runtime_store.mark_transient_agent_retry_waiting(
+                window_id,
+                attempt,
+            )
+            if not changed:
+                return
+        except Exception:
+            logger.exception(
+                "Failed to persist due transient retry state (window=%s attempt=%d)",
+                window_id,
+                attempt,
+            )
+            return
         success, message, _queued = await _send_or_queue_agent_input(
             bot,
             user_id,
@@ -2402,16 +2611,67 @@ def _schedule_transient_agent_retry(
         attempt = _transient_agent_retry_attempts.get(window_id, 1)
         return attempt, 0.0
 
-    attempt = _transient_agent_retry_attempts.get(window_id, 0) + 1
+    persisted: TransientAgentRetry | None = None
+    try:
+        persisted = _runtime_store.get_transient_agent_retry(window_id)
+    except Exception:
+        logger.exception(
+            "Failed to load persisted transient retry for window %s", window_id
+        )
+
+    if persisted is not None and persisted.state == TRANSIENT_RETRY_SCHEDULED:
+        attempt = persisted.attempt
+        delay_seconds = max(0.0, persisted.not_before_epoch - time.time())
+        _transient_agent_retry_attempts[window_id] = attempt
+        task = asyncio.create_task(
+            _run_transient_agent_retry(
+                bot,
+                _agent_input_key(
+                    persisted.user_id,
+                    persisted.thread_id or None,
+                    window_id,
+                ),
+                attempt=attempt,
+                delay_seconds=delay_seconds,
+            )
+        )
+        _transient_agent_retry_tasks[window_id] = task
+        return attempt, delay_seconds
+
+    previous_attempt = _transient_agent_retry_attempts.get(window_id, 0)
+    if persisted is not None:
+        previous_attempt = max(previous_attempt, persisted.attempt)
+    attempt = previous_attempt + 1
     if attempt > len(_TRANSIENT_AGENT_RETRY_DELAYS_SECONDS):
         return None
 
     delay_seconds = _TRANSIENT_AGENT_RETRY_DELAYS_SECONDS[attempt - 1]
     _transient_agent_retry_attempts[window_id] = attempt
+    try:
+        _runtime_store.save_transient_agent_retry(
+            user_id=user_id,
+            thread_id=thread_id or 0,
+            window_id=window_id,
+            attempt=attempt,
+            state=TRANSIENT_RETRY_SCHEDULED,
+            not_before_epoch=time.time() + delay_seconds,
+            created_at_epoch=(
+                persisted.created_at_epoch if persisted is not None else None
+            ),
+        )
+    except Exception:
+        logger.exception(
+            "Failed to persist transient retry (window=%s attempt=%d)",
+            window_id,
+            attempt,
+        )
+        _transient_agent_retry_attempts.pop(window_id, None)
+        return None
     task = asyncio.create_task(
         _run_transient_agent_retry(
             bot,
             key,
+            attempt=attempt,
             delay_seconds=delay_seconds,
         )
     )
@@ -2419,8 +2679,66 @@ def _schedule_transient_agent_retry(
     return attempt, delay_seconds
 
 
+def _restore_transient_agent_retries(bot: Bot) -> int:
+    """Restore delayed retries without replaying already-submitted continuations."""
+    try:
+        records = _runtime_store.list_transient_agent_retries()
+    except Exception:
+        logger.exception("Failed to restore persisted transient agent retries")
+        return 0
+
+    restored = 0
+    for record in records:
+        window_id = record.window_id
+        resolved_window_id = session_manager.resolve_window_for_thread(
+            record.user_id,
+            record.thread_id or None,
+        )
+        if resolved_window_id and resolved_window_id != window_id:
+            try:
+                _runtime_store.delete_transient_agent_retry(window_id)
+                record = _runtime_store.save_transient_agent_retry(
+                    user_id=record.user_id,
+                    thread_id=record.thread_id,
+                    window_id=resolved_window_id,
+                    attempt=record.attempt,
+                    state=record.state,
+                    not_before_epoch=record.not_before_epoch,
+                    created_at_epoch=record.created_at_epoch,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to retarget transient retry from %s to %s",
+                    window_id,
+                    resolved_window_id,
+                )
+                continue
+            window_id = resolved_window_id
+
+        _transient_agent_retry_attempts[window_id] = record.attempt
+        if record.state == TRANSIENT_RETRY_SCHEDULED:
+            delay_seconds = max(0.0, record.not_before_epoch - time.time())
+            key = _agent_input_key(
+                record.user_id,
+                record.thread_id or None,
+                window_id,
+            )
+            _transient_agent_retry_tasks[window_id] = asyncio.create_task(
+                _run_transient_agent_retry(
+                    bot,
+                    key,
+                    attempt=record.attempt,
+                    delay_seconds=delay_seconds,
+                )
+            )
+        restored += 1
+    if restored:
+        logger.info("Restored %d transient agent retry state(s)", restored)
+    return restored
+
+
 async def _cancel_transient_agent_retry_tasks() -> None:
-    """Cancel delayed retries during shutdown without touching agent sessions."""
+    """Cancel delayed retries while preserving their restart-safe records."""
     tasks = [task for task in _transient_agent_retry_tasks.values() if not task.done()]
     for task in tasks:
         task.cancel()
@@ -2521,6 +2839,10 @@ async def _drain_agent_input_queue(
                 await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
                 continue
             item = queue[0]
+            if not _mark_persisted_agent_input_submitted(item):
+                turn_admission.release(window_id)
+                await asyncio.sleep(_AGENT_INPUT_PERSIST_RETRY_SECONDS)
+                continue
             try:
                 success, message = await _send_message_to_agent(
                     user_id,
@@ -2528,8 +2850,19 @@ async def _drain_agent_input_queue(
                     window_id,
                     item.text,
                 )
-            except BaseException:
+            except BaseException as exc:
                 turn_admission.release(window_id)
+                if queue and queue[0] is item:
+                    queue.popleft()
+                if item.store_id is not None and not isinstance(
+                    exc, asyncio.CancelledError
+                ):
+                    _ensure_agent_input_confirmation_task(
+                        bot,
+                        item.store_id,
+                        key,
+                        recover_submission=True,
+                    )
                 raise
             if not success:
                 turn_admission.release(window_id)
@@ -2541,7 +2874,6 @@ async def _drain_agent_input_queue(
             turn_admission.mark_submitted(window_id)
             idle_session_hibernator.forget(window_id)
             submitted_item = queue.popleft()
-            _delete_persisted_agent_inputs([submitted_item])
             if not queue:
                 turn_admission.set_pending(window_id, pending=False)
             await mark_window_working(bot, user_id, window_id, thread_id)
@@ -2550,15 +2882,25 @@ async def _drain_agent_input_queue(
                 text=item.text,
                 confirm_existing_session=True,
             )
-            if not confirmed:
+            if confirmed:
+                _confirm_persisted_agent_input(submitted_item)
+            else:
+                if submitted_item.store_id is not None:
+                    _ensure_agent_input_confirmation_task(
+                        bot,
+                        submitted_item.store_id,
+                        key,
+                        recover_submission=False,
+                    )
                 await _notify_queued_input_failure(
                     bot,
                     user_id,
                     thread_id,
                     "Delivery was not confirmed in the agent transcript. The bot "
-                    "did not resend automatically to avoid a duplicate; send the "
-                    "message again if no reply appears.",
+                    "will keep checking but will not resend automatically to avoid "
+                    "a duplicate. Use /interrupt if you want to replace it.",
                 )
+                return
             await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
     except asyncio.CancelledError:
         raise
@@ -2594,6 +2936,20 @@ async def _cancel_agent_input_drain_tasks() -> None:
     turn_admission.reset()
 
 
+async def _cancel_agent_input_confirmation_tasks() -> None:
+    """Stop confirmation probes while preserving their durable records."""
+    tasks = [
+        task for task in _agent_input_confirmation_tasks.values() if not task.done()
+    ]
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    _agent_input_confirmation_tasks.clear()
+    _agent_input_confirmation_targets.clear()
+
+
 async def _discard_queued_agent_input(
     user_id: int,
     thread_id: int | None,
@@ -2602,18 +2958,20 @@ async def _discard_queued_agent_input(
     """Drop pending user prompts for a target before an explicit interrupt."""
     key = _agent_input_key(user_id, thread_id, window_id)
     async with _agent_input_lock(key):
-        queue = _agent_input_queues.pop(key, None)
-        dropped = len(queue) if queue else 0
-        if queue:
-            _delete_persisted_agent_inputs(list(queue))
-        _clear_persisted_agent_input_target(key)
-        turn_admission.set_pending(window_id, pending=False)
-
         task = _agent_input_tasks.pop(key, None)
         if task and not task.done() and task is not asyncio.current_task():
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+        await _cancel_agent_input_confirmations_for_target(key)
+        queue = _agent_input_queues.pop(key, None)
+        dropped = len(queue) if queue else 0
+        if queue:
+            _delete_persisted_agent_inputs(list(queue))
+        _clear_persisted_agent_input_target(key)
+        _reset_transient_agent_retry(window_id)
+        turn_admission.set_pending(window_id, pending=False)
 
     if key not in _agent_input_queues and key not in _agent_input_tasks:
         _agent_input_locks.pop(key, None)
@@ -2751,6 +3109,7 @@ async def topic_closed_handler(
             )
         if session_id:
             session_manager.hide_session(session_id)
+        await _discard_queued_agent_input(user.id, thread_id, wid)
         session_manager.unbind_thread(user.id, thread_id)
         await session_manager.remove_session_map_entry(wid)
         session_manager.remove_window_state(wid)
@@ -4356,6 +4715,7 @@ async def _handle_missing_bound_window_input(
     success_reply: str | None = None,
 ) -> None:
     """Recover a missing bound window and forward the triggering input."""
+    _reset_transient_agent_retry(window_id)
     display = session_manager.get_display_name(window_id)
     state = session_manager.window_states.get(window_id)
     if state and state.session_id and state.cwd:
@@ -4393,6 +4753,7 @@ async def _handle_missing_bound_window_input(
         user_id,
         thread_id,
     )
+    await _discard_queued_agent_input(user_id, thread_id, window_id)
     session_manager.unbind_thread(user_id, thread_id)
     await safe_reply(
         update_message,
@@ -4461,6 +4822,7 @@ async def _handle_non_codex_bound_window(
     if not is_shell_pane_command(pane_command):
         return False
 
+    _reset_transient_agent_retry(window_id)
     display = session_manager.get_display_name(window_id)
     state = session_manager.window_states.get(window_id)
     if state and state.session_id and state.cwd:
@@ -4497,6 +4859,7 @@ async def _handle_non_codex_bound_window(
         user_id,
         thread_id,
     )
+    await _discard_queued_agent_input(user_id, thread_id, window_id)
     session_manager.unbind_thread(user_id, thread_id)
     await safe_reply(
         update_message,
@@ -6480,6 +6843,13 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                     f"({len(_TRANSIENT_AGENT_RETRY_DELAYS_SECONDS)} attempts). "
                     "Send the request again or switch models."
                 )
+        elif (
+            not is_remote_target
+            and msg.is_complete
+            and msg.content_type == "text"
+            and msg.role == "assistant"
+        ):
+            _reset_transient_agent_retry(wid)
 
         if msg.content_type == "usage_limit":
             if is_remote_target:
@@ -6738,6 +7108,7 @@ async def post_init(application: Application) -> None:
         backend_info.display_name,
     )
     _restore_agent_input_queues(application.bot)
+    _restore_transient_agent_retries(application.bot)
 
     # Start status polling task
     _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
@@ -6806,6 +7177,7 @@ async def _stop_runtime(
         logger.info("Host health monitor stopped")
 
     await _cancel_transient_agent_retry_tasks()
+    await _cancel_agent_input_confirmation_tasks()
     await _cancel_agent_input_drain_tasks()
 
     if agent_backend:

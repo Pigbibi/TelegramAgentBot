@@ -1,6 +1,14 @@
 """Tests for restart-safe AgentBot input and update state."""
 
-from telegram_agent_bot.durable_state import DurableRuntimeStore
+import sqlite3
+
+from telegram_agent_bot.durable_state import (
+    AGENT_INPUT_QUEUED,
+    AGENT_INPUT_SUBMITTED_UNCONFIRMED,
+    TRANSIENT_RETRY_SCHEDULED,
+    TRANSIENT_RETRY_WAITING_RESULT,
+    DurableRuntimeStore,
+)
 
 
 def test_agent_input_survives_store_reopen(tmp_path):
@@ -22,7 +30,66 @@ def test_agent_input_survives_store_reopen(tmp_path):
     second.initialize(reset_inflight_updates=True)
     assert second.list_pending_agent_inputs() == [record]
 
-    second.mark_agent_input_submitted(record.id)
+    assert second.mark_agent_input_submitted(record.id, submitted_at_epoch=1001.0)
+    submitted = second.list_pending_agent_inputs()[0]
+    assert submitted.state == AGENT_INPUT_SUBMITTED_UNCONFIRMED
+    assert submitted.submitted_at_epoch == 1001.0
+
+    third = DurableRuntimeStore(path)
+    third.initialize()
+    assert third.list_pending_agent_inputs() == [submitted]
+    third.confirm_agent_input(record.id)
+    assert third.list_pending_agent_inputs() == []
+
+
+def test_legacy_agent_input_schema_migrates_without_losing_queue(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE agent_input_queue ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+            "thread_id INTEGER NOT NULL, window_id TEXT NOT NULL, "
+            "text TEXT NOT NULL, created_at_epoch REAL NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO agent_input_queue "
+            "(user_id, thread_id, window_id, text, created_at_epoch) "
+            "VALUES (12345, 42, '@4', 'legacy prompt', 1000.0)"
+        )
+
+    store = DurableRuntimeStore(path)
+    store.initialize()
+
+    record = store.list_pending_agent_inputs()[0]
+    assert record.text == "legacy prompt"
+    assert record.state == AGENT_INPUT_QUEUED
+    assert record.submitted_at_epoch is None
+
+
+def test_transient_agent_retry_survives_state_transitions_and_reopen(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    first = DurableRuntimeStore(path)
+    first.initialize()
+    scheduled = first.save_transient_agent_retry(
+        user_id=12345,
+        thread_id=42,
+        window_id="@4",
+        attempt=1,
+        state=TRANSIENT_RETRY_SCHEDULED,
+        not_before_epoch=1015.0,
+        created_at_epoch=1000.0,
+    )
+
+    second = DurableRuntimeStore(path)
+    second.initialize()
+    assert second.list_transient_agent_retries() == [scheduled]
+    assert second.mark_transient_agent_retry_waiting("@4", 1) is True
+    waiting = second.get_transient_agent_retry("@4")
+    assert waiting is not None
+    assert waiting.state == TRANSIENT_RETRY_WAITING_RESULT
+
+    second.delete_transient_agent_retry("@4")
+    assert second.list_transient_agent_retries() == []
     assert second.list_pending_agent_inputs() == []
 
 
@@ -47,6 +114,16 @@ def test_agent_input_limit_is_enforced_transactionally(tmp_path):
     assert first is not None
     assert second is None
     assert [item.text for item in store.list_pending_agent_inputs()] == ["first"]
+
+    assert store.mark_agent_input_submitted(first.id)
+    still_blocked = store.enqueue_agent_input(
+        user_id=12345,
+        thread_id=42,
+        window_id="@4",
+        text="third",
+        max_pending=1,
+    )
+    assert still_blocked is None
 
 
 def test_completed_telegram_update_is_deduplicated_across_restarts(tmp_path):
