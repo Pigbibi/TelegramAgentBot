@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -215,6 +216,42 @@ async def test_shutdown_drains_pending_content_before_cancelling(monkeypatch):
 
     await message_queue.shutdown_workers()
     assert completed == [404]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_reports_active_status_as_ephemeral_not_empty_queue_warning(
+    monkeypatch, caplog
+):
+    await message_queue.shutdown_workers()
+    key = (1, 404)
+    queue: asyncio.Queue[message_queue.MessageTask] = asyncio.Queue()
+    task = message_queue.MessageTask(
+        task_type="status_update",
+        text="Thinking",
+        thread_id=404,
+    )
+    queue.put_nowait(task)
+    assert queue.get_nowait() is task
+    message_queue._message_queues[key] = queue
+    message_queue._active_queue_tasks[key] = task
+    monkeypatch.setattr(
+        message_queue,
+        "MESSAGE_QUEUE_SHUTDOWN_GRACE_SECONDS",
+        0.001,
+    )
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="telegram_agent_bot.handlers.message_queue",
+    ):
+        await message_queue.shutdown_workers()
+
+    assert "only ephemeral status delivery active" in caplog.text
+    assert "'queued': 0" in caplog.text
+    assert not any(
+        record.levelno >= logging.WARNING and "drain grace elapsed" in record.message
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

@@ -106,11 +106,11 @@ class TestConfigValid:
         assert cfg.health_notification_language == "en"
         assert cfg.health_check_interval_seconds == 60.0
         assert cfg.health_alert_cooldown_seconds == 86400.0
-        assert cfg.health_recovery_stable_seconds == 300.0
+        assert cfg.health_recovery_stable_seconds == 1800.0
         assert cfg.health_memory_available_mb == 256.0
         assert cfg.health_swap_used_percent == 75.0
         assert cfg.health_disk_used_percent == 85.0
-        assert cfg.health_queue_oldest_seconds == 600.0
+        assert cfg.health_queue_oldest_seconds == 3600.0
         assert cfg.health_transcript_lag_seconds == 300.0
 
     def test_health_notification_language_can_be_selected(self, monkeypatch):

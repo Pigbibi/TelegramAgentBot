@@ -80,6 +80,7 @@ def _is_unrecoverable_delete_error(exc: Exception) -> bool:
 # Merge limit for content messages
 MERGE_MAX_LENGTH = 3800  # Leave room for markdown conversion overhead
 CONTENT_TASK_RETRY_LIMIT = 5
+MESSAGE_QUEUE_SHUTDOWN_GRACE_SECONDS = 30.0
 RATE_LIMIT_WARNING_TEXT = (
     "⚠️ Telegram is temporarily rate limited, retrying output automatically."
 )
@@ -116,7 +117,7 @@ QueueKey = tuple[int, int]
 _message_queues: dict[QueueKey, asyncio.Queue[MessageTask]] = {}
 _queue_workers: dict[QueueKey, asyncio.Task[None]] = {}
 _queue_locks: dict[QueueKey, asyncio.Lock] = {}  # Protect drain/refill operations
-_active_queue_keys: set[QueueKey] = set()
+_active_queue_tasks: dict[QueueKey, MessageTask] = {}
 
 # Map (tool_use_id, user_id, thread_id_or_0) -> telegram message_id
 # for editing tool_use messages with results
@@ -411,7 +412,7 @@ def get_message_queue(
 
 def has_pending_message_work() -> bool:
     """Return whether Telegram message delivery has queued or active work."""
-    return bool(_active_queue_keys) or any(
+    return bool(_active_queue_tasks) or any(
         not queue.empty() for queue in _message_queues.values()
     )
 
@@ -608,7 +609,7 @@ async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> 
     while True:
         try:
             task = await queue.get()
-            _active_queue_keys.add(key)
+            _active_queue_tasks[key] = task
             delivery_success: bool | None = None
             delivery_error: PermanentDeliveryError | None = None
             should_requeue = False
@@ -765,7 +766,7 @@ async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> 
                         task.delivery_future.set_exception(delivery_error)
                     else:
                         task.delivery_future.set_result(bool(delivery_success))
-                _active_queue_keys.discard(key)
+                _active_queue_tasks.pop(key, None)
                 queue.task_done()
         except asyncio.CancelledError:
             logger.info(
@@ -1471,18 +1472,38 @@ async def shutdown_workers(*, drain: bool = True) -> None:
         try:
             await asyncio.wait_for(
                 asyncio.gather(*(queue.join() for _, queue in queues)),
-                timeout=10.0,
+                timeout=MESSAGE_QUEUE_SHUTDOWN_GRACE_SECONDS,
             )
         except TimeoutError:
             pending = {
-                key: queue.qsize()
+                key: {
+                    "queued": queue.qsize(),
+                    "active": (
+                        _active_queue_tasks[key].task_type
+                        if key in _active_queue_tasks
+                        else None
+                    ),
+                }
                 for key, queue in queues
-                if not queue.empty() or key in _active_queue_keys
+                if not queue.empty()
+                or key in _active_queue_tasks
+                or getattr(queue, "_unfinished_tasks", 0) > 0
             }
-            logger.warning(
-                "Timed out waiting for message queues to drain before shutdown: %s",
-                pending,
+            content_at_risk = any(
+                detail["queued"] or detail["active"] == "content"
+                for detail in pending.values()
             )
+            if content_at_risk or not pending:
+                logger.warning(
+                    "Message queue drain grace elapsed before shutdown: %s",
+                    pending,
+                )
+            else:
+                logger.info(
+                    "Message queue drain grace elapsed with only ephemeral status "
+                    "delivery active: %s",
+                    pending,
+                )
 
     for _, worker in list(_queue_workers.items()):
         worker.cancel()
@@ -1498,6 +1519,6 @@ async def shutdown_workers(*, drain: bool = True) -> None:
     _queue_workers.clear()
     _message_queues.clear()
     _queue_locks.clear()
-    _active_queue_keys.clear()
+    _active_queue_tasks.clear()
     _ephemeral_tool_cleanup_tasks.clear()
     logger.info("Message queue workers stopped")

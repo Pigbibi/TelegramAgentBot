@@ -355,7 +355,7 @@ class Config:
             float(
                 os.getenv(
                     "TELEGRAM_AGENT_BOT_HEALTH_RECOVERY_STABLE_SECONDS",
-                    "300",
+                    "1800",
                 )
             ),
         )
@@ -397,7 +397,7 @@ class Config:
             float(
                 os.getenv(
                     "TELEGRAM_AGENT_BOT_HEALTH_QUEUE_OLDEST_SECONDS",
-                    "600",
+                    "3600",
                 )
             ),
         )

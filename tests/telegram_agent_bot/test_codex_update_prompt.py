@@ -2,6 +2,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from telegram.error import BadRequest
 
 from telegram_agent_bot import bot as bot_module
 from telegram_agent_bot.handlers.callback_data import (
@@ -128,6 +129,25 @@ async def test_codex_update_dismiss_callback_edits_prompt(monkeypatch):
     await bot_module.callback_handler(update, context)
 
     update.callback_query.answer.assert_awaited_once_with("Dismissed")
+    safe_edit.assert_awaited_once_with(
+        update.callback_query,
+        "Codex CLI update dismissed.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_expired_codex_update_dismiss_still_edits_prompt(monkeypatch):
+    update = _make_callback_update(CB_CODEX_UPDATE_DISMISS)
+    update.callback_query.answer.side_effect = BadRequest(
+        "Query is too old and response timeout expired or query id is invalid"
+    )
+    context = MagicMock()
+    safe_edit = AsyncMock()
+    monkeypatch.setattr(bot_module, "_get_thread_id", lambda _update: None)
+    monkeypatch.setattr(bot_module, "safe_edit", safe_edit)
+
+    await bot_module.callback_handler(update, context)
+
     safe_edit.assert_awaited_once_with(
         update.callback_query,
         "Codex CLI update dismissed.",

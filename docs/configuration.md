@@ -130,11 +130,11 @@ is loaded so child agent processes do not inherit them.
 | `TELEGRAM_AGENT_BOT_HEALTH_NOTIFICATION_LANGUAGE` | `en` | Alert language: `en` or `zh` |
 | `TELEGRAM_AGENT_BOT_HEALTH_CHECK_INTERVAL_SECONDS` | `60` | Health sampling interval; minimum 30 seconds |
 | `TELEGRAM_AGENT_BOT_HEALTH_ALERT_COOLDOWN_SECONDS` | `86400` | Minimum repeat interval for an unchanged issue |
-| `TELEGRAM_AGENT_BOT_HEALTH_RECOVERY_STABLE_SECONDS` | `300` | Stable period before a recovery notice |
+| `TELEGRAM_AGENT_BOT_HEALTH_RECOVERY_STABLE_SECONDS` | `1800` | Stable period before a recovery notice |
 | `TELEGRAM_AGENT_BOT_HEALTH_MEMORY_AVAILABLE_MB` | `256` | Low-memory threshold |
 | `TELEGRAM_AGENT_BOT_HEALTH_SWAP_USED_PERCENT` | `75` | Swap alert threshold |
 | `TELEGRAM_AGENT_BOT_HEALTH_DISK_USED_PERCENT` | `85` | Disk alert threshold |
-| `TELEGRAM_AGENT_BOT_HEALTH_QUEUE_OLDEST_SECONDS` | `600` | Oldest-input alert threshold |
+| `TELEGRAM_AGENT_BOT_HEALTH_QUEUE_OLDEST_SECONDS` | `3600` | Oldest-input alert threshold |
 | `TELEGRAM_AGENT_BOT_HEALTH_TRANSCRIPT_LAG_SECONDS` | `300` | Transcript-delivery lag threshold |
 
 Alert state is durable. Restarting the service does not reset the cooldown.

@@ -170,6 +170,28 @@ def test_health_state_change_notifies_without_waiting_for_repeat_cooldown(tmp_pa
     assert changed.event == "alert"
 
 
+def test_partial_recovery_updates_state_without_repeating_alert(tmp_path):
+    store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+    store.initialize()
+    monitor = VpsHealthMonitor(store)
+    disk = HealthIssue("disk", "disk")
+    queue = HealthIssue("agent_queue", "queue")
+    initial = monitor.decide((disk, queue), cooldown_seconds=86400, now_epoch=1000)
+    monitor.record(initial, now_epoch=1000)
+
+    partial = monitor.decide((queue,), cooldown_seconds=86400, now_epoch=1100)
+
+    assert partial.event == "none"
+    assert partial.issues == (queue,)
+    monitor.record(partial, now_epoch=1100)
+    states = store.load_health_alert_states()
+    assert states["disk"].active is False
+    assert states["agent_queue"].active is True
+    assert (
+        monitor.decide((queue,), cooldown_seconds=86400, now_epoch=1200).event == "none"
+    )
+
+
 def test_transcript_lag_requires_delivery_watermark_to_stall(tmp_path):
     store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
     store.initialize()
