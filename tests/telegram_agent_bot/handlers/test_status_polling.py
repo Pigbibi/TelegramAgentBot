@@ -50,6 +50,7 @@ def _clear_interactive_state():
 
     _interactive_mode.clear()
     _interactive_msgs.clear()
+    status_polling._reported_agent_interruptions.clear()
     status_polling._synthetic_working_starts.clear()
     working_status._synthetic_working_output_seen.clear()
     idle_session_hibernator.reset()
@@ -57,6 +58,7 @@ def _clear_interactive_state():
     yield
     _interactive_mode.clear()
     _interactive_msgs.clear()
+    status_polling._reported_agent_interruptions.clear()
     status_polling._synthetic_working_starts.clear()
     working_status._synthetic_working_output_seen.clear()
     idle_session_hibernator.reset()
@@ -172,6 +174,53 @@ class TestStatusPollerSettingsDetection:
                 None,
                 thread_id=42,
             )
+
+    @pytest.mark.asyncio
+    async def test_interrupted_turn_is_reported_once(self, mock_bot: AsyncMock):
+        window_id = "@5"
+        interrupted_pane = (
+            "› continue the deployment\n\n"
+            "• Ran the final verification\n\n"
+            "■ Conversation interrupted - tell the model what to do differently. "
+            "Something went wrong? Hit `/feedback` to report the issue.\n\n"
+            "›\n\n"
+            "  gpt-5.6-terra xhigh · ~/Projects\n"
+        )
+
+        with (
+            patch(
+                "telegram_agent_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+                return_value=capture_result(window_id, interrupted_pane),
+            ),
+            patch(
+                "telegram_agent_bot.handlers.status_polling.enqueue_content_message",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_enqueue_content,
+            patch(
+                "telegram_agent_bot.handlers.status_polling.enqueue_status_update",
+                new_callable=AsyncMock,
+            ) as mock_enqueue_status,
+        ):
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+
+        mock_enqueue_content.assert_awaited_once_with(
+            bot=mock_bot,
+            user_id=1,
+            window_id=window_id,
+            parts=[status_polling.AGENT_INTERRUPTED_NOTICE],
+            content_type="text",
+            role="assistant",
+            text=status_polling.AGENT_INTERRUPTED_NOTICE,
+            thread_id=42,
+        )
+        assert any(call.args[3] is None for call in mock_enqueue_status.await_args_list)
 
     @pytest.mark.asyncio
     async def test_resumable_idle_window_is_hibernated(

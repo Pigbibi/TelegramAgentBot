@@ -27,7 +27,11 @@ from ..config import config
 from ..idle_sessions import idle_session_hibernator
 from ..session import session_manager
 from ..agent_io import capture_agent_output
-from ..terminal_parser import is_codex_input_ready, is_interactive_ui
+from ..terminal_parser import (
+    codex_interruption_fingerprint,
+    is_codex_input_ready,
+    is_interactive_ui,
+)
 from ..tmux_manager import tmux_manager
 from ..turn_admission import turn_admission
 from .interactive_ui import (
@@ -36,7 +40,11 @@ from .interactive_ui import (
     handle_interactive_ui,
 )
 from .cleanup import clear_topic_state
-from .message_queue import enqueue_status_update, get_message_queue
+from .message_queue import (
+    enqueue_content_message,
+    enqueue_status_update,
+    get_message_queue,
+)
 from .working_status import (
     _synthetic_working_starts as _working_starts,
     clear_working,
@@ -59,6 +67,12 @@ TOPIC_CHECK_INTERVAL = 60.0  # seconds
 # deleting the topic binding loses the session id needed to resume it.
 _missing_bound_windows: set[tuple[int, int, str]] = set()
 _synthetic_working_starts = _working_starts
+_reported_agent_interruptions: dict[tuple[int, int, str], str] = {}
+AGENT_INTERRUPTED_NOTICE = (
+    "⚠️ Agent turn was interrupted before it produced a final response. "
+    "The session and topic binding were kept; send another message to continue "
+    "from the saved context."
+)
 
 
 def forget_missing_bound_window(user_id: int, thread_id: int, window_id: str) -> None:
@@ -146,6 +160,40 @@ async def update_status_message(
         window_id,
         active=not pane_is_idle,
     )
+
+    interruption_key = _working_key(user_id, thread_id, window_id)
+    interruption_fingerprint = codex_interruption_fingerprint(pane_text)
+    if interruption_fingerprint is None:
+        _reported_agent_interruptions.pop(interruption_key, None)
+    elif (
+        _reported_agent_interruptions.get(interruption_key) != interruption_fingerprint
+    ):
+        clear_window_working(user_id, window_id, thread_id)
+        await enqueue_status_update(
+            bot,
+            user_id,
+            window_id,
+            None,
+            thread_id=thread_id,
+        )
+        queued = await enqueue_content_message(
+            bot=bot,
+            user_id=user_id,
+            window_id=window_id,
+            parts=[AGENT_INTERRUPTED_NOTICE],
+            content_type="text",
+            role="assistant",
+            text=AGENT_INTERRUPTED_NOTICE,
+            thread_id=thread_id,
+        )
+        if queued:
+            _reported_agent_interruptions[interruption_key] = interruption_fingerprint
+            logger.warning(
+                "Reported interrupted agent turn: user=%d thread=%s window=%s",
+                user_id,
+                thread_id,
+                window_id,
+            )
 
     state = session_manager.window_states.get(window_id)
     if state is not None and state.hibernated_at:

@@ -14,6 +14,7 @@ is_codex_input_ready(), parse_status_line(), parse_status_update(),
 strip_pane_chrome(), extract_bash_output().
 """
 
+import hashlib
 import re
 from dataclasses import dataclass
 
@@ -329,6 +330,25 @@ def _current_turn_lines(lines: list[str]) -> list[str]:
         return lines[previous_prompt + 1 : last_prompt]
 
     return lines[last_prompt + 1 :]
+
+
+def codex_interruption_fingerprint(pane_text: str) -> str | None:
+    """Identify a visible interruption in the current Codex turn.
+
+    Codex can return to its prompt with ``Conversation interrupted`` without
+    appending a ``task_complete`` event to the transcript.  Limit detection to
+    the current turn so an older interruption left in tmux scrollback does not
+    generate a false alert during a later turn.
+    """
+    if not pane_text:
+        return None
+
+    visible_lines = strip_pane_chrome(pane_text.splitlines())
+    current_turn = "\n".join(_current_turn_lines(visible_lines)).strip()
+    normalized = " ".join(current_turn.lower().split())
+    if "conversation interrupted" not in normalized:
+        return None
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def extract_auth_error_message(pane_text: str) -> str | None:
