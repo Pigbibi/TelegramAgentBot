@@ -3,6 +3,7 @@
 import pytest
 
 from telegram_agent_bot.terminal_parser import (
+    codex_interruption_fingerprint,
     codex_input_text,
     extract_auth_error_message,
     extract_bash_output,
@@ -188,6 +189,32 @@ class TestParseStatusUpdate:
 
     def test_codex_input_not_ready_without_prompt(self):
         assert not is_codex_input_ready("output only\nno prompt")
+
+
+class TestCodexInterruptionDetection:
+    def test_detects_interruption_in_current_turn(self):
+        pane = (
+            "› continue the deployment\n\n"
+            "• Ran the final verification\n\n"
+            "■ Conversation interrupted - tell the model what to do differently. "
+            "Something went wrong? Hit `/feedback` to report the issue.\n\n"
+            "›\n\n"
+            "  gpt-5.6-terra xhigh · ~/Projects\n"
+        )
+
+        assert codex_interruption_fingerprint(pane) is not None
+
+    def test_ignores_interruption_from_older_turn(self):
+        pane = (
+            "› first request\n\n"
+            "■ Conversation interrupted - tell the model what to do differently.\n\n"
+            "› retry the request\n\n"
+            "• Retry completed successfully.\n\n"
+            "›\n\n"
+            "  gpt-5.6-terra xhigh · ~/Projects\n"
+        )
+
+        assert codex_interruption_fingerprint(pane) is None
 
 
 class TestAuthErrorDetection:
