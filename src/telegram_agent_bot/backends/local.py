@@ -16,6 +16,7 @@ from .base import (
 )
 from .browser import BrowserRoot, DirectoryListing
 from .files import FileUploadResult
+from .input_routing import AgentInputMode
 
 if TYPE_CHECKING:
     from ..session import CodexSession
@@ -226,6 +227,32 @@ class LocalTmuxBackend:
             window_id,
             text,
             reject_busy=False,
+        )
+        return SendResult(ok, message)
+
+    async def send_input(
+        self,
+        target: AgentTarget,
+        text: str,
+        *,
+        mode: AgentInputMode,
+    ) -> SendResult:
+        """Submit text using the local agent's Enter/Tab input behavior."""
+        from ..session import session_manager
+
+        window_id = self._require_window_id(target)
+        if not window_id:
+            return SendResult(False, "Invalid local target")
+
+        if mode not in {"steer", "queue"}:
+            return SendResult(False, f"Unsupported native input mode: {mode}")
+
+        submit_key = "Enter" if mode == "steer" else "Tab"
+        ok, message = await session_manager.send_to_window(
+            window_id,
+            text,
+            reject_busy=False,
+            submit_key=submit_key,
         )
         return SendResult(ok, message)
 

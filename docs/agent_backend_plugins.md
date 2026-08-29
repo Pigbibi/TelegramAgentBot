@@ -82,6 +82,16 @@ information to create or bind a session through its own workflow.
 Directory listings must enforce the selected root on the backend side. Do not
 rely only on Telegram callback data for path authorization.
 
+## Optional active-turn input capability
+
+A backend may implement `AgentInputRouter.send_input(target, text, mode=...)` to
+support native active-turn behavior. The local backend maps `steer` to Enter and
+Codex `queue` to Tab; Claude Code next-turn text stays in the durable AgentBot
+FIFO because its CLI has no equivalent ordinary-text queue key. The base
+`AgentBackend.send_message()` signature remains unchanged. Backends that do not
+implement this optional capability continue to use the durable AgentBot FIFO
+and are not offered controls that would imply unsupported semantics.
+
 ## Included socket backend
 
 The repository contains an optional package at

@@ -140,3 +140,30 @@ async def test_local_backend_send_and_capture(
     send_to_window.assert_awaited_once_with("@9", "hello", reject_busy=False)
     send_control_key.assert_awaited_once_with("@9", "Enter")
     capture_pane.assert_awaited_once_with("@9", with_ansi=True)
+
+
+@pytest.mark.asyncio
+async def test_local_backend_routes_native_queue_with_tab(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    send_to_window = AsyncMock(return_value=(True, "Sent"))
+    monkeypatch.setattr(
+        session_module.session_manager,
+        "send_to_window",
+        send_to_window,
+    )
+    backend = LocalTmuxBackend()
+
+    result = await backend.send_input(
+        backend.target_from_window("@9"),
+        "next task",
+        mode="queue",
+    )
+
+    assert result.ok is True
+    send_to_window.assert_awaited_once_with(
+        "@9",
+        "next task",
+        reject_busy=False,
+        submit_key="Tab",
+    )

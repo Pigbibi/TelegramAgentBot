@@ -12,6 +12,7 @@ from .backends.base import (
     CreateSessionResult,
 )
 from .backends.files import AgentFileTransfer, FileUploadResult
+from .backends.input_routing import AgentInputMode, AgentInputRouter
 from .backends.local import LocalTmuxBackend
 from .backends.registry import get_configured_backend, load_backend
 from .config import config
@@ -233,6 +234,48 @@ async def send_agent_message(
 
     backend = backend_for_target(target)
     result = await backend.send_message(target, text)
+    return MessageResult(
+        target=target,
+        ok=result.ok,
+        message=result.message,
+    )
+
+
+async def send_agent_input(
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+    text: str,
+    *,
+    mode: AgentInputMode,
+) -> MessageResult | None:
+    """Send text through an optional native active-turn backend capability."""
+    target = target_for_context(user_id, thread_id, window_id)
+    if target is None:
+        return None
+
+    if target.backend_id == "local":
+        local_window_id = target.window_id or window_id
+        if not local_window_id:
+            return MessageResult(target=target, ok=False, missing=True)
+        window = await tmux_manager.find_window_by_id(local_window_id)
+        if not window:
+            return MessageResult(target=target, ok=False, missing=True)
+        target = LocalTmuxBackend.target_from_window(
+            window.window_id,
+            session_id=target.session_id,
+        )
+
+    backend = backend_for_target(target)
+    send_input = getattr(backend, "send_input", None)
+    if not callable(send_input):
+        return MessageResult(
+            target=target,
+            ok=False,
+            message="Agent backend does not support native input routing",
+        )
+    input_backend = cast(AgentInputRouter, backend)
+    result = await input_backend.send_input(target, text, mode=mode)
     return MessageResult(
         target=target,
         ok=result.ok,

@@ -33,6 +33,17 @@ def _make_context() -> MagicMock:
 
 
 class TestForwardCommand:
+    def test_plugin_command_spelling_is_agent_aware(self):
+        from telegram_agent_bot.agent_profile import AGENT_CLAUDE, AGENT_CODEX
+        from telegram_agent_bot.bot import _adapt_forward_command_for_agent
+
+        assert _adapt_forward_command_for_agent("/plugins", AGENT_CLAUDE) == "/plugin"
+        assert _adapt_forward_command_for_agent("/plugin", AGENT_CODEX) == "/plugins"
+        assert (
+            _adapt_forward_command_for_agent("/plugin install foo", AGENT_CLAUDE)
+            == "/plugin install foo"
+        )
+
     @pytest.mark.asyncio
     async def test_model_sends_command_to_tmux(self):
         """/model → send_to_window called with "/model"."""
@@ -213,6 +224,45 @@ class TestForwardCommand:
         mock_send.assert_awaited_once_with(context.bot, 1, 42, "@5", "/model")
         safe_reply.assert_awaited_once_with(
             update.message, "⚡ [project] Queued: /model"
+        )
+
+    @pytest.mark.asyncio
+    async def test_plugins_maps_to_claude_native_plugin_command(self):
+        update = _make_update("/plugins")
+        context = _make_context()
+
+        with (
+            patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_agent_bot.bot._get_thread_id", return_value=42),
+            patch("telegram_agent_bot.bot.session_manager") as mock_sm,
+            patch(
+                "telegram_agent_bot.bot._window_agent_type",
+                return_value="claude",
+            ),
+            patch(
+                "telegram_agent_bot.bot._send_local_forwarded_command",
+                new_callable=AsyncMock,
+                return_value=(True, "ok", "sent"),
+            ) as mock_send,
+            patch("telegram_agent_bot.bot.safe_reply", new_callable=AsyncMock),
+        ):
+            mock_sm.resolve_window_for_thread.return_value = "@5"
+            mock_sm.resolve_target_for_thread.return_value = AgentTarget(
+                "local", "local", window_id="@5"
+            )
+            mock_sm.get_display_name.return_value = "project"
+
+            from telegram_agent_bot.bot import forward_command_handler
+
+            await forward_command_handler(update, context)
+
+        mock_send.assert_awaited_once_with(
+            context.bot,
+            update.message,
+            user_id=1,
+            thread_id=42,
+            window_id="@5",
+            command_text="/plugin",
         )
 
     @pytest.mark.asyncio

@@ -85,6 +85,7 @@ from .agent_io import (
     capture_agent_output,
     create_agent_session,
     send_agent_control,
+    send_agent_input,
     send_agent_message,
     upload_agent_file,
 )
@@ -100,9 +101,13 @@ from .agent_profile import (
 )
 from .backends.base import AgentBackend, AgentTarget
 from .backends.browser import AgentBrowser, DirectoryListing
+from .backends.input_routing import AgentInputMode
 from .backends.registry import get_configured_backend
 from .config import config
 from .durable_state import (
+    AGENT_INPUT_MODE_QUEUE,
+    AGENT_INPUT_MODE_STEER,
+    AGENT_INPUT_MODE_TURN,
     AGENT_INPUT_QUEUED,
     AGENT_INPUT_SUBMITTED_UNCONFIRMED,
     TRANSIENT_RETRY_SCHEDULED,
@@ -136,6 +141,7 @@ from .handlers.callback_data import (
     CB_OUTPUT_MODE,
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
+    CB_INPUT_ROUTE,
     CB_ROOT_CANCEL,
     CB_ROOT_SELECT,
     CB_SESSION_CANCEL,
@@ -215,6 +221,13 @@ from .handlers.message_sender import (
     safe_reply,
     safe_send,
     send_with_fallback,
+)
+from .handlers.input_routing import (
+    INPUT_ROUTE_CANCEL,
+    INPUT_ROUTE_INTERRUPT,
+    INPUT_ROUTE_QUEUE,
+    build_input_routing_keyboard,
+    parse_input_routing_callback,
 )
 from .markdown_v2 import convert_markdown
 from .model_catalog import refresh_model_catalog
@@ -305,11 +318,13 @@ class _QueuedAgentInput:
     state: str = AGENT_INPUT_QUEUED
     transcript_session_id: str | None = None
     transcript_offset: int | None = None
+    submission_mode: str = AGENT_INPUT_MODE_TURN
 
 
 _AGENT_INPUT_POLL_INTERVAL_SECONDS = 1.0
 _AGENT_INPUT_PERSIST_RETRY_SECONDS = 5.0
 _AGENT_INPUT_CONFIRM_RETRY_SECONDS = 60.0
+_INPUT_ROUTE_CHOICE_MAX_AGE_SECONDS = 15 * 60.0
 _TRANSIENT_AGENT_RETRY_DELAYS_SECONDS = (15.0, 45.0, 120.0)
 _TRANSIENT_AGENT_ERROR_CODES = frozenset({"server_overloaded"})
 _TRANSIENT_AGENT_RETRY_PROMPT = (
@@ -322,6 +337,7 @@ _agent_input_tasks: dict[tuple[int, int, str], asyncio.Task] = {}
 _agent_input_locks: dict[tuple[int, int], asyncio.Lock] = {}
 _agent_input_confirmation_tasks: dict[int, asyncio.Task[None]] = {}
 _agent_input_confirmation_targets: dict[int, tuple[int, int, str]] = {}
+_agent_input_confirmation_modes: dict[int, str] = {}
 _transient_agent_retry_attempts: dict[str, int] = {}
 _transient_agent_retry_tasks: dict[str, asyncio.Task[None]] = {}
 _runtime_store = DurableRuntimeStore(config.config_dir / "runtime.sqlite3")
@@ -348,6 +364,8 @@ SESSION_STILL_RUNNING_MESSAGE = f"The {PRODUCT_NAME} session is still running in
 HELP_COMMAND_DESCRIPTION = f"↗ Show {PRODUCT_NAME} help"
 ESC_COMMAND_DESCRIPTION = f"Interrupt current {PRODUCT_NAME} run"
 INTERRUPT_COMMAND_DESCRIPTION = "Interrupt; optional text sends next"
+STEER_COMMAND_DESCRIPTION = "Guide the current agent turn"
+QUEUE_COMMAND_DESCRIPTION = "Queue input for the next agent turn"
 USAGE_COMMAND_DESCRIPTION = f"Show {PRODUCT_NAME} usage remaining"
 ACCOUNT_COMMAND_DESCRIPTION = "Manage agent login accounts"
 AGENT_LOGIN_COMMAND_DESCRIPTION = "Start agent device login"
@@ -367,7 +385,9 @@ async def _safe_send_typing_action(chat: Chat, *, source: str) -> None:
         logger.debug("Failed to send typing action (%s): %s", source, exc)
 
 
-# Agent commands shown in bot menu (forwarded via tmux)
+# Agent commands shown in the global bot menu (forwarded via tmux). Keep this
+# list to commands that are useful in both Codex and Claude Code; agent-specific
+# or plugin skill commands remain available through /agentcmd.
 CC_COMMANDS: dict[str, str] = {
     "agentcmd": "↗ Send a custom agent command",
     "clear": "↗ Clear conversation history",
@@ -378,6 +398,13 @@ CC_COMMANDS: dict[str, str] = {
     "memory": "↗ Edit AGENTS.md",
     "model": "↗ Switch AI model",
     "fast": "↗ Toggle Fast mode",
+    "skills": "↗ Browse agent skills",
+    "plugins": "↗ Browse and manage plugins",
+    "status": "↗ Show agent session status",
+    "permissions": "↗ Manage agent permissions",
+    "mcp": "↗ Manage MCP servers",
+    "plan": "↗ Enter plan mode",
+    "init": "↗ Initialize project instructions",
 }
 
 
@@ -388,7 +415,7 @@ _COMMAND_ARG_SEPARATORS = ".。"
 
 
 def _normalize_forward_command_text(cmd_text: str) -> str:
-    """Normalize Telegram slash commands before forwarding them to Codex."""
+    """Normalize Telegram slash commands before forwarding them to an agent."""
     match = _FORWARDED_COMMAND_RE.match(cmd_text)
     if not match:
         return cmd_text
@@ -410,6 +437,22 @@ def _normalize_forward_command_text(cmd_text: str) -> str:
         rest = " " + rest[1:].lstrip()
 
     return normalized + rest
+
+
+def _adapt_forward_command_for_agent(cmd_text: str, agent_type: str) -> str:
+    """Map one stable Telegram command to the active agent's native spelling."""
+    normalized = _normalize_forward_command_text(cmd_text)
+    match = _FORWARDED_COMMAND_RE.match(normalized)
+    if not match:
+        return normalized
+
+    command_name = match.group("name").lower()
+    rest = match.group("rest") or ""
+    normalized_agent_type = normalize_agent_type(agent_type)
+    if command_name in {"plugin", "plugins"}:
+        native_name = "plugin" if normalized_agent_type == AGENT_CLAUDE else "plugins"
+        return f"/{native_name}{rest}"
+    return normalized
 
 
 class _DirectoryBrowserKwargs(TypedDict, total=False):
@@ -1396,6 +1439,220 @@ async def interrupt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await mark_window_working(context.bot, user.id, wid, thread_id)
 
 
+async def _native_input_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    mode: str,
+) -> None:
+    """Handle explicit /steer and /queue active-turn input."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id) or not update.message:
+        return
+    command_name = "steer" if mode == AGENT_INPUT_MODE_STEER else "queue"
+    parts = (update.message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await safe_reply(update.message, f"Usage: /{command_name} <message>")
+        return
+    text = sanitize_forward_text(parts[1])
+    if not text:
+        await safe_reply(update.message, "❌ No forwardable text was provided.")
+        return
+
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        await safe_reply(update.message, "❌ Please use a named topic.")
+        return
+    ambiguous_wid = session_manager.get_ambiguous_window_for_thread(user.id, thread_id)
+    if isinstance(ambiguous_wid, str) and ambiguous_wid:
+        await safe_reply(
+            update.message,
+            "❌ This topic shares an agent window with another topic. Use /unbind first.",
+        )
+        return
+
+    chat = update.effective_chat
+    if chat and chat.type in ("group", "supergroup"):
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+
+    window_id = session_manager.resolve_window_for_thread(user.id, thread_id)
+    if not window_id:
+        await safe_reply(
+            update.message,
+            "❌ Native steer/queue requires a local Codex or Claude Code session.",
+        )
+        return
+    window = await tmux_manager.find_window_by_id(window_id)
+    if not window:
+        display = session_manager.get_display_name(window_id)
+        await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
+        return
+    agent_type = _window_agent_type(window_id)
+    display_name = agent_display_name(agent_type)
+    pane_cmd = (window.pane_current_command or "").strip()
+    if is_shell_pane_command(pane_cmd):
+        await safe_reply(
+            update.message,
+            f"❌ Window is not running {display_name} (current command: {pane_cmd}).",
+        )
+        return
+    if not _window_supports_native_input_routing(window_id):
+        await safe_reply(
+            update.message,
+            "❌ This command is unavailable for the current agent backend.",
+        )
+        return
+
+    await _safe_send_typing_action(
+        update.message.chat, source=f"{command_name}_command"
+    )
+    await enqueue_status_update(
+        context.bot,
+        user.id,
+        window_id,
+        None,
+        thread_id=thread_id,
+    )
+    _cancel_bash_capture(user.id, thread_id)
+    capture = await capture_agent_output(user.id, thread_id, window_id)
+    if capture is None or capture.missing:
+        await safe_reply(
+            update.message,
+            f"❌ {display_name} window is no longer available.",
+        )
+        return
+    pane_text = capture.text or ""
+    auth_error = extract_auth_error_message(pane_text)
+    if auth_error:
+        recovery_message = (
+            _codex_auth_recovery_message(auth_error)
+            if agent_type == AGENT_CODEX
+            else auth_error
+        )
+        await safe_reply(
+            update.message,
+            f"❌ {recovery_message}",
+        )
+        return
+
+    # Claude Code documents command queueing while it responds, but does not
+    # expose Codex's Tab-based native next-turn key for ordinary text. Keep
+    # /queue durable by using AgentBot's FIFO for Claude sessions.
+    if mode == AGENT_INPUT_MODE_QUEUE and agent_type == AGENT_CLAUDE:
+        success, message, queued = await _send_or_queue_agent_input(
+            context.bot,
+            user.id,
+            thread_id,
+            window_id,
+            text,
+        )
+        if not success:
+            await safe_reply(update.message, f"❌ {message}")
+            return
+        if queued:
+            await safe_reply(update.message, f"⏳ {message}")
+        else:
+            await mark_window_working(context.bot, user.id, window_id, thread_id)
+            await safe_reply(
+                update.message,
+                "✅ Claude Code was idle, so the message started a new turn.",
+            )
+        return
+
+    if not pane_text.strip():
+        if mode == AGENT_INPUT_MODE_QUEUE:
+            success, message, _queued = await _send_or_queue_agent_input(
+                context.bot,
+                user.id,
+                thread_id,
+                window_id,
+                text,
+            )
+            if success:
+                await safe_reply(update.message, f"⏳ {message}")
+                return
+        await safe_reply(
+            update.message,
+            f"❌ {display_name} state is temporarily unavailable. Retry shortly.",
+        )
+        return
+    if is_interactive_ui(pane_text):
+        if mode == AGENT_INPUT_MODE_QUEUE:
+            success, message, _queued = await _send_or_queue_agent_input(
+                context.bot,
+                user.id,
+                thread_id,
+                window_id,
+                text,
+            )
+            if success:
+                await safe_reply(update.message, f"⏳ {message}")
+                return
+        await safe_reply(
+            update.message,
+            f"❌ {display_name} is showing an interactive prompt. "
+            "Handle it first, then retry.",
+        )
+        return
+
+    if await session_manager.window_has_usage_limit_exceeded(window_id):
+        handled = await _rotate_thread_after_usage_limit(
+            context=context,
+            user_id=user.id,
+            thread_id=thread_id,
+            current_window_id=window_id,
+            current_window_cwd=window.cwd,
+            text=text,
+        )
+        if handled:
+            return
+
+    if is_codex_input_ready(pane_text):
+        success, message, queued = await _send_or_queue_agent_input(
+            context.bot,
+            user.id,
+            thread_id,
+            window_id,
+            text,
+        )
+        if not success:
+            await safe_reply(update.message, f"❌ {message}")
+            return
+        await mark_window_working(context.bot, user.id, window_id, thread_id)
+        if queued:
+            await safe_reply(update.message, f"⏳ {message}")
+        else:
+            await safe_reply(
+                update.message,
+                f"✅ {display_name} was idle, so the message started a new turn.",
+            )
+        return
+
+    success, message = await _send_native_agent_input(
+        context.bot,
+        user.id,
+        thread_id,
+        window_id,
+        text,
+        mode=mode,
+    )
+    if not success:
+        await safe_reply(update.message, f"❌ {message}")
+        return
+    await mark_window_working(context.bot, user.id, window_id, thread_id)
+    await safe_reply(update.message, f"✅ {message}")
+
+
+async def steer_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inject guidance into the current agent turn."""
+    await _native_input_command(update, context, mode=AGENT_INPUT_MODE_STEER)
+
+
+async def queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Queue input for the next agent turn."""
+    await _native_input_command(update, context, mode=AGENT_INPUT_MODE_QUEUE)
+
+
 async def health_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show one bounded host/runtime health snapshot on demand."""
     user = update.effective_user
@@ -1960,6 +2217,100 @@ async def _send_message_to_agent(
     return result.ok, result.message
 
 
+async def _send_native_input_to_agent(
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+    text: str,
+    *,
+    mode: str,
+) -> tuple[bool, str]:
+    if mode not in {AGENT_INPUT_MODE_STEER, AGENT_INPUT_MODE_QUEUE}:
+        return False, f"Unsupported native input mode: {mode}"
+    result = await send_agent_input(
+        user_id,
+        thread_id,
+        window_id,
+        text,
+        mode=cast(AgentInputMode, mode),
+    )
+    if result is None:
+        return False, "No session bound"
+    if result.missing:
+        return False, "Window not found (may have been closed)"
+    return result.ok, result.message
+
+
+def _window_agent_type(window_id: str) -> str:
+    """Return the persisted agent type for a local window."""
+    state = session_manager.window_states.get(window_id)
+    return normalize_agent_type(
+        state.agent_type if state and state.agent_type else config.agent_type
+    )
+
+
+def _window_supports_native_input_routing(window_id: str) -> bool:
+    """Return whether this window supports an Enter-based active-turn steer."""
+    return _window_agent_type(window_id) in {AGENT_CODEX, AGENT_CLAUDE}
+
+
+def _route_can_use_native_input(key: tuple[int, int, str]) -> bool:
+    """Avoid reordering native input around the legacy bot-side FIFO."""
+    return not (
+        _route_has_agent_input_queue(key)
+        or _route_has_agent_input_drain(key)
+        or _target_has_agent_input_confirmation(key)
+        or _route_has_persisted_agent_input_confirmation(key)
+    )
+
+
+async def _offer_input_route_choice(
+    message: Any,
+    *,
+    user_id: int,
+    thread_id: int,
+    window_id: str,
+    text: str,
+) -> bool:
+    """Persist a busy-turn message and attach its native routing controls."""
+    agent_type = _window_agent_type(window_id)
+    display_name = agent_display_name(agent_type)
+    try:
+        _runtime_store.delete_expired_input_choices(
+            time.time() - _INPUT_ROUTE_CHOICE_MAX_AGE_SECONDS
+        )
+        record = _runtime_store.create_pending_input_choice(
+            user_id=user_id,
+            thread_id=thread_id,
+            window_id=window_id,
+            text=text,
+            max_pending=_agent_input_queue_max_size(),
+        )
+    except Exception:
+        logger.exception(
+            "Failed to persist input route choice (user=%d thread=%d window=%s)",
+            user_id,
+            thread_id,
+            window_id,
+        )
+        record = None
+    if record is None:
+        await safe_reply(
+            message,
+            "❌ 无法安全保存这条输入，或待选择消息已满；请稍后重试。",
+        )
+        return False
+    await safe_reply(
+        message,
+        f"{display_name} 正在工作。请选择这条消息的处理方式：",
+        reply_markup=build_input_routing_keyboard(
+            record.id,
+            native_queue=agent_type == AGENT_CODEX,
+        ),
+    )
+    return True
+
+
 def _agent_input_key(
     user_id: int,
     thread_id: int | None,
@@ -2009,6 +2360,8 @@ def _agent_max_active_turns() -> int:
 def _queue_agent_input(
     key: tuple[int, int, str],
     text: str,
+    *,
+    submission_mode: str = AGENT_INPUT_MODE_TURN,
 ) -> tuple[bool, int, int]:
     queue = _agent_input_queues.setdefault(key, deque())
     limit = _agent_input_queue_max_size()
@@ -2021,6 +2374,7 @@ def _queue_agent_input(
             window_id=key[2],
             text=text,
             max_pending=limit,
+            submission_mode=submission_mode,
         )
     except Exception:
         logger.exception(
@@ -2037,6 +2391,7 @@ def _queue_agent_input(
             text=text,
             created_at_epoch=record.created_at_epoch,
             store_id=record.id,
+            submission_mode=record.submission_mode,
         )
     )
     turn_admission.set_pending(key[2], pending=True)
@@ -2145,7 +2500,9 @@ def _same_agent_input_route(
 
 def _target_has_agent_input_confirmation(key: tuple[int, int, str]) -> bool:
     return any(
-        _same_agent_input_route(target, key) and not task.done()
+        _same_agent_input_route(target, key)
+        and _agent_input_confirmation_modes.get(record_id) != AGENT_INPUT_MODE_QUEUE
+        and not task.done()
         for record_id, task in _agent_input_confirmation_tasks.items()
         if (target := _agent_input_confirmation_targets.get(record_id)) is not None
     )
@@ -2211,6 +2568,11 @@ async def _run_agent_input_confirmation(
                         confirm_existing_session=True,
                         transcript_session_id=record.transcript_session_id,
                         transcript_after_offset=record.transcript_offset,
+                        submit_key=(
+                            "Tab"
+                            if record.submission_mode == AGENT_INPUT_MODE_QUEUE
+                            else "Enter"
+                        ),
                     )
                     recover_submission = False
                 else:
@@ -2255,6 +2617,7 @@ async def _run_agent_input_confirmation(
         if _agent_input_confirmation_tasks.get(record_id) is current_task:
             _agent_input_confirmation_tasks.pop(record_id, None)
             _agent_input_confirmation_targets.pop(record_id, None)
+            _agent_input_confirmation_modes.pop(record_id, None)
         if confirmed and not _target_has_agent_input_confirmation(key):
             for queued_key, queue in list(_agent_input_queues.items()):
                 if queue and _same_agent_input_route(queued_key, key):
@@ -2269,11 +2632,13 @@ def _ensure_agent_input_confirmation_task(
     recover_submission: bool,
     initial_delay_seconds: float | None = None,
     notify_on_first_delay: bool = False,
+    submission_mode: str = AGENT_INPUT_MODE_TURN,
 ) -> None:
     task = _agent_input_confirmation_tasks.get(record_id)
     if task and not task.done():
         return
     _agent_input_confirmation_targets[record_id] = key
+    _agent_input_confirmation_modes[record_id] = submission_mode
     _agent_input_confirmation_tasks[record_id] = asyncio.create_task(
         _run_agent_input_confirmation(
             bot,
@@ -2308,6 +2673,7 @@ async def _cancel_agent_input_confirmations_for_target(
     for record_id in record_ids:
         _agent_input_confirmation_tasks.pop(record_id, None)
         _agent_input_confirmation_targets.pop(record_id, None)
+        _agent_input_confirmation_modes.pop(record_id, None)
 
 
 def _restore_agent_input_queues(bot: Bot) -> int:
@@ -2357,11 +2723,14 @@ def _restore_agent_input_queues(bot: Bot) -> int:
             window_id,
         )
         if record.state == AGENT_INPUT_SUBMITTED_UNCONFIRMED:
+            confirmation_kwargs: dict[str, Any] = {"recover_submission": True}
+            if record.submission_mode != AGENT_INPUT_MODE_TURN:
+                confirmation_kwargs["submission_mode"] = record.submission_mode
             _ensure_agent_input_confirmation_task(
                 bot,
                 record.id,
                 key,
-                recover_submission=True,
+                **confirmation_kwargs,
             )
             restored += 1
             continue
@@ -2374,6 +2743,7 @@ def _restore_agent_input_queues(bot: Bot) -> int:
                 state=record.state,
                 transcript_session_id=record.transcript_session_id,
                 transcript_offset=record.transcript_offset,
+                submission_mode=record.submission_mode,
             )
         )
         turn_admission.set_pending(window_id, pending=True)
@@ -2455,6 +2825,146 @@ async def _queue_agent_input_after_interrupt(
             True,
             f"Interrupt requested; queued message until the agent is ready ({depth}/{limit})",
         )
+
+
+async def _send_native_agent_input(
+    bot: Bot,
+    user_id: int,
+    thread_id: int,
+    window_id: str,
+    text: str,
+    *,
+    mode: str,
+) -> tuple[bool, str]:
+    """Durably submit native active-turn input without replaying its text."""
+    agent_type = _window_agent_type(window_id)
+    display_name = agent_display_name(agent_type)
+    if mode == AGENT_INPUT_MODE_QUEUE and agent_type != AGENT_CODEX:
+        return (
+            False,
+            f"{display_name} has no native next-turn key; use the AgentBot queue.",
+        )
+    key = _agent_input_key(user_id, thread_id, window_id)
+    _reset_transient_agent_retry(window_id)
+
+    # Recheck immediately before persistence/submission. The picker may have
+    # been open long enough for the active turn to finish.
+    capture = await capture_agent_output(user_id, thread_id, window_id)
+    if capture is None:
+        return False, "No session bound"
+    if capture.missing:
+        return False, "Window not found (may have been closed)"
+    pane_text = capture.text or ""
+    auth_error = extract_auth_error_message(pane_text)
+    if auth_error:
+        if agent_type == AGENT_CODEX:
+            return False, _codex_auth_recovery_message(auth_error)
+        return False, auth_error
+    if is_interactive_ui(pane_text):
+        return (
+            False,
+            f"{display_name} is showing an interactive prompt; handle it first.",
+        )
+    if not pane_text.strip():
+        return False, f"{display_name} state is temporarily unavailable; retry shortly."
+    if is_codex_input_ready(pane_text):
+        success, message, queued = await _send_or_queue_agent_input(
+            bot,
+            user_id,
+            thread_id,
+            window_id,
+            text,
+        )
+        if not success:
+            return False, message
+        if queued:
+            return True, message
+        return (
+            True,
+            f"{display_name} became idle, so the message started a new turn (Enter).",
+        )
+
+    async with _agent_input_lock(key):
+        if not _route_can_use_native_input(key):
+            return (
+                False,
+                "This topic still has bot-managed input pending; wait for it to "
+                "finish before using native input.",
+            )
+        try:
+            record = _runtime_store.enqueue_agent_input(
+                user_id=user_id,
+                thread_id=thread_id,
+                window_id=window_id,
+                text=text,
+                max_pending=_agent_input_queue_max_size(),
+                submission_mode=mode,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist native agent input "
+                "(user=%d thread=%d window=%s mode=%s)",
+                user_id,
+                thread_id,
+                window_id,
+                mode,
+            )
+            record = None
+        if record is None:
+            return False, "The native input queue is full or could not be saved safely."
+
+        item = _QueuedAgentInput(
+            text=text,
+            created_at_epoch=record.created_at_epoch,
+            store_id=record.id,
+            submission_mode=mode,
+        )
+        if not await _mark_persisted_agent_input_submitted(item, window_id):
+            _delete_persisted_agent_inputs([item])
+            return False, "The input could not enter a safe submission state."
+
+        try:
+            success, message = await _send_native_input_to_agent(
+                user_id,
+                thread_id,
+                window_id,
+                text,
+                mode=mode,
+            )
+        except BaseException:
+            if item.store_id is not None:
+                _ensure_agent_input_confirmation_task(
+                    bot,
+                    item.store_id,
+                    key,
+                    recover_submission=True,
+                    submission_mode=mode,
+                )
+            raise
+        if not success:
+            _delete_persisted_agent_inputs([item])
+            return False, message
+
+        idle_session_hibernator.forget(window_id)
+        if item.store_id is not None:
+            _ensure_agent_input_confirmation_task(
+                bot,
+                item.store_id,
+                key,
+                recover_submission=True,
+                initial_delay_seconds=0.0,
+                notify_on_first_delay=mode == AGENT_INPUT_MODE_STEER,
+                submission_mode=mode,
+            )
+        if mode == AGENT_INPUT_MODE_QUEUE:
+            return True, "Queued in Codex for the next turn (Tab)."
+        if agent_type == AGENT_CLAUDE and text.lstrip().startswith("/"):
+            return (
+                True,
+                "Command submitted; Claude Code will run it after the current turn "
+                "(Enter).",
+            )
+        return True, f"Guidance sent to the current {display_name} turn (Enter)."
 
 
 async def _send_or_queue_agent_input(
@@ -2978,17 +3488,99 @@ async def _drain_agent_input_queue(
                 _clear_persisted_agent_input_target(key)
                 turn_admission.set_pending(window_id, pending=False)
                 return
-            if not is_codex_input_ready(pane_text) or is_interactive_ui(pane_text):
-                if is_interactive_ui(pane_text):
-                    interactive = extract_interactive_content(pane_text)
-                    if interactive is not None and interactive.name == "DirectoryTrust":
-                        await _maybe_confirm_startup_trust_prompt(
-                            window_id,
-                            pane_text,
-                        )
+            item = queue[0]
+            interactive = is_interactive_ui(pane_text)
+            input_ready = is_codex_input_ready(pane_text)
+            if not pane_text.strip():
+                await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
+                continue
+            if interactive:
+                interactive_content = extract_interactive_content(pane_text)
+                if (
+                    interactive_content is not None
+                    and interactive_content.name == "DirectoryTrust"
+                ):
+                    await _maybe_confirm_startup_trust_prompt(
+                        window_id,
+                        pane_text,
+                    )
                 turn_admission.observe(window_id, active=True)
                 await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
                 continue
+            if (
+                item.submission_mode in {AGENT_INPUT_MODE_STEER, AGENT_INPUT_MODE_QUEUE}
+                and not input_ready
+            ):
+                turn_admission.observe(window_id, active=True)
+                if not await _mark_persisted_agent_input_submitted(item, window_id):
+                    await asyncio.sleep(_AGENT_INPUT_PERSIST_RETRY_SECONDS)
+                    continue
+                try:
+                    success, message = await _send_native_input_to_agent(
+                        user_id,
+                        thread_id,
+                        window_id,
+                        item.text,
+                        mode=item.submission_mode,
+                    )
+                except BaseException:
+                    if queue and queue[0] is item:
+                        queue.popleft()
+                    if item.store_id is not None:
+                        _ensure_agent_input_confirmation_task(
+                            bot,
+                            item.store_id,
+                            key,
+                            recover_submission=True,
+                            submission_mode=item.submission_mode,
+                        )
+                    raise
+                if not success:
+                    failed_item = queue.popleft()
+                    _delete_persisted_agent_inputs([failed_item])
+                    await _notify_queued_input_failure(bot, user_id, thread_id, message)
+                    continue
+                idle_session_hibernator.forget(window_id)
+                submitted_item = queue.popleft()
+                if not queue:
+                    turn_admission.set_pending(window_id, pending=False)
+                await mark_window_working(bot, user_id, window_id, thread_id)
+                if submitted_item.store_id is not None:
+                    _ensure_agent_input_confirmation_task(
+                        bot,
+                        submitted_item.store_id,
+                        key,
+                        recover_submission=True,
+                        initial_delay_seconds=0.0,
+                        submission_mode=submitted_item.submission_mode,
+                    )
+                await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
+                continue
+            if not input_ready:
+                turn_admission.observe(window_id, active=True)
+                await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
+                continue
+            if item.submission_mode != AGENT_INPUT_MODE_TURN:
+                try:
+                    changed = (
+                        item.store_id is None
+                        or _runtime_store.set_agent_input_submission_mode(
+                            item.store_id,
+                            AGENT_INPUT_MODE_TURN,
+                        )
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to downgrade restored native input to a new turn "
+                        "(record=%s window=%s)",
+                        item.store_id,
+                        window_id,
+                    )
+                    changed = False
+                if not changed:
+                    await asyncio.sleep(_AGENT_INPUT_PERSIST_RETRY_SECONDS)
+                    continue
+                item.submission_mode = AGENT_INPUT_MODE_TURN
             turn_admission.observe(window_id, active=False)
             admitted = await turn_admission.try_acquire(
                 window_id,
@@ -2997,7 +3589,6 @@ async def _drain_agent_input_queue(
             if not admitted:
                 await asyncio.sleep(_AGENT_INPUT_POLL_INTERVAL_SECONDS)
                 continue
-            item = queue[0]
             if not await _mark_persisted_agent_input_submitted(item, window_id):
                 turn_admission.release(window_id)
                 await asyncio.sleep(_AGENT_INPUT_PERSIST_RETRY_SECONDS)
@@ -3107,6 +3698,7 @@ async def _cancel_agent_input_confirmation_tasks() -> None:
             await task
     _agent_input_confirmation_tasks.clear()
     _agent_input_confirmation_targets.clear()
+    _agent_input_confirmation_modes.clear()
 
 
 async def _discard_queued_agent_input(
@@ -3137,6 +3729,17 @@ async def _discard_queued_agent_input(
                 _delete_persisted_agent_inputs(list(queue))
             turn_admission.set_pending(route_key[2], pending=False)
         _clear_persisted_agent_input_route(key)
+        try:
+            dropped += _runtime_store.delete_pending_input_choices_for_route(
+                key[0],
+                key[1],
+            )
+        except Exception:
+            logger.exception(
+                "Failed to clear pending input choices (user=%d thread=%d)",
+                key[0],
+                key[1],
+            )
         _reset_transient_agent_retry(window_id)
 
     return dropped
@@ -3390,10 +3993,72 @@ async def topic_edited_handler(
     )
 
 
+async def _send_local_forwarded_command(
+    bot: Bot,
+    message: Any,
+    *,
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+    command_text: str,
+) -> tuple[bool, str, str]:
+    """Send a local slash command with the active agent's busy-turn semantics."""
+    agent_type = _window_agent_type(window_id)
+    capture = await capture_agent_output(user_id, thread_id, window_id)
+    pane_text = (
+        capture.text
+        if capture is not None and not capture.missing and capture.text
+        else ""
+    )
+    key = _agent_input_key(user_id, thread_id, window_id)
+    busy = (
+        bool(pane_text.strip())
+        and not is_codex_input_ready(pane_text)
+        and not is_interactive_ui(pane_text)
+    )
+    if (
+        busy
+        and thread_id is not None
+        and _window_supports_native_input_routing(window_id)
+        and _route_can_use_native_input(key)
+    ):
+        if agent_type == AGENT_CODEX:
+            offered = await _offer_input_route_choice(
+                message,
+                user_id=user_id,
+                thread_id=thread_id,
+                window_id=window_id,
+                text=command_text,
+            )
+            return offered, "", "choice"
+
+        # Claude Code natively queues slash commands entered while it responds.
+        success, result_message = await _send_native_agent_input(
+            bot,
+            user_id,
+            thread_id,
+            window_id,
+            command_text,
+            mode=AGENT_INPUT_MODE_STEER,
+        )
+        if success:
+            await mark_window_working(bot, user_id, window_id, thread_id)
+        return success, result_message, "native"
+
+    success, result_message, queued = await _send_or_queue_agent_input(
+        bot,
+        user_id,
+        thread_id,
+        window_id,
+        command_text,
+    )
+    return success, result_message, "queued" if queued else "sent"
+
+
 async def forward_command_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Forward any non-bot command as a slash command to the active Codex session."""
+    """Forward any non-bot command to the active Codex or Claude session."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
@@ -3413,13 +4078,15 @@ async def forward_command_handler(
     # The full text is already a slash command like "/clear" or "/compact foo".
     # Strip only a Telegram bot mention in the command token; keep @mentions
     # in command arguments intact.
-    cc_slash = _normalize_forward_command_text(cmd_text)
+    normalized_slash = _normalize_forward_command_text(cmd_text)
     wid = session_manager.resolve_window_for_thread(user.id, thread_id)
     target = session_manager.resolve_target_for_thread(user.id, thread_id)
     if not wid and not target:
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
+    agent_type = _window_agent_type(wid) if wid else config.agent_type
+    cc_slash = _adapt_forward_command_for_agent(normalized_slash, agent_type)
     target_window_id = target.window_id if target else ""
     display = session_manager.get_display_name(wid or target_window_id)
     logger.info(
@@ -3428,17 +4095,23 @@ async def forward_command_handler(
     await _safe_send_typing_action(update.message.chat, source="history_command")
     is_clear_command = cc_slash.strip().lower() == "/clear"
     if wid and not is_clear_command:
-        success, message, queued = await _send_or_queue_agent_input(
+        success, message, delivery = await _send_local_forwarded_command(
             context.bot,
-            user.id,
-            thread_id,
-            wid,
-            cc_slash,
+            update.message,
+            user_id=user.id,
+            thread_id=thread_id,
+            window_id=wid,
+            command_text=cc_slash,
         )
+        if delivery == "choice":
+            return
         if not success:
             await safe_reply(update.message, f"❌ {message}")
             return
-        action = "Queued" if queued else "Sent"
+        if delivery == "native":
+            await safe_reply(update.message, f"⚡ [{display}] {message}")
+            return
+        action = "Queued" if delivery == "queued" else "Sent"
         await safe_reply(update.message, f"⚡ [{display}] {action}: {cc_slash}")
         return
 
@@ -3494,16 +4167,31 @@ async def agent_command_mode(
         await safe_reply(message, "❌ No session bound to this topic.")
         return
     if wid:
-        success, result_message, queued = await _send_or_queue_agent_input(
-            context.bot, user.id, thread_id, wid, command_text
+        command_text = _adapt_forward_command_for_agent(
+            command_text,
+            _window_agent_type(wid),
         )
+        success, result_message, delivery = await _send_local_forwarded_command(
+            context.bot,
+            message,
+            user_id=user.id,
+            thread_id=thread_id,
+            window_id=wid,
+            command_text=command_text,
+        )
+        if delivery == "choice":
+            return
         if not success:
             await safe_reply(message, f"❌ {result_message}")
             return
-        action = "Queued" if queued else "Sent"
+        if delivery == "native":
+            await safe_reply(message, f"⚡ {result_message}")
+            return
+        action = "Queued" if delivery == "queued" else "Sent"
         await safe_reply(message, f"⚡ {action}: {command_text}")
         return
 
+    command_text = _adapt_forward_command_for_agent(command_text, config.agent_type)
     result = await send_agent_message(user.id, thread_id, "", command_text)
     if result is None or not result.ok:
         await safe_reply(
@@ -4548,6 +5236,7 @@ async def _refresh_session_map_after_first_prompt(
     timeout: float = 20.0,
     transcript_session_id: str | None = None,
     transcript_after_offset: int | None = None,
+    submit_key: str = "Enter",
 ) -> bool:
     """Load the session_map entry that Codex writes after the first prompt starts."""
     if transcript_session_id and not session_manager.window_matches_session(
@@ -4562,6 +5251,7 @@ async def _refresh_session_map_after_first_prompt(
                 text,
                 transcript_session_id=transcript_session_id,
                 transcript_after_offset=transcript_after_offset,
+                submit_key=submit_key,
             )
         return True
     hook_ok = await session_manager.wait_for_session_map_entry(
@@ -4574,6 +5264,7 @@ async def _refresh_session_map_after_first_prompt(
                 text,
                 transcript_session_id=transcript_session_id,
                 transcript_after_offset=transcript_after_offset,
+                submit_key=submit_key,
             )
         return True
 
@@ -4581,10 +5272,11 @@ async def _refresh_session_map_after_first_prompt(
         if await tmux_manager.prompt_still_pending(window_id, text):
             logger.warning(
                 "Codex window %s still has the first prompt in the input row; "
-                "retrying Enter before waiting for session_map again",
+                "retrying %s before waiting for session_map again",
                 window_id,
+                submit_key,
             )
-            if await tmux_manager.send_control_key(window_id, "Enter"):
+            if await tmux_manager.send_control_key(window_id, submit_key):
                 hook_ok = await session_manager.wait_for_session_map_entry(
                     window_id,
                     timeout=min(timeout, 10.0),
@@ -4595,6 +5287,7 @@ async def _refresh_session_map_after_first_prompt(
                         text,
                         transcript_session_id=transcript_session_id,
                         transcript_after_offset=transcript_after_offset,
+                        submit_key=submit_key,
                     )
         logger.warning(
             "Codex window %s accepted input but did not register session_map",
@@ -4615,6 +5308,7 @@ async def _confirm_first_prompt_delivery(
     transcript_timeout: float | None = None,
     transcript_session_id: str | None = None,
     transcript_after_offset: int | None = None,
+    submit_key: str = "Enter",
 ) -> bool:
     """Confirm that the first forwarded prompt reached the Codex transcript."""
     if transcript_timeout is None:
@@ -4638,10 +5332,11 @@ async def _confirm_first_prompt_delivery(
 
     logger.warning(
         "Agent input is still pending in window %s after transcript confirmation; "
-        "retrying Enter",
+        "retrying %s",
         window_id,
+        submit_key,
     )
-    if not await tmux_manager.send_control_key(window_id, "Enter"):
+    if not await tmux_manager.send_control_key(window_id, submit_key):
         return False
 
     transcript_ok = await session_manager.wait_for_transcript_user_message(
@@ -4662,7 +5357,7 @@ async def _confirm_first_prompt_delivery(
         return False
 
     # Unlike an input that was never observed in the prompt row, this text was
-    # visibly pending before we sent the retry Enter. Some Codex builds update
+    # visibly pending before we retried its submit key. Some Codex builds update
     # the transcript after the short confirmation window, so clearing here is
     # sufficient secondary evidence that the explicit retry was accepted.
     logger.info(
@@ -5339,6 +6034,23 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if handled:
             return
 
+    input_key = _agent_input_key(user.id, thread_id, wid)
+    if (
+        not input_was_ready
+        and bool((pane_text or "").strip())
+        and not is_interactive_ui(pane_text or "")
+        and _window_supports_native_input_routing(wid)
+        and _route_can_use_native_input(input_key)
+    ):
+        await _offer_input_route_choice(
+            update.message,
+            user_id=user.id,
+            thread_id=thread_id,
+            window_id=wid,
+            text=text,
+        )
+        return
+
     success, message, queued = await _send_or_queue_agent_input(
         context.bot,
         user.id,
@@ -5835,6 +6547,235 @@ async def _safe_answer_callback(query: Any, *args: Any, **kwargs: Any) -> bool:
         raise
 
 
+async def _handle_input_routing_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    mode: str,
+    record_id: int,
+) -> None:
+    """Consume one persisted mode choice and route it to the bound agent window."""
+    query = update.callback_query
+    user = update.effective_user
+    thread_id = _get_thread_id(update)
+    if not query or not user or thread_id is None:
+        if query:
+            await _safe_answer_callback(query, "Invalid topic", show_alert=True)
+        return
+
+    try:
+        choice = _runtime_store.claim_pending_input_choice(
+            record_id,
+            user_id=user.id,
+            thread_id=thread_id,
+            max_age_seconds=_INPUT_ROUTE_CHOICE_MAX_AGE_SECONDS,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to claim input routing choice (record=%d user=%d thread=%d)",
+            record_id,
+            user.id,
+            thread_id,
+        )
+        await _safe_answer_callback(query, "Could not load this input", show_alert=True)
+        return
+    if choice is None:
+        await _safe_answer_callback(
+            query,
+            "This input was already handled or expired",
+            show_alert=True,
+        )
+        return
+
+    if mode == INPUT_ROUTE_CANCEL:
+        await safe_edit(query, "已取消，这条消息没有发送给 Agent。")
+        await _safe_answer_callback(query, "Cancelled")
+        return
+
+    current_window_id = session_manager.resolve_window_for_thread(user.id, thread_id)
+    if not current_window_id or current_window_id != choice.window_id:
+        await safe_edit(query, "❌ 会话绑定已经变化，这条消息没有发送。")
+        await _safe_answer_callback(query, "Session changed", show_alert=True)
+        return
+    if not _window_supports_native_input_routing(current_window_id):
+        await safe_edit(query, "❌ 当前会话不支持原生引导/排队。")
+        await _safe_answer_callback(query, "Unsupported session", show_alert=True)
+        return
+    agent_type = _window_agent_type(current_window_id)
+    display_name = agent_display_name(agent_type)
+
+    capture = await capture_agent_output(user.id, thread_id, current_window_id)
+    if capture is None or capture.missing:
+        await safe_edit(
+            query,
+            f"❌ {display_name} 窗口已不存在，这条消息没有发送。",
+        )
+        await _safe_answer_callback(query, "Window missing", show_alert=True)
+        return
+    pane_text = capture.text or ""
+    auth_error = extract_auth_error_message(pane_text)
+    if auth_error:
+        recovery_message = (
+            _codex_auth_recovery_message(auth_error)
+            if agent_type == AGENT_CODEX
+            else auth_error
+        )
+        await safe_edit(query, f"❌ {recovery_message}")
+        await _safe_answer_callback(query, "Login required", show_alert=True)
+        return
+
+    if mode == INPUT_ROUTE_QUEUE and agent_type == AGENT_CLAUDE:
+        success, message, queued = await _send_or_queue_agent_input(
+            context.bot,
+            user.id,
+            thread_id,
+            current_window_id,
+            choice.text,
+        )
+        if not success:
+            await safe_edit(query, f"❌ {message}")
+            await _safe_answer_callback(query, "Queue failed", show_alert=True)
+            return
+        if not queued:
+            await mark_window_working(
+                context.bot,
+                user.id,
+                current_window_id,
+                thread_id,
+            )
+        label = f"⏳ {message}" if queued else "✅ Claude Code 已空闲，消息已发送。"
+        await safe_edit(query, label)
+        await _safe_answer_callback(query, "Queued by AgentBot" if queued else "Sent")
+        return
+
+    if not pane_text.strip():
+        if mode == INPUT_ROUTE_QUEUE:
+            success, message, _queued = await _send_or_queue_agent_input(
+                context.bot,
+                user.id,
+                thread_id,
+                current_window_id,
+                choice.text,
+            )
+            if success:
+                await safe_edit(query, f"⏳ {message}")
+                await _safe_answer_callback(query, "Queued by AgentBot")
+                return
+        await safe_edit(
+            query,
+            f"❌ 暂时无法确认 {display_name} 状态；请稍后重新发送这条消息。",
+        )
+        await _safe_answer_callback(query, "Agent state unavailable", show_alert=True)
+        return
+
+    if mode == INPUT_ROUTE_INTERRUPT:
+        await _discard_queued_agent_input(user.id, thread_id, current_window_id)
+        ok, control_message = await _send_control_to_agent(
+            user.id,
+            thread_id,
+            current_window_id,
+            "Escape",
+        )
+        if not ok:
+            await safe_edit(query, f"❌ {control_message}")
+            await _safe_answer_callback(query, "Interrupt failed", show_alert=True)
+            return
+        await asyncio.sleep(0.3)
+        success, message, queued = await _send_or_queue_agent_input(
+            context.bot,
+            user.id,
+            thread_id,
+            current_window_id,
+            choice.text,
+        )
+        if not success:
+            await safe_edit(query, f"❌ {message}")
+            await _safe_answer_callback(query, "Send failed", show_alert=True)
+            return
+        await mark_window_working(
+            context.bot,
+            user.id,
+            current_window_id,
+            thread_id,
+        )
+        label = f"⎋ 已中断；{message}" if queued else "⎋ 已中断并发送新任务。"
+        await safe_edit(query, label)
+        await _safe_answer_callback(query, "Sent")
+        return
+
+    if is_interactive_ui(pane_text):
+        if mode == INPUT_ROUTE_QUEUE:
+            success, message, _queued = await _send_or_queue_agent_input(
+                context.bot,
+                user.id,
+                thread_id,
+                current_window_id,
+                choice.text,
+            )
+            if success:
+                await safe_edit(query, f"⏳ {message}")
+                await _safe_answer_callback(query, "Queued by AgentBot")
+                return
+        await safe_edit(
+            query,
+            f"❌ {display_name} 当前显示交互确认界面；"
+            "请先处理该界面，再重新发送这条消息。",
+        )
+        await _safe_answer_callback(query, "Interactive prompt active", show_alert=True)
+        return
+
+    if is_codex_input_ready(pane_text):
+        success, message, queued = await _send_or_queue_agent_input(
+            context.bot,
+            user.id,
+            thread_id,
+            current_window_id,
+            choice.text,
+        )
+        if not success:
+            await safe_edit(query, f"❌ {message}")
+            await _safe_answer_callback(query, "Send failed", show_alert=True)
+            return
+        await mark_window_working(
+            context.bot,
+            user.id,
+            current_window_id,
+            thread_id,
+        )
+        label = (
+            f"⏳ {message}"
+            if queued
+            else f"✅ {display_name} 已空闲，消息已作为新一轮发送。"
+        )
+        await safe_edit(query, label)
+        await _safe_answer_callback(query, "Sent")
+        return
+
+    native_mode = (
+        AGENT_INPUT_MODE_QUEUE if mode == INPUT_ROUTE_QUEUE else AGENT_INPUT_MODE_STEER
+    )
+    success, message = await _send_native_agent_input(
+        context.bot,
+        user.id,
+        thread_id,
+        current_window_id,
+        choice.text,
+        mode=native_mode,
+    )
+    if not success:
+        await safe_edit(query, f"❌ {message}")
+        await _safe_answer_callback(query, "Send failed", show_alert=True)
+        return
+    await mark_window_working(
+        context.bot,
+        user.id,
+        current_window_id,
+        thread_id,
+    )
+    await safe_edit(query, f"✅ {message}")
+    await _safe_answer_callback(query, "Sent")
+
+
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -5862,6 +6803,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if data == CB_CODEX_UPDATE_DISMISS:
         await _safe_answer_callback(query, "Dismissed")
         await safe_edit(query, "Codex CLI update dismissed.")
+        return
+
+    if data.startswith(CB_INPUT_ROUTE):
+        parsed = parse_input_routing_callback(data)
+        if parsed is None:
+            await _safe_answer_callback(query, "Invalid input action", show_alert=True)
+            return
+        mode, record_id = parsed
+        await _handle_input_routing_callback(
+            update,
+            context,
+            mode=mode,
+            record_id=record_id,
+        )
         return
 
     # History: older/newer pagination
@@ -7167,6 +8122,9 @@ async def post_init(application: Application) -> None:
 
     try:
         _runtime_store.initialize()
+        _runtime_store.delete_expired_input_choices(
+            time.time() - _INPUT_ROUTE_CHOICE_MAX_AGE_SECONDS
+        )
     except Exception:
         logger.exception(
             "Durable runtime store unavailable at startup; immediate agent input "
@@ -7197,6 +8155,8 @@ async def post_init(application: Application) -> None:
         BotCommand("screenshot", "Terminal screenshot with control keys"),
         BotCommand("esc", ESC_COMMAND_DESCRIPTION),
         BotCommand("interrupt", INTERRUPT_COMMAND_DESCRIPTION),
+        BotCommand("steer", STEER_COMMAND_DESCRIPTION),
+        BotCommand("queue", QUEUE_COMMAND_DESCRIPTION),
         BotCommand("kill", "Kill session and delete topic"),
         BotCommand("unbind", "Unbind topic from session (keeps window running)"),
         BotCommand("usage", USAGE_COMMAND_DESCRIPTION),
@@ -7391,6 +8351,8 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
     application.add_handler(CommandHandler("interrupt", interrupt_command))
+    application.add_handler(CommandHandler("steer", steer_command))
+    application.add_handler(CommandHandler("queue", queue_command))
     application.add_handler(CommandHandler("kill", topic_closed_handler))
     application.add_handler(CommandHandler("unbind", unbind_command))
     application.add_handler(CommandHandler("usage", usage_command))

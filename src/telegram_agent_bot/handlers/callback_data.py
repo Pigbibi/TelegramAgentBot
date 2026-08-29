@@ -66,5 +66,8 @@ CB_PROFILE_CANCEL = "ap:cancel"
 # Per-topic output visibility mode
 CB_OUTPUT_MODE = "om:"  # om:clean|trace
 
+# Active-turn input routing
+CB_INPUT_ROUTE = "ir:"  # ir:steer|queue|interrupt|cancel:<record_id>
+
 # Screenshot control keys
 CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>

@@ -1153,6 +1153,28 @@ async def test_confirm_first_prompt_delivery_rejects_cleared_unrecorded_input():
 
 
 @pytest.mark.asyncio
+async def test_confirm_native_queue_retries_tab_instead_of_enter():
+    from telegram_agent_bot.bot import _confirm_first_prompt_delivery
+
+    with (
+        patch("telegram_agent_bot.bot.session_manager") as mock_sm,
+        patch("telegram_agent_bot.bot.tmux_manager") as mock_tmux,
+    ):
+        mock_sm.wait_for_transcript_user_message = AsyncMock(side_effect=[False, True])
+        mock_tmux.prompt_still_pending = AsyncMock(return_value=True)
+        mock_tmux.send_control_key = AsyncMock(return_value=True)
+
+        ok = await _confirm_first_prompt_delivery(
+            "@9",
+            "next turn",
+            submit_key="Tab",
+        )
+
+    assert ok is True
+    mock_tmux.send_control_key.assert_awaited_once_with("@9", "Tab")
+
+
+@pytest.mark.asyncio
 async def test_refresh_session_map_retries_enter_when_first_prompt_is_pending():
     from telegram_agent_bot.bot import _refresh_session_map_after_first_prompt
 

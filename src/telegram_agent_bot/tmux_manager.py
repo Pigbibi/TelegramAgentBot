@@ -701,7 +701,13 @@ class TmuxManager:
         return await asyncio.to_thread(_sync_capture)
 
     async def send_keys(
-        self, window_id: str, text: str, enter: bool = True, literal: bool = True
+        self,
+        window_id: str,
+        text: str,
+        enter: bool = True,
+        literal: bool = True,
+        *,
+        submit_key: str = "Enter",
     ) -> bool:
         """Send keys to a specific window.
 
@@ -711,13 +717,18 @@ class TmuxManager:
             enter: Whether to press enter after the text
             literal: If True, send text literally. If False, interpret special keys
                      like "Up", "Down", "Left", "Right", "Escape", "Enter".
+            submit_key: Control key used to submit literal text. Codex uses Enter
+                        to steer the active turn and Tab to queue the next turn.
 
         Returns:
             True if successful, False otherwise
         """
         if literal and enter:
-            # Split into text + delay + Enter via libtmux.
-            # Codex's TUI sometimes interprets a rapid-fire Enter
+            if submit_key not in {"Enter", "Tab"}:
+                raise ValueError(f"Unsupported submit key: {submit_key}")
+
+            # Split into text + delay + submit key via libtmux.
+            # Codex's TUI sometimes interprets a rapid-fire control key
             # (arriving in the same input batch as the text) as a newline
             # rather than submit.  Long pasted tracebacks need a longer gap
             # so the TUI can process all text before receiving Enter.
@@ -783,7 +794,7 @@ class TmuxManager:
                 if not await asyncio.to_thread(_send_control_key, "Escape"):
                     return False
                 await asyncio.sleep(0.2)
-            if not await asyncio.to_thread(_send_control_key, "Enter"):
+            if not await asyncio.to_thread(_send_control_key, submit_key):
                 return False
             await asyncio.sleep(0.5)
             if await asyncio.to_thread(
@@ -792,8 +803,9 @@ class TmuxManager:
                 text,
             ):
                 logger.warning(
-                    "Codex prompt still appears pending in window %s after Enter; retrying submit",
+                    "Codex prompt still appears pending in window %s after %s; retrying submit",
                     window_id,
+                    submit_key,
                 )
                 await asyncio.sleep(0.5)
                 if "@" in text or await asyncio.to_thread(
@@ -802,7 +814,7 @@ class TmuxManager:
                     if not await asyncio.to_thread(_send_control_key, "Escape"):
                         return False
                     await asyncio.sleep(0.2)
-                if not await asyncio.to_thread(_send_control_key, "Enter"):
+                if not await asyncio.to_thread(_send_control_key, submit_key):
                     return False
                 await asyncio.sleep(0.5)
                 if await asyncio.to_thread(
@@ -830,7 +842,7 @@ class TmuxManager:
                             "deferring delivery confirmation to the transcript monitor",
                             window_id,
                         )
-                        # Text and both Enter control keys reached tmux.  A visible
+                        # Text and both submit control keys reached tmux. A visible
                         # input row is only a TUI heuristic: newer Codex builds can
                         # leave it painted while the submitted turn is already
                         # running.  The caller performs authoritative transcript
