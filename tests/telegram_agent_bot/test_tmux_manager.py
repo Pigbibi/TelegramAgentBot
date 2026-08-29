@@ -629,6 +629,38 @@ class SendKeysTests(unittest.IsolatedAsyncioTestCase):
             check=False,
         )
 
+    async def test_send_keys_uses_tab_for_native_next_turn_queue(self) -> None:
+        pane = _SendKeysDummyPane()
+        window = _SendKeysDummyWindow(pane)
+        session = _SendKeysDummySession(window)
+        manager = tmux_manager_module.TmuxManager(
+            session_name="telegram-agent-bot-test"
+        )
+
+        with (
+            patch.object(manager, "get_session", return_value=session),
+            patch(
+                "telegram_agent_bot.tmux_manager.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    args=["tmux", "send-keys"], returncode=0
+                ),
+            ) as run_mock,
+            patch.object(
+                manager, "_pane_still_has_pending_literal_input", return_value=False
+            ),
+            patch.object(manager, "_pane_has_insert_overlay", return_value=False),
+        ):
+            ok = await manager.send_keys("@9", "next task", submit_key="Tab")
+
+        self.assertTrue(ok)
+        self.assertEqual(pane.commands, [("next task", False, True)])
+        run_mock.assert_called_once_with(
+            [*manager._tmux_cli_prefix(), "send-keys", "-t", "@9", "Tab"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     async def test_send_keys_falls_back_to_libtmux_when_cli_enter_fails(self) -> None:
         pane = _SendKeysDummyPane()
         window = _SendKeysDummyWindow(pane)

@@ -3,6 +3,8 @@
 import sqlite3
 
 from telegram_agent_bot.durable_state import (
+    AGENT_INPUT_MODE_QUEUE,
+    AGENT_INPUT_MODE_TURN,
     AGENT_INPUT_QUEUED,
     AGENT_INPUT_SUBMITTED_UNCONFIRMED,
     TRANSIENT_RETRY_SCHEDULED,
@@ -74,6 +76,112 @@ def test_legacy_agent_input_schema_migrates_without_losing_queue(tmp_path):
     assert record.submitted_at_epoch is None
     assert record.transcript_session_id is None
     assert record.transcript_offset is None
+    assert record.submission_mode == AGENT_INPUT_MODE_TURN
+
+
+def test_native_queue_confirmation_does_not_block_later_input(tmp_path):
+    store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+    store.initialize()
+    record = store.enqueue_agent_input(
+        user_id=12345,
+        thread_id=42,
+        window_id="@4",
+        text="next turn",
+        max_pending=20,
+        submission_mode=AGENT_INPUT_MODE_QUEUE,
+    )
+
+    assert record is not None
+    assert store.mark_agent_input_submitted(record.id)
+    assert store.has_unconfirmed_agent_input(12345, 42) is False
+    assert (
+        store.list_pending_agent_inputs()[0].submission_mode == AGENT_INPUT_MODE_QUEUE
+    )
+
+
+def test_queued_native_input_can_downgrade_to_idle_turn(tmp_path):
+    store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+    store.initialize()
+    record = store.enqueue_agent_input(
+        user_id=12345,
+        thread_id=42,
+        window_id="@4",
+        text="run now",
+        max_pending=20,
+        submission_mode=AGENT_INPUT_MODE_QUEUE,
+    )
+
+    assert record is not None
+    assert store.set_agent_input_submission_mode(
+        record.id,
+        AGENT_INPUT_MODE_TURN,
+    )
+    assert store.get_agent_input(record.id).submission_mode == AGENT_INPUT_MODE_TURN
+
+
+def test_pending_input_choice_is_owned_one_shot_and_expiring(tmp_path):
+    store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+    store.initialize()
+    choice = store.create_pending_input_choice(
+        user_id=12345,
+        thread_id=42,
+        window_id="@4",
+        text="guide this",
+        max_pending=20,
+        created_at_epoch=1000.0,
+    )
+
+    assert choice is not None
+    assert (
+        store.claim_pending_input_choice(
+            choice.id,
+            user_id=99999,
+            thread_id=42,
+            max_age_seconds=900.0,
+            now_epoch=1001.0,
+        )
+        is None
+    )
+    assert (
+        store.claim_pending_input_choice(
+            choice.id,
+            user_id=12345,
+            thread_id=42,
+            max_age_seconds=900.0,
+            now_epoch=1001.0,
+        )
+        == choice
+    )
+    assert (
+        store.claim_pending_input_choice(
+            choice.id,
+            user_id=12345,
+            thread_id=42,
+            max_age_seconds=900.0,
+            now_epoch=1001.0,
+        )
+        is None
+    )
+
+    expired = store.create_pending_input_choice(
+        user_id=12345,
+        thread_id=42,
+        window_id="@4",
+        text="too old",
+        max_pending=20,
+        created_at_epoch=1000.0,
+    )
+    assert expired is not None
+    assert (
+        store.claim_pending_input_choice(
+            expired.id,
+            user_id=12345,
+            thread_id=42,
+            max_age_seconds=900.0,
+            now_epoch=2000.0,
+        )
+        is None
+    )
 
 
 def test_transient_agent_retry_survives_state_transitions_and_reopen(tmp_path):

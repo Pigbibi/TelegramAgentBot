@@ -2219,6 +2219,7 @@ class SessionManager:
         text: str,
         *,
         reject_busy: bool = True,
+        submit_key: str = "Enter",
     ) -> tuple[bool, str]:
         """Send text to a tmux window by ID."""
         display = self.get_display_name(window_id)
@@ -2249,7 +2250,14 @@ class SessionManager:
             status = parse_status_update(pane_text)
             if status:
                 return False, f"Agent is still busy: {status}"
-        success = await tmux_manager.send_keys(window.window_id, text)
+        if submit_key == "Enter":
+            success = await tmux_manager.send_keys(window.window_id, text)
+        else:
+            success = await tmux_manager.send_keys(
+                window.window_id,
+                text,
+                submit_key=submit_key,
+            )
         if success:
             return True, f"Sent to {display}"
         return False, "Failed to send keys"

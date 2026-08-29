@@ -136,6 +136,29 @@ UI_PATTERNS: list[UIPattern] = [
         bottom=(re.compile(r"^\s*Enter to continue"),),
     ),
     UIPattern(
+        # Codex and Claude Code use different layouts for their native plugin
+        # browsers, but both expose the same keyboard controls over tmux.
+        name="Plugins",
+        top=(
+            re.compile(r"^\s*Plugins\s*$"),
+            re.compile(r"^\s*Plugins\s+Discover\s+Installed"),
+        ),
+        bottom=(
+            re.compile(r"space enable/disable.*esc close", re.IGNORECASE),
+            re.compile(r"Type to search.*Esc to go back", re.IGNORECASE),
+        ),
+        min_gap=1,
+    ),
+    UIPattern(
+        name="Skills",
+        top=(re.compile(r"^\s*Skills\s*$"),),
+        bottom=(
+            re.compile(r"Press enter to confirm or esc to go back", re.IGNORECASE),
+            re.compile(r"Esc to close", re.IGNORECASE),
+        ),
+        min_gap=1,
+    ),
+    UIPattern(
         name="Settings",
         top=(
             re.compile(r"^\s*Settings:.*tab to cycle"),

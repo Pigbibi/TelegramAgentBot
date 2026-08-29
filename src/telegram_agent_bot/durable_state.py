@@ -17,6 +17,12 @@ from pathlib import Path
 _COMPLETED_UPDATE_RETENTION_SECONDS = 7 * 24 * 60 * 60
 AGENT_INPUT_QUEUED = "queued"
 AGENT_INPUT_SUBMITTED_UNCONFIRMED = "submitted_unconfirmed"
+AGENT_INPUT_MODE_TURN = "turn"
+AGENT_INPUT_MODE_STEER = "steer"
+AGENT_INPUT_MODE_QUEUE = "queue"
+AGENT_INPUT_MODES = frozenset(
+    {AGENT_INPUT_MODE_TURN, AGENT_INPUT_MODE_STEER, AGENT_INPUT_MODE_QUEUE}
+)
 TRANSIENT_RETRY_SCHEDULED = "scheduled"
 TRANSIENT_RETRY_WAITING_RESULT = "waiting_result"
 
@@ -35,6 +41,19 @@ class PendingAgentInput:
     submitted_at_epoch: float | None = None
     transcript_session_id: str | None = None
     transcript_offset: int | None = None
+    submission_mode: str = AGENT_INPUT_MODE_TURN
+
+
+@dataclass(frozen=True, slots=True)
+class PendingInputChoice:
+    """One busy-turn Telegram message waiting for a routing choice."""
+
+    id: int
+    user_id: int
+    thread_id: int
+    window_id: str
+    text: str
+    created_at_epoch: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,10 +114,23 @@ class DurableRuntimeStore:
                         CHECK (state IN ('queued', 'submitted_unconfirmed')),
                     submitted_at_epoch REAL,
                     transcript_session_id TEXT,
-                    transcript_offset INTEGER
+                    transcript_offset INTEGER,
+                    submission_mode TEXT NOT NULL DEFAULT 'turn'
+                        CHECK (submission_mode IN ('turn', 'steer', 'queue'))
                 );
                 CREATE INDEX IF NOT EXISTS agent_input_queue_target_idx
                     ON agent_input_queue(user_id, thread_id, window_id, id);
+
+                CREATE TABLE IF NOT EXISTS pending_input_choices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    thread_id INTEGER NOT NULL,
+                    window_id TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    created_at_epoch REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS pending_input_choices_route_idx
+                    ON pending_input_choices(user_id, thread_id, id);
 
                 CREATE TABLE IF NOT EXISTS transient_agent_retries (
                     window_id TEXT PRIMARY KEY,
@@ -148,6 +180,12 @@ class DurableRuntimeStore:
                 connection.execute(
                     "ALTER TABLE agent_input_queue ADD COLUMN transcript_offset INTEGER"
                 )
+            if "submission_mode" not in agent_input_columns:
+                connection.execute(
+                    "ALTER TABLE agent_input_queue ADD COLUMN submission_mode "
+                    "TEXT NOT NULL DEFAULT 'turn' CHECK "
+                    "(submission_mode IN ('turn', 'steer', 'queue'))"
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS agent_input_queue_state_idx "
                 "ON agent_input_queue(state, created_at_epoch)"
@@ -188,6 +226,18 @@ class DurableRuntimeStore:
                 if row["transcript_offset"] is not None
                 else None
             ),
+            submission_mode=str(row["submission_mode"]),
+        )
+
+    @staticmethod
+    def _choice_from_row(row: sqlite3.Row) -> PendingInputChoice:
+        return PendingInputChoice(
+            id=int(row["id"]),
+            user_id=int(row["user_id"]),
+            thread_id=int(row["thread_id"]),
+            window_id=str(row["window_id"]),
+            text=str(row["text"]),
+            created_at_epoch=float(row["created_at_epoch"]),
         )
 
     @staticmethod
@@ -211,8 +261,11 @@ class DurableRuntimeStore:
         text: str,
         max_pending: int,
         created_at_epoch: float | None = None,
+        submission_mode: str = AGENT_INPUT_MODE_TURN,
     ) -> PendingAgentInput | None:
         """Atomically append a prompt unless the target queue is already full."""
+        if submission_mode not in AGENT_INPUT_MODES:
+            raise ValueError(f"Unsupported agent input mode: {submission_mode}")
         created_at = time.time() if created_at_epoch is None else created_at_epoch
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -225,9 +278,9 @@ class DurableRuntimeStore:
                 return None
             cursor = connection.execute(
                 "INSERT INTO agent_input_queue "
-                "(user_id, thread_id, window_id, text, created_at_epoch) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (user_id, thread_id, window_id, text, created_at),
+                "(user_id, thread_id, window_id, text, created_at_epoch, "
+                "submission_mode) VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, thread_id, window_id, text, created_at, submission_mode),
             )
             if cursor.lastrowid is None:
                 raise RuntimeError("SQLite did not return an agent input row id")
@@ -239,6 +292,7 @@ class DurableRuntimeStore:
             window_id=window_id,
             text=text,
             created_at_epoch=created_at,
+            submission_mode=submission_mode,
         )
 
     def list_pending_agent_inputs(self) -> list[PendingAgentInput]:
@@ -246,7 +300,8 @@ class DurableRuntimeStore:
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT id, user_id, thread_id, window_id, text, created_at_epoch, "
-                "state, submitted_at_epoch, transcript_session_id, transcript_offset "
+                "state, submitted_at_epoch, transcript_session_id, transcript_offset, "
+                "submission_mode "
                 "FROM agent_input_queue ORDER BY id"
             ).fetchall()
         return [self._record_from_row(row) for row in rows]
@@ -256,7 +311,8 @@ class DurableRuntimeStore:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT id, user_id, thread_id, window_id, text, created_at_epoch, "
-                "state, submitted_at_epoch, transcript_session_id, transcript_offset "
+                "state, submitted_at_epoch, transcript_session_id, transcript_offset, "
+                "submission_mode "
                 "FROM agent_input_queue WHERE id = ?",
                 (record_id,),
             ).fetchone()
@@ -286,10 +342,107 @@ class DurableRuntimeStore:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT 1 FROM agent_input_queue "
-                "WHERE user_id = ? AND thread_id = ? AND state = ? LIMIT 1",
-                (user_id, thread_id, AGENT_INPUT_SUBMITTED_UNCONFIRMED),
+                "WHERE user_id = ? AND thread_id = ? AND state = ? "
+                "AND submission_mode != ? LIMIT 1",
+                (
+                    user_id,
+                    thread_id,
+                    AGENT_INPUT_SUBMITTED_UNCONFIRMED,
+                    AGENT_INPUT_MODE_QUEUE,
+                ),
             ).fetchone()
         return row is not None
+
+    def create_pending_input_choice(
+        self,
+        *,
+        user_id: int,
+        thread_id: int,
+        window_id: str,
+        text: str,
+        max_pending: int,
+        created_at_epoch: float | None = None,
+    ) -> PendingInputChoice | None:
+        """Persist a busy-turn message until the user chooses its input mode."""
+        created_at = time.time() if created_at_epoch is None else created_at_epoch
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            pending = connection.execute(
+                "SELECT COUNT(*) FROM pending_input_choices "
+                "WHERE user_id = ? AND thread_id = ?",
+                (user_id, thread_id),
+            ).fetchone()[0]
+            if int(pending) >= max_pending:
+                return None
+            cursor = connection.execute(
+                "INSERT INTO pending_input_choices "
+                "(user_id, thread_id, window_id, text, created_at_epoch) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (user_id, thread_id, window_id, text, created_at),
+            )
+            if cursor.lastrowid is None:
+                raise RuntimeError("SQLite did not return an input choice row id")
+            record_id = int(cursor.lastrowid)
+        return PendingInputChoice(
+            id=record_id,
+            user_id=user_id,
+            thread_id=thread_id,
+            window_id=window_id,
+            text=text,
+            created_at_epoch=created_at,
+        )
+
+    def claim_pending_input_choice(
+        self,
+        record_id: int,
+        *,
+        user_id: int,
+        thread_id: int,
+        max_age_seconds: float,
+        now_epoch: float | None = None,
+    ) -> PendingInputChoice | None:
+        """Atomically consume one owned, unexpired routing choice."""
+        now = time.time() if now_epoch is None else now_epoch
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT id, user_id, thread_id, window_id, text, created_at_epoch "
+                "FROM pending_input_choices WHERE id = ? AND user_id = ? "
+                "AND thread_id = ?",
+                (record_id, user_id, thread_id),
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                "DELETE FROM pending_input_choices WHERE id = ?",
+                (record_id,),
+            )
+            record = self._choice_from_row(row)
+            if now - record.created_at_epoch > max_age_seconds:
+                return None
+            return record
+
+    def delete_pending_input_choices_for_route(
+        self,
+        user_id: int,
+        thread_id: int,
+    ) -> int:
+        """Delete unchosen busy-turn messages for one Telegram topic."""
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM pending_input_choices WHERE user_id = ? AND thread_id = ?",
+                (user_id, thread_id),
+            )
+        return cursor.rowcount
+
+    def delete_expired_input_choices(self, before_epoch: float) -> int:
+        """Delete routing choices older than the supplied epoch."""
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM pending_input_choices WHERE created_at_epoch < ?",
+                (before_epoch,),
+            )
+        return cursor.rowcount
 
     def load_health_alert_states(self) -> dict[str, HealthAlertState]:
         """Load issue cooldown state so restarts do not repeat alerts."""
@@ -330,6 +483,18 @@ class DurableRuntimeStore:
                 "UPDATE agent_input_queue SET window_id = ? WHERE id = ?",
                 (window_id, record_id),
             )
+
+    def set_agent_input_submission_mode(self, record_id: int, mode: str) -> bool:
+        """Change the mode of an input that has not touched the agent yet."""
+        if mode not in AGENT_INPUT_MODES:
+            raise ValueError(f"Unsupported agent input mode: {mode}")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE agent_input_queue SET submission_mode = ? "
+                "WHERE id = ? AND state = ?",
+                (mode, record_id, AGENT_INPUT_QUEUED),
+            )
+        return cursor.rowcount == 1
 
     def mark_agent_input_submitted(
         self,

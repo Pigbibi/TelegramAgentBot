@@ -27,12 +27,30 @@ The bot accepts:
 - Telegram voice messages through a configured transcription provider;
 - photos and files, saved locally before their paths are sent to the agent;
 - Escape and interrupt controls;
-- agent slash commands;
+- agent-native active-turn guidance and next-turn queueing;
+- agent slash commands, skills, and plugins;
 - inline-keyboard answers for supported interactive prompts.
 
-Inputs that cannot be delivered immediately are held in a bounded durable FIFO
-queue. Queue size, expiry, startup timeout, and maximum active turns are
-configurable.
+When a local Codex or Claude Code session is working, a text message offers
+**Guide current turn**, **Queue next turn**, **Interrupt and send**, and
+**Cancel** actions. Guidance maps to each CLI's Enter behavior. Codex next-turn
+input maps to native Tab; because Claude Code has no equivalent ordinary-text
+key, its next-turn action uses the durable AgentBot FIFO. `/steer <message>` and
+`/queue <message>` provide the same routing without the picker. If the agent
+becomes idle before the action is selected, the message safely starts a normal
+new turn.
+
+The Telegram command menu exposes common native commands including `/skills`,
+`/plugins`, `/status`, `/permissions`, `/mcp`, `/plan`, and `/init`. `/plugins`
+is translated to Codex `/plugins` or Claude Code `/plugin` for the bound topic.
+Use `/agentcmd /plugin-name:skill-name arguments` for plugin skills whose native
+command names cannot be represented as Telegram bot command names.
+
+Pending routing choices and submissions are persisted without putting prompt
+text in Telegram callback data. Sessions without native routing support retain
+the bounded durable FIFO. Slash commands sent while Claude Code is responding
+use Claude Code's own command queue. Queue size, expiry, startup timeout, and
+maximum active turns are configurable.
 
 ## Output
 
@@ -113,7 +131,7 @@ issues into structured prompts for existing Codex windows. See
 | `$TELEGRAM_AGENT_BOT_DIR/state.json` | Topic bindings, targets, display state, and hidden sessions |
 | `$TELEGRAM_AGENT_BOT_DIR/session_map.json` | Hook-generated window-to-session mappings |
 | `$TELEGRAM_AGENT_BOT_DIR/monitor_state.json` | Transcript monitor offsets |
-| `$TELEGRAM_AGENT_BOT_DIR/runtime.sqlite3` | Durable input queue and health alert state |
+| `$TELEGRAM_AGENT_BOT_DIR/runtime.sqlite3` | Durable input queue, routing choices, and health alert state |
 | `$TELEGRAM_AGENT_BOT_DIR/accounts/` | Optional named account snapshots |
 | `~/.codex/` | Default Codex transcript and configuration root |
 | `~/.claude/projects/` | Default Claude Code transcript root |

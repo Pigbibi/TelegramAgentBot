@@ -8,6 +8,7 @@ from telegram_agent_bot.agent_io import (
     capture_agent_output,
     create_agent_session,
     send_agent_control,
+    send_agent_input,
     send_agent_message,
     upload_agent_file,
 )
@@ -260,6 +261,55 @@ async def test_send_message_local_target_reports_missing_window(monkeypatch):
     assert result.ok is False
     assert result.missing is True
     backend.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_native_input_uses_optional_backend_capability(monkeypatch):
+    backend = DummyBackend("local")
+    backend.send_input = AsyncMock(
+        return_value=SimpleNamespace(ok=True, message="queued")
+    )
+    target = AgentTarget("local", "local", window_id="@2")
+    monkeypatch.setattr(agent_io, "get_configured_backend", lambda: backend)
+    monkeypatch.setattr(
+        agent_io.tmux_manager,
+        "find_window_by_id",
+        AsyncMock(return_value=SimpleNamespace(window_id="@2")),
+    )
+    monkeypatch.setattr(
+        agent_io.session_manager,
+        "resolve_target_for_thread",
+        lambda user_id, thread_id: target,
+    )
+
+    result = await send_agent_input(100, 42, "@2", "next", mode="queue")
+
+    assert result is not None
+    assert result.ok is True
+    backend.send_input.assert_awaited_once_with(target, "next", mode="queue")
+
+
+@pytest.mark.asyncio
+async def test_send_native_input_reports_unsupported_backend(monkeypatch):
+    backend = DummyBackend("local")
+    target = AgentTarget("local", "local", window_id="@2")
+    monkeypatch.setattr(agent_io, "get_configured_backend", lambda: backend)
+    monkeypatch.setattr(
+        agent_io.tmux_manager,
+        "find_window_by_id",
+        AsyncMock(return_value=SimpleNamespace(window_id="@2")),
+    )
+    monkeypatch.setattr(
+        agent_io.session_manager,
+        "resolve_target_for_thread",
+        lambda user_id, thread_id: target,
+    )
+
+    result = await send_agent_input(100, 42, "@2", "guide", mode="steer")
+
+    assert result is not None
+    assert result.ok is False
+    assert "does not support" in result.message
 
 
 @pytest.mark.asyncio

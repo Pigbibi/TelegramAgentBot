@@ -23,8 +23,10 @@ any time, and a bot restart does not discard the underlying terminal session.
 - Receive assistant replies, public progress, tool summaries, command output,
   and interactive prompts.
 - Resume tracked sessions and preserve topic bindings across bot restarts.
-- Queue Telegram input while an agent is busy, with bounded concurrency for
-  small servers.
+- Steer running Codex and Claude Code turns with native Enter behavior. Codex
+  next-turn input uses Tab; Claude Code uses the bounded durable Bot queue.
+- Open native skills, plugins, permissions, MCP, model, and status commands from
+  Telegram, with agent-aware command spelling.
 - Monitor host health and receive cooldown-controlled operator alerts.
 - Use the built-in local tmux backend or install the optional socket backend
   for remote agent nodes.
@@ -186,7 +188,10 @@ to stop the bound window and remove its binding.
 | `/history` | Show message history for the current topic |
 | `/mode [clean\|trace]` | Choose concise output or public tool trace |
 | `/screenshot` | Capture the visible terminal pane |
-| `/esc`, `/interrupt` | Send Escape to the agent |
+| `/esc` | Send Escape and discard unsent AgentBot inputs |
+| `/interrupt [message]` | Interrupt; optionally submit a replacement message |
+| `/steer <message>` | Guide the current Codex or Claude Code turn (native Enter) |
+| `/queue <message>` | Queue the next turn (Codex native Tab; Claude durable Bot FIFO) |
 | `/kill` | Stop the bound window and remove the topic binding |
 | `/unbind` | Remove the binding but keep the window running |
 | `/usage` | Show Codex usage information |
@@ -196,9 +201,13 @@ to stop the bound window and remove its binding.
 | `/codexlogin`, `/codexaccount` | Manage Codex authentication |
 | `/claudelogin`, `/claudeaccount` | Manage Claude Code authentication |
 | `/agentcmd`, `/cmd` | Forward an arbitrary agent slash command |
+| `/skills`, `/plugins` | Open the active agent's native skills or plugin command |
 
 Agent commands such as `/clear`, `/compact`, `/goal`, `/help`, `/memory`, and
-`/model` are forwarded to the active CLI session.
+`/model` are forwarded to the active CLI session. The stable `/plugins` entry
+maps to Codex `/plugins` or Claude Code `/plugin`. Invoke plugin-provided skills
+whose names contain `:` or `-` through `/agentcmd`, for example
+`/agentcmd /plugin-name:skill-name arguments`.
 
 ## Security model
 

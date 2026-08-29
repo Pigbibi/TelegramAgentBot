@@ -416,6 +416,68 @@ class TestExtractInteractiveContent:
         assert result.name == "Settings"
         assert "Enter to confirm" in result.content
 
+    def test_codex_plugin_browser(self):
+        pane = (
+            "  Plugins\n"
+            "  Browse plugins from available marketplaces.\n"
+            "  Installed 5 of 3105 available plugins.\n"
+            "\n"
+            "  [All Plugins]  Installed (5)  OpenAI Curated\n"
+            "\n"
+            "› [*] Build Web Apps  Installed\n"
+            "\n"
+            "  space enable/disable · ←/→ select marketplace · enter view details · esc close\n"
+        )
+
+        result = extract_interactive_content(pane)
+
+        assert result is not None
+        assert result.name == "Plugins"
+        assert "Build Web Apps" in result.content
+
+    def test_claude_plugin_browser(self):
+        pane = (
+            "  Plugins  Discover   Installed   Marketplaces   Errors\n"
+            "\n"
+            "  Discover plugins (1/255)\n"
+            "\n"
+            "  ❯ ◯ frontend-design · claude-plugins-official\n"
+            "\n"
+            "  Type to search · Space to toggle · Enter to view · Esc to go back\n"
+        )
+
+        result = extract_interactive_content(pane)
+
+        assert result is not None
+        assert result.name == "Plugins"
+        assert "frontend-design" in result.content
+
+    @pytest.mark.parametrize(
+        "pane",
+        [
+            pytest.param(
+                "  Skills\n"
+                "  Choose an action\n\n"
+                "› 1. List skills\n"
+                "  2. Enable/Disable Skills\n\n"
+                "  Press enter to confirm or esc to go back\n",
+                id="codex",
+            ),
+            pytest.param(
+                "  Skills\n\n"
+                "  No skills found\n"
+                "  Create skills in .claude/skills/ or ~/.claude/skills/\n\n"
+                "  Esc to close\n",
+                id="claude",
+            ),
+        ],
+    )
+    def test_agent_skills_browser(self, pane: str):
+        result = extract_interactive_content(pane)
+
+        assert result is not None
+        assert result.name == "Skills"
+
     def test_hook_trust_prompt(self):
         pane = (
             "  Hooks\n"

@@ -9,11 +9,14 @@ from .base import (
     MessageCallback,
     SendResult,
 )
+from .input_routing import AgentInputMode, AgentInputRouter
 from .registry import get_configured_backend, load_backend, register_backend
 
 __all__ = [
     "AgentBackend",
     "AgentTarget",
+    "AgentInputMode",
+    "AgentInputRouter",
     "BackendInfo",
     "CreateSessionRequest",
     "CreateSessionResult",
