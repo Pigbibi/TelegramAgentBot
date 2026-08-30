@@ -52,3 +52,19 @@ async def test_safe_reply_does_not_retry_non_connect_error(
     assert result == "plain-ok"
     assert reply.await_count == 2
     sleep_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_with_fallback_does_not_resend_after_read_timeout() -> None:
+    bot = AsyncMock()
+    bot.send_message.side_effect = NetworkError("httpx.ReadTimeout")
+
+    with pytest.raises(NetworkError, match="ReadTimeout"):
+        await message_sender.send_with_fallback(
+            bot,
+            -100123,
+            "Thinking",
+            at_most_once=True,
+        )
+
+    bot.send_message.assert_awaited_once()

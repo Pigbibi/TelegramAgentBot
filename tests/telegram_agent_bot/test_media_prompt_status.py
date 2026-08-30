@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 from telegram.error import TimedOut
 
+from telegram_agent_bot import bot as bot_module
 from telegram_agent_bot.backends.base import AgentTarget
 from telegram_agent_bot.backends.files import FileUploadResult
 
@@ -26,6 +27,120 @@ def _make_base_update(user_id: int = 12345, thread_id: int = 42):
     update.effective_chat.type = "supergroup"
     update.effective_chat.id = -1001234567890
     return update
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler_name", "directory_attr", "media_kind", "expected_suffix"),
+    [
+        ("photo_handler", "_IMAGES_DIR", "photo", "_photo1.jpg)"),
+        (
+            "document_handler",
+            "_FILES_DIR",
+            "document",
+            "_doc1_report.pdf)",
+        ),
+    ],
+)
+async def test_busy_media_offers_native_routing_choice(
+    monkeypatch,
+    tmp_path,
+    handler_name,
+    directory_attr,
+    media_kind,
+    expected_suffix,
+):
+    update = _make_base_update()
+    context = _make_context()
+    update.message.caption = "review this"
+
+    media = MagicMock()
+    media.file_unique_id = f"{media_kind}1" if media_kind == "photo" else "doc1"
+    if media_kind == "photo":
+        update.message.photo = [media]
+        attachment_prefix = "review this\n\n(image attached: "
+    else:
+        media.file_name = "report.pdf"
+        update.message.document = media
+        attachment_prefix = "review this\n\n(file attached: "
+
+    window = SimpleNamespace(
+        window_id="@1",
+        cwd="/tmp/project",
+        pane_current_command="codex",
+    )
+    offer_choice = AsyncMock(return_value=True)
+    send_or_queue = AsyncMock()
+
+    monkeypatch.setattr(bot_module, "is_user_allowed", lambda _user_id: True)
+    monkeypatch.setattr(bot_module, "_get_thread_id", lambda _update: 42)
+    monkeypatch.setattr(bot_module, directory_attr, tmp_path)
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "set_group_chat_id",
+        lambda _user_id, _thread_id, _chat_id: None,
+    )
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "get_ambiguous_window_for_thread",
+        lambda _user_id, _thread_id: None,
+    )
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "get_window_for_thread",
+        lambda _user_id, _thread_id: "@1",
+    )
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "window_has_usage_limit_exceeded",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        bot_module.tmux_manager,
+        "find_window_by_id",
+        AsyncMock(return_value=window),
+    )
+    monkeypatch.setattr(bot_module, "_download_telegram_media", AsyncMock())
+    monkeypatch.setattr(
+        bot_module,
+        "_handle_non_codex_bound_window",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "capture_agent_output",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                text="• Working (12s • esc to interrupt)\n\n  gpt-5.5 · ~/repo",
+                missing=False,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_handle_auth_error_bound_window",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        bot_module, "_window_supports_native_input_routing", lambda _wid: True
+    )
+    monkeypatch.setattr(bot_module, "_route_can_use_native_input", lambda _key: True)
+    monkeypatch.setattr(bot_module, "_offer_input_route_choice", offer_choice)
+    monkeypatch.setattr(bot_module, "_send_or_queue_agent_input", send_or_queue)
+    monkeypatch.setattr(bot_module, "enqueue_status_update", AsyncMock())
+    monkeypatch.setattr(bot_module, "_safe_send_typing_action", AsyncMock())
+    monkeypatch.setattr(bot_module, "mark_window_working", AsyncMock())
+
+    await getattr(bot_module, handler_name)(update, context)
+
+    offer_choice.assert_awaited_once()
+    offer_kwargs = offer_choice.await_args.kwargs
+    assert offer_kwargs["user_id"] == 12345
+    assert offer_kwargs["thread_id"] == 42
+    assert offer_kwargs["window_id"] == "@1"
+    assert offer_kwargs["text"].startswith(attachment_prefix)
+    assert offer_kwargs["text"].endswith(expected_suffix)
+    send_or_queue.assert_not_awaited()
 
 
 @pytest.mark.asyncio

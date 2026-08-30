@@ -28,7 +28,7 @@ from typing import Literal
 
 from telegram import Bot
 from telegram.constants import ChatAction
-from telegram.error import BadRequest, RetryAfter
+from telegram.error import BadRequest, NetworkError, RetryAfter
 
 from ..config import config
 from ..markdown_v2 import convert_markdown
@@ -134,6 +134,12 @@ _STATUS_MESSAGES_FILE = config.config_dir / "status_messages.json"
 _PERMANENT_DELIVERY_FAILURES_FILE = config.config_dir / "delivery_dead_letters.json"
 _PERMANENT_DELIVERY_FAILURE_THRESHOLD = 3
 _MIN_WORKING_STATUS_VISIBLE_SECONDS = 1.5
+
+# A NetworkError after send_message() is ambiguous: Telegram may have created
+# the status message without returning its message_id.  Suppress further status
+# sends for that window until a new user turn starts, otherwise the poller can
+# immediately create the duplicate it was trying to avoid.
+_uncertain_status_windows: dict[StatusKey, str] = {}
 
 
 def _delivery_failure_key(user_id: int, thread_id: int | None) -> str:
@@ -272,7 +278,7 @@ async def _notify_permanent_delivery_failure(
 
 def _should_repost_status(status_text: str, created_at: float) -> bool:
     """Return whether an active status should be re-sent as a fresh message."""
-    interval = getattr(config, "status_repost_interval", 60.0)
+    interval = getattr(config, "status_repost_interval", 0.0)
     return (
         interval > 0
         and is_active_working_status(status_text)
@@ -1248,6 +1254,8 @@ async def _do_send_status_message(
 ) -> None:
     """Send a new status message and track it (internal, called from worker)."""
     skey = (user_id, thread_id_or_0)
+    if _uncertain_status_windows.get(skey) == window_id:
+        return
     thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
     chat_id = session_manager.resolve_chat_id(user_id, thread_id)
     # Safety net: delete any orphaned status message before sending a new one.
@@ -1276,13 +1284,27 @@ async def _do_send_status_message(
             raise
         except Exception:
             pass
-    sent = await send_with_fallback(
-        bot,
-        chat_id,
-        text,
-        **_send_kwargs(thread_id),  # type: ignore[arg-type]
-    )
+    try:
+        sent = await send_with_fallback(
+            bot,
+            chat_id,
+            text,
+            at_most_once=True,
+            **_send_kwargs(thread_id),  # type: ignore[arg-type]
+        )
+    except NetworkError as exc:
+        _uncertain_status_windows[skey] = window_id
+        logger.warning(
+            "Status delivery outcome is unknown; suppressing duplicate sends "
+            "until the next turn: user=%d thread=%d window_id=%s error=%s",
+            user_id,
+            thread_id_or_0,
+            window_id,
+            exc,
+        )
+        return
     if sent:
+        _uncertain_status_windows.pop(skey, None)
         _set_status_info(skey, (sent.message_id, window_id, text, time.monotonic()))
 
 
@@ -1409,6 +1431,9 @@ async def enqueue_status_update(
 
     tid = thread_id or 0
 
+    if status_text and _uncertain_status_windows.get((user_id, tid)) == window_id:
+        return
+
     # Deduplicate: skip if text matches what's already displayed
     if status_text:
         skey = (user_id, tid)
@@ -1448,6 +1473,18 @@ def clear_status_msg_info(user_id: int, thread_id: int | None = None) -> None:
     """Clear status message tracking for a user (and optionally a specific thread)."""
     skey = (user_id, thread_id or 0)
     _pop_status_info(skey)
+    _uncertain_status_windows.pop(skey, None)
+
+
+def begin_status_run(
+    user_id: int,
+    thread_id: int | None,
+    window_id: str,
+) -> None:
+    """Allow status delivery again when a new user turn starts."""
+    skey = (user_id, thread_id or 0)
+    if _uncertain_status_windows.get(skey) == window_id:
+        _uncertain_status_windows.pop(skey, None)
 
 
 def clear_tool_msg_ids_for_topic(user_id: int, thread_id: int | None = None) -> None:

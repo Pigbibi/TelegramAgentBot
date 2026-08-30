@@ -41,6 +41,7 @@ from .interactive_ui import (
 )
 from .cleanup import clear_topic_state
 from .message_queue import (
+    begin_status_run,
     enqueue_content_message,
     enqueue_status_update,
     get_message_queue,
@@ -97,6 +98,7 @@ async def mark_window_working(
     thread_id: int | None = None,
 ) -> None:
     """Start an immediate local Thinking timer for a just-submitted prompt."""
+    begin_status_run(user_id, thread_id, window_id)
     started_at = time.monotonic()
     _, status_text = start_working(
         user_id,

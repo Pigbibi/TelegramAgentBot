@@ -192,9 +192,9 @@ class TestConfigValid:
         cfg = Config()
         assert cfg.status_poll_interval == 0.5
 
-    def test_status_repost_interval_defaults_to_one_minute(self):
+    def test_status_repost_interval_defaults_to_disabled(self):
         cfg = Config()
-        assert cfg.status_repost_interval == 60.0
+        assert cfg.status_repost_interval == 0.0
 
     def test_custom_status_repost_interval(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_STATUS_REPOST_INTERVAL", "120")

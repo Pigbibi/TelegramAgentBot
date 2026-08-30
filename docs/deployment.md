@@ -186,8 +186,9 @@ tmux -S ~/.telegram-agent-bot/tmux/telegram-agent-bot \
 ### Telegram shows repeated status updates
 
 `TELEGRAM_AGENT_BOT_STATUS_REPOST_INTERVAL` controls how often a long-running
-status is sent as a new message. Set it to `0` to edit the existing status only,
-or choose a larger interval.
+status is sent as a new message. It defaults to `0`, which edits the existing
+status only. Choose a larger interval only when fresh topic bumps are worth the
+risk of leaving an older status visible after an ambiguous Telegram response.
 
 Host alerts have a separate cooldown controlled by
 `TELEGRAM_AGENT_BOT_HEALTH_ALERT_COOLDOWN_SECONDS`. Alert state survives service

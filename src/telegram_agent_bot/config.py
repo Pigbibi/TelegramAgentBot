@@ -263,7 +263,7 @@ class Config:
         )
         self.status_repost_interval = max(
             0.0,
-            float(os.getenv("TELEGRAM_AGENT_BOT_STATUS_REPOST_INTERVAL", "60.0")),
+            float(os.getenv("TELEGRAM_AGENT_BOT_STATUS_REPOST_INTERVAL", "0")),
         )
         self.agent_input_queue_max_size = max(
             1,

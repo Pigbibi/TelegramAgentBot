@@ -98,7 +98,7 @@ plugin for remote execution.
 | `TELEGRAM_AGENT_BOT_IDLE_SESSION_TIMEOUT_SECONDS` | `1800` | Stop an idle resumable process; `0` disables hibernation |
 | `TELEGRAM_AGENT_BOT_MONITOR_POLL_INTERVAL` | `2.0` | Transcript polling interval in seconds |
 | `TELEGRAM_AGENT_BOT_STATUS_POLL_INTERVAL` | `1.0` | Terminal status polling interval in seconds |
-| `TELEGRAM_AGENT_BOT_STATUS_REPOST_INTERVAL` | `60.0` | Re-send long-running status messages; `0` edits in place only |
+| `TELEGRAM_AGENT_BOT_STATUS_REPOST_INTERVAL` | `0` | Re-send long-running status messages; `0` edits in place only |
 
 For a host with about 2 GB of RAM, keep `MAX_ACTIVE_TURNS` at `1` or `2` and
 avoid raising Telegram update concurrency without measuring memory usage.
