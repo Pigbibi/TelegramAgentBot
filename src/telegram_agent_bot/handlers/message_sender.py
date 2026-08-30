@@ -113,6 +113,8 @@ async def send_with_fallback(
     bot: Bot,
     chat_id: int,
     text: str,
+    *,
+    at_most_once: bool = False,
     **kwargs: Any,
 ) -> Message | None:
     """Send message with MarkdownV2, falling back to plain text on failure.
@@ -121,6 +123,7 @@ async def send_with_fallback(
     RetryAfter is re-raised for caller handling.
     """
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
+    formatted_error: Exception | None = None
     try:
         return await _call_with_connect_retry(
             lambda: bot.send_message(
@@ -133,29 +136,45 @@ async def send_with_fallback(
         )
     except RetryAfter:
         raise
+    except NetworkError as exc:
+        if at_most_once:
+            # A read-side network failure is ambiguous: Telegram may have
+            # accepted the formatted message even though its response never
+            # reached us.  A fallback could create an untracked duplicate.
+            logger.warning(
+                "Formatted message delivery outcome is unknown for %d; "
+                "skipping plain-text fallback to avoid a duplicate: %s",
+                chat_id,
+                exc,
+            )
+            raise
+        formatted_error = exc
     except Exception as exc:
+        formatted_error = exc
+
+    assert formatted_error is not None
+    _raise_if_permanent_topic_error(
+        formatted_error,
+        chat_id=chat_id,
+        message_thread_id=kwargs.get("message_thread_id"),
+    )
+    try:
+        return await _call_with_connect_retry(
+            lambda: bot.send_message(
+                chat_id=chat_id, text=strip_sentinels(text), **kwargs
+            ),
+            action=f"Send plain message to {chat_id}",
+        )
+    except RetryAfter:
+        raise
+    except Exception as e:
         _raise_if_permanent_topic_error(
-            exc,
+            e,
             chat_id=chat_id,
             message_thread_id=kwargs.get("message_thread_id"),
         )
-        try:
-            return await _call_with_connect_retry(
-                lambda: bot.send_message(
-                    chat_id=chat_id, text=strip_sentinels(text), **kwargs
-                ),
-                action=f"Send plain message to {chat_id}",
-            )
-        except RetryAfter:
-            raise
-        except Exception as e:
-            _raise_if_permanent_topic_error(
-                e,
-                chat_id=chat_id,
-                message_thread_id=kwargs.get("message_thread_id"),
-            )
-            logger.error(f"Failed to send message to {chat_id}: {e}")
-            return None
+        logger.error(f"Failed to send message to {chat_id}: {e}")
+        return None
 
 
 async def send_photo(

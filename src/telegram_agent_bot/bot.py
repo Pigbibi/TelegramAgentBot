@@ -2319,6 +2319,24 @@ def _agent_input_key(
     return (user_id, thread_id or 0, window_id)
 
 
+def _should_offer_input_route_choice(
+    *,
+    user_id: int,
+    thread_id: int,
+    window_id: str,
+    pane_text: str | None,
+) -> bool:
+    """Return whether a busy local agent can route this input natively."""
+    current_output = pane_text or ""
+    return (
+        not is_codex_input_ready(current_output)
+        and bool(current_output.strip())
+        and not is_interactive_ui(current_output)
+        and _window_supports_native_input_routing(window_id)
+        and _route_can_use_native_input(_agent_input_key(user_id, thread_id, window_id))
+    )
+
+
 def _agent_input_lock(key: tuple[int, int, str]) -> asyncio.Lock:
     route = key[:2]
     lock = _agent_input_locks.get(route)
@@ -4457,6 +4475,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
+    pane_text: str | None = None
     if wid and w:
         pane_cmd = (getattr(w, "pane_current_command", "") or "").strip()
         handled = await _handle_non_codex_bound_window(
@@ -4500,6 +4519,21 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             thread_id=thread_id,
             current_window_id=wid,
             current_window_cwd=w.cwd,
+            text=text_to_send,
+        )
+        return
+
+    if wid and _should_offer_input_route_choice(
+        user_id=user.id,
+        thread_id=thread_id,
+        window_id=wid,
+        pane_text=pane_text,
+    ):
+        await _offer_input_route_choice(
+            update.message,
+            user_id=user.id,
+            thread_id=thread_id,
+            window_id=wid,
             text=text_to_send,
         )
         return
@@ -4631,6 +4665,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
 
+    pane_text: str | None = None
     if wid and w:
         pane_cmd = (getattr(w, "pane_current_command", "") or "").strip()
         handled = await _handle_non_codex_bound_window(
@@ -4674,6 +4709,21 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             thread_id=thread_id,
             current_window_id=wid,
             current_window_cwd=w.cwd,
+            text=text_to_send,
+        )
+        return
+
+    if wid and _should_offer_input_route_choice(
+        user_id=user.id,
+        thread_id=thread_id,
+        window_id=wid,
+        pane_text=pane_text,
+    ):
+        await _offer_input_route_choice(
+            update.message,
+            user_id=user.id,
+            thread_id=thread_id,
+            window_id=wid,
             text=text_to_send,
         )
         return
@@ -6034,13 +6084,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if handled:
             return
 
-    input_key = _agent_input_key(user.id, thread_id, wid)
-    if (
-        not input_was_ready
-        and bool((pane_text or "").strip())
-        and not is_interactive_ui(pane_text or "")
-        and _window_supports_native_input_routing(wid)
-        and _route_can_use_native_input(input_key)
+    if _should_offer_input_route_choice(
+        user_id=user.id,
+        thread_id=thread_id,
+        window_id=wid,
+        pane_text=pane_text,
     ):
         await _offer_input_route_choice(
             update.message,

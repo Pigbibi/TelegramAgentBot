@@ -404,6 +404,35 @@ async def test_long_running_status_is_reposted_as_fresh_message(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ambiguous_status_send_is_not_retried_until_next_turn(monkeypatch):
+    """A timed-out send may already exist in Telegram and must not be duplicated."""
+    message_queue._status_msg_info.clear()
+    message_queue._uncertain_status_windows.clear()
+
+    bot = AsyncMock()
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "resolve_chat_id",
+        lambda user_id, thread_id=None: -100123,
+    )
+    send = AsyncMock(side_effect=message_queue.NetworkError("httpx.ReadTimeout"))
+    monkeypatch.setattr(message_queue, "send_with_fallback", send)
+
+    try:
+        await message_queue._do_send_status_message(bot, 1, 42, "@4", "Thinking (1s)")
+        await message_queue._do_send_status_message(bot, 1, 42, "@4", "Thinking (2s)")
+
+        send.assert_awaited_once()
+
+        message_queue.begin_status_run(1, 42, "@4")
+        await message_queue._do_send_status_message(bot, 1, 42, "@4", "Thinking (0s)")
+        assert send.await_count == 2
+    finally:
+        message_queue._status_msg_info.clear()
+        message_queue._uncertain_status_windows.clear()
+
+
+@pytest.mark.asyncio
 async def test_failed_status_to_content_conversion_deletes_old_status(monkeypatch):
     """A failed status conversion must not leave a stale status bubble."""
     message_queue._status_msg_info.clear()
