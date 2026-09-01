@@ -1372,14 +1372,14 @@ async def test_recovery_failure_after_original_id_reuse_keeps_saved_state(monkey
 
 
 @pytest.mark.asyncio
-async def test_recovery_commits_binding_only_after_validation(monkeypatch):
+async def test_recovery_keeps_hook_session_identity_after_validation(monkeypatch):
     old_state = SimpleNamespace(
         session_id="sid-1",
         cwd="/tmp/repo",
         window_name="Repo",
         account_name="",
     )
-    new_state = SimpleNamespace(session_id="", account_name="")
+    new_state = SimpleNamespace(session_id="resumed-session", account_name="")
     session_manager = MagicMock()
     session_manager.window_states = {"@8": old_state}
     session_manager.user_window_offsets = {}
@@ -1420,18 +1420,12 @@ async def test_recovery_commits_binding_only_after_validation(monkeypatch):
     assert ok is True
     assert "Recovered window" in message
     session_manager.wait_for_session_map_entry.assert_awaited_once_with(
-        "@9", timeout=15.0, expected_session_id="sid-1", apply=False
+        "@9", timeout=15.0
     )
     session_manager.prepare_window_launch.assert_called_once_with(
         "@9", cwd="/tmp/repo", window_name="Repo", account_name=""
     )
-    session_manager.register_session_to_window.assert_called_once_with(
-        "@9",
-        "sid-1",
-        "/tmp/repo",
-        window_name="Repo",
-        persist_session_map=True,
-    )
+    session_manager.register_session_to_window.assert_not_called()
     session_manager.bind_thread.assert_called_once_with(
         12345, 42, "@9", window_name="Repo"
     )

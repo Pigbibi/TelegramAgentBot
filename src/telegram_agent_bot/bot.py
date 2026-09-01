@@ -5523,40 +5523,38 @@ async def _recover_missing_bound_window(
         await discard_failed_window()
         return False, startup_message
 
-    # Do not synthesize a session_map entry before validating the resumed
-    # process. A synthetic entry used to make failed resumes look successful.
-    hook_ok = await session_manager.wait_for_session_map_entry(
-        created_wid,
-        timeout=15.0,
-        expected_session_id=resume_session_id,
-        apply=False,
-    )
-    healthy, health_message = await _recovered_agent_process_status(created_wid)
-    if not healthy:
-        await discard_failed_window()
-        return False, health_message
-
+    # Prepare the new window before loading its SessionStart hook result. The
+    # hook owns the active transcript identity after a resume.
     session_manager.prepare_window_launch(
         created_wid,
         cwd=str(selected_path),
         window_name=created_wname,
         account_name=account_name or "",
     )
+    hook_ok = await session_manager.wait_for_session_map_entry(
+        created_wid,
+        timeout=15.0,
+    )
+    healthy, health_message = await _recovered_agent_process_status(created_wid)
+    if not healthy:
+        await discard_failed_window()
+        return False, health_message
+
     if not hook_ok:
         logger.info(
             "Recovered missing window %s as %s without a hook entry; "
-            "tracking resumed session_id=%s",
+            "falling back to resumed session_id=%s",
             old_window_id,
             created_wid,
             resume_session_id,
         )
-    session_manager.register_session_to_window(
-        created_wid,
-        resume_session_id,
-        str(selected_path),
-        window_name=created_wname,
-        persist_session_map=True,
-    )
+        session_manager.register_session_to_window(
+            created_wid,
+            resume_session_id,
+            str(selected_path),
+            window_name=created_wname,
+            persist_session_map=True,
+        )
     ws = session_manager.get_window_state(created_wid)
     ws.account_name = account_name or ""
     session_manager._save_state()
@@ -6289,18 +6287,6 @@ async def _create_and_bind_window(
             reasoning_effort=profile.reasoning_effort,
             fast_mode=profile.fast_mode,
         )
-        if resume_session_id:
-            # A resumed Codex window continues writing to the original JSONL.
-            # Persist that expected session immediately so the transcript
-            # monitor cannot auto-bind an older same-cwd transcript while the
-            # TUI is still restoring.
-            session_manager.register_session_to_window(
-                created_wid,
-                resume_session_id,
-                str(selected_path),
-                window_name=created_wname,
-                persist_session_map=True,
-            )
         logger.info(
             "Window created: %s (id=%s) at %s (user=%d, thread=%s, resume=%s, account=%s)",
             created_wname,
@@ -6320,34 +6306,26 @@ async def _create_and_bind_window(
                 created_wid, timeout=15.0
             )
 
-        # --resume creates a new session_id in the hook, but messages continue
-        # writing to the resumed session's JSONL file. Override window_state to
-        # track the original session_id so the monitor can route messages back.
+        # Keep the SessionStart identity when Codex reports one. Current Codex
+        # versions write resumed turns to that transcript, not the selected
+        # historical session. Only fall back to the selected session when no
+        # hook entry arrives.
         if resume_session_id:
-            ws = session_manager.get_window_state(created_wid)
             if not hook_ok:
-                # Hook timed out — manually populate window_state so the
-                # monitor can still route messages back to this topic.
                 logger.warning(
                     "Hook timed out for resume window %s, "
-                    "manually setting session_id=%s cwd=%s",
+                    "falling back to session_id=%s cwd=%s",
                     created_wid,
                     resume_session_id,
                     selected_path,
                 )
-                ws.session_id = resume_session_id
-                ws.cwd = str(selected_path)
-                ws.window_name = created_wname
-                session_manager._save_state()
-            elif ws.session_id != resume_session_id:
-                logger.info(
-                    "Resume override: window %s session_id %s -> %s",
+                session_manager.register_session_to_window(
                     created_wid,
-                    ws.session_id,
                     resume_session_id,
+                    str(selected_path),
+                    window_name=created_wname,
+                    persist_session_map=True,
                 )
-                ws.session_id = resume_session_id
-                session_manager._save_state()
 
         if pending_thread_id is not None:
             # Thread bind flow: bind thread to newly created window
