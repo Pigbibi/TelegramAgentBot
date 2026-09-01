@@ -1419,7 +1419,9 @@ async def test_recovery_keeps_hook_session_identity_after_validation(monkeypatch
 
     assert ok is True
     assert "Recovered window" in message
-    session_manager.wait_for_session_map_entry.assert_awaited_once_with("@9", timeout=15.0)
+    session_manager.wait_for_session_map_entry.assert_awaited_once_with(
+        "@9", timeout=15.0
+    )
     session_manager.prepare_window_launch.assert_called_once_with(
         "@9", cwd="/tmp/repo", window_name="Repo", account_name=""
     )

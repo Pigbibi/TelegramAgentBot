@@ -349,9 +349,7 @@ class TestSessionPickerIsolation:
             patch("telegram.CallbackQuery", DummyCallbackQuery),
             patch("telegram.User", DummyUser),
             patch("telegram_agent_bot.bot.session_manager") as mock_sm,
-            patch(
-                "telegram_agent_bot.bot.safe_edit", new_callable=AsyncMock
-            ),
+            patch("telegram_agent_bot.bot.safe_edit", new_callable=AsyncMock),
             patch("telegram_agent_bot.bot.get_default_account_name", return_value=""),
             patch(
                 "telegram_agent_bot.bot.create_agent_session",
@@ -379,9 +377,7 @@ class TestSessionPickerIsolation:
                 resume_session_id="selected-session",
             )
 
-        mock_sm.wait_for_session_map_entry.assert_awaited_once_with(
-            "@1", timeout=15.0
-        )
+        mock_sm.wait_for_session_map_entry.assert_awaited_once_with("@1", timeout=15.0)
         mock_sm.register_session_to_window.assert_not_called()
         assert hook_state.session_id == "resumed-session"
 
