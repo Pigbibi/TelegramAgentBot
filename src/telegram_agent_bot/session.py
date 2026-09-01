@@ -38,6 +38,12 @@ from .account_manager import ACCOUNT_HOME_DIR, list_account_homes
 from .agent_profile import normalize_agent_type
 from .backends.base import AgentTarget
 from .config import config
+from .durable_state import (
+    ConversationDeliveryOffset,
+    ConversationRegistrySnapshot,
+    ConversationRoute,
+    DurableRuntimeStore,
+)
 from .output_mode import normalize_output_mode
 from .terminal_parser import (
     extract_auth_error_message,
@@ -226,6 +232,14 @@ class CodexSession:
     file_path: str
 
 
+@dataclass(frozen=True)
+class RouteDeliveryIdentity:
+    """The route generation and transcript identity that own one UI event."""
+
+    generation: int
+    session_id: str = ""
+
+
 @dataclass
 class SessionManager:
     """Manages session state for Codex.
@@ -264,6 +278,13 @@ class SessionManager:
     hidden_session_ids: set[str] = field(default_factory=set)
     # Sessions that were ever managed through a Telegram topic.
     topic_managed_session_ids: set[str] = field(default_factory=set)
+    # Set after bot startup has migrated or restored routing from SQLite.
+    _runtime_store: DurableRuntimeStore | None = field(
+        default=None, init=False, repr=False
+    )
+    _route_generations: dict[tuple[int, int], int] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         self._load_state()
@@ -305,6 +326,7 @@ class SessionManager:
         )
 
     def _save_state(self) -> None:
+        self._sync_durable_registry()
         state: dict[str, Any] = {
             "window_states": {k: v.to_dict() for k, v in self.window_states.items()},
             "user_window_offsets": {
@@ -333,6 +355,163 @@ class SessionManager:
         }
         atomic_write_json(config.state_file, state)
         logger.debug("State saved to %s", config.state_file)
+
+    def _conversation_registry_routes(self) -> list[ConversationRoute]:
+        """Project current topic targets into the durable routing schema."""
+        routes: list[ConversationRoute] = []
+        route_keys: set[tuple[int, int]] = set()
+        for user_id, thread_id, window_id in self.iter_thread_bindings():
+            target = self.thread_targets.get(user_id, {}).get(thread_id)
+            if target is None:
+                state = self.window_states.get(window_id)
+                target = self._local_target(
+                    window_id,
+                    session_id=state.session_id if state else "",
+                )
+            route_keys.add((user_id, thread_id))
+            routes.append(self._route_from_target(user_id, thread_id, target))
+
+        for user_id, targets in self.thread_targets.items():
+            for thread_id, target in targets.items():
+                if (user_id, thread_id) in route_keys:
+                    continue
+                routes.append(self._route_from_target(user_id, thread_id, target))
+        return routes
+
+    def _route_from_target(
+        self, user_id: int, thread_id: int, target: AgentTarget
+    ) -> ConversationRoute:
+        session_id = target.session_id
+        if target.backend_id == "local" and target.window_id:
+            state = self.window_states.get(target.window_id)
+            if state is not None:
+                session_id = state.session_id
+        return ConversationRoute(
+            user_id=user_id,
+            thread_id=thread_id,
+            backend_id=target.backend_id,
+            node_id=target.node_id,
+            window_id=target.window_id,
+            session_id=session_id,
+        )
+
+    def _conversation_delivery_offsets(self) -> list[ConversationDeliveryOffset]:
+        """Project current transcript cursors with their session identities."""
+        offsets: list[ConversationDeliveryOffset] = []
+        for user_id, user_offsets in self.user_window_offsets.items():
+            sessions = self.user_window_offset_sessions.get(user_id, {})
+            for window_id, offset in user_offsets.items():
+                session_id = sessions.get(window_id, "")
+                if not session_id:
+                    state = self.window_states.get(window_id)
+                    session_id = state.session_id if state else ""
+                offsets.append(
+                    ConversationDeliveryOffset(
+                        user_id=user_id,
+                        window_id=window_id,
+                        offset=offset,
+                        session_id=session_id,
+                    )
+                )
+        return offsets
+
+    def _sync_durable_registry(self) -> None:
+        if self._runtime_store is None:
+            return
+        routes = self._runtime_store.replace_conversation_registry(
+            self._conversation_registry_routes(),
+            self._conversation_delivery_offsets(),
+        )
+        self._route_generations = {
+            (route.user_id, route.thread_id): route.generation for route in routes
+        }
+
+    def activate_durable_registry(self, store: DurableRuntimeStore) -> None:
+        """Migrate or restore routing fields from the SQLite source of truth."""
+        snapshot = store.load_conversation_registry()
+        self._runtime_store = store
+        try:
+            if snapshot is None:
+                self._save_state()
+                logger.info("Migrated conversation registry from %s", config.state_file)
+                return
+            self._restore_durable_registry(snapshot)
+            self._route_generations = {
+                (route.user_id, route.thread_id): route.generation
+                for route in snapshot.routes
+            }
+            self._save_state()
+            logger.info("Restored conversation registry from %s", store.path)
+        except Exception:
+            self._runtime_store = None
+            raise
+
+    def _restore_durable_registry(self, snapshot: ConversationRegistrySnapshot) -> None:
+        """Replace route and cursor caches while retaining JSON-only settings."""
+        thread_bindings: dict[int, dict[int, str]] = {}
+        thread_targets: dict[int, dict[int, AgentTarget]] = {}
+        for route in snapshot.routes:
+            target = AgentTarget(
+                backend_id=route.backend_id,
+                node_id=route.node_id,
+                session_id=route.session_id,
+                window_id=route.window_id,
+            )
+            thread_targets.setdefault(route.user_id, {})[route.thread_id] = target
+            if target.backend_id == "local" and target.window_id:
+                thread_bindings.setdefault(route.user_id, {})[route.thread_id] = (
+                    target.window_id
+                )
+                state = self.window_states.get(target.window_id)
+                if state is not None:
+                    state.session_id = target.session_id
+        self.thread_bindings = thread_bindings
+        self.thread_targets = thread_targets
+        self.user_window_offsets = {}
+        self.user_window_offset_sessions = {}
+        for delivery_offset in snapshot.delivery_offsets:
+            self.user_window_offsets.setdefault(delivery_offset.user_id, {})[
+                delivery_offset.window_id
+            ] = delivery_offset.offset
+            if delivery_offset.session_id:
+                self.user_window_offset_sessions.setdefault(
+                    delivery_offset.user_id, {}
+                )[delivery_offset.window_id] = delivery_offset.session_id
+
+    def get_route_delivery_identity(
+        self,
+        user_id: int,
+        thread_id: int | None,
+        window_id: str,
+    ) -> RouteDeliveryIdentity | None:
+        """Return a delivery fence for a currently bound local topic."""
+        if thread_id is None:
+            return None
+        target = self.get_target_for_thread(user_id, thread_id)
+        generation = self._route_generations.get((user_id, thread_id))
+        if (
+            target is None
+            or target.backend_id != "local"
+            or target.window_id != window_id
+            or generation is None
+        ):
+            return None
+        state = self.window_states.get(window_id)
+        return RouteDeliveryIdentity(
+            generation=generation,
+            session_id=state.session_id if state else target.session_id,
+        )
+
+    def is_current_route_delivery(
+        self,
+        user_id: int,
+        thread_id: int | None,
+        window_id: str,
+        identity: RouteDeliveryIdentity,
+    ) -> bool:
+        """Return whether an outbound UI event still belongs to this topic run."""
+        current = self.get_route_delivery_identity(user_id, thread_id, window_id)
+        return current == identity
 
     def _is_window_id(self, key: str) -> bool:
         """Check if a key looks like a tmux window ID (e.g. '@0', '@12')."""
@@ -440,7 +619,8 @@ class SessionManager:
 
         Called on startup. Handles two cases:
         1. Old-format migration: window_name keys → window_id keys
-        2. Stale IDs: window_id no longer exists but display name matches a live window
+        2. Stale IDs: retain a bound session for explicit recovery, never remap it
+           by display name because a new tmux server can reuse that name.
 
         Builds {window_name: window_id} from live windows, then remaps or drops entries.
         """
@@ -481,37 +661,22 @@ class SessionManager:
                 if key in live_ids:
                     new_window_states[key] = ws
                 else:
-                    # Stale ID — try re-resolve by display name
                     display = self.window_display_names.get(key, ws.window_name or key)
-                    new_id = live_by_name.get(display)
-                    if new_id:
+                    if is_recoverable_missing_window(key):
                         logger.info(
-                            "Re-resolved stale window_id %s -> %s (name=%s)",
+                            "Keeping missing bound window_state for recovery: "
+                            "%s (name=%s)",
                             key,
-                            new_id,
                             display,
                         )
-                        new_window_states[new_id] = ws
-                        ws.window_name = display
-                        self.window_display_names[new_id] = display
-                        self.window_display_names.pop(key, None)
-                        changed = True
+                        new_window_states[key] = ws
                     else:
-                        if is_recoverable_missing_window(key):
-                            logger.info(
-                                "Keeping missing bound window_state for recovery: "
-                                "%s (name=%s)",
-                                key,
-                                display,
-                            )
-                            new_window_states[key] = ws
-                        else:
-                            logger.info(
-                                "Dropping stale window_state: %s (name=%s)",
-                                key,
-                                display,
-                            )
-                            changed = True
+                        logger.info(
+                            "Dropping stale window_state: %s (name=%s)",
+                            key,
+                            display,
+                        )
+                        changed = True
             else:
                 # Old format: key is window_name
                 new_id = live_by_name.get(key)
@@ -535,40 +700,25 @@ class SessionManager:
                 if self._is_window_id(val):
                     if val in live_ids:
                         new_bindings[tid] = val
+                    elif val in new_window_states and is_recoverable_missing_window(
+                        val
+                    ):
+                        logger.info(
+                            "Keeping missing bound window for recovery: "
+                            "user=%d, thread=%d, wid=%s",
+                            uid,
+                            tid,
+                            val,
+                        )
+                        new_bindings[tid] = val
                     else:
-                        display = self.window_display_names.get(val, val)
-                        new_id = live_by_name.get(display)
-                        if new_id:
-                            logger.info(
-                                "Re-resolved thread binding %s -> %s (name=%s)",
-                                val,
-                                new_id,
-                                display,
-                            )
-                            new_bindings[tid] = new_id
-                            self.window_display_names[new_id] = display
-                            changed = True
-                        else:
-                            if (
-                                val in new_window_states
-                                and is_recoverable_missing_window(val)
-                            ):
-                                logger.info(
-                                    "Keeping missing bound window for recovery: "
-                                    "user=%d, thread=%d, wid=%s",
-                                    uid,
-                                    tid,
-                                    val,
-                                )
-                                new_bindings[tid] = val
-                            else:
-                                logger.info(
-                                    "Dropping stale thread binding: user=%d, thread=%d, wid=%s",
-                                    uid,
-                                    tid,
-                                    val,
-                                )
-                                changed = True
+                        logger.info(
+                            "Dropping stale thread binding: user=%d, thread=%d, wid=%s",
+                            uid,
+                            tid,
+                            val,
+                        )
+                        changed = True
                 else:
                     # Old format: val is window_name
                     new_id = live_by_name.get(val)
@@ -604,37 +754,19 @@ class SessionManager:
                 if self._is_window_id(window_id):
                     if window_id in live_ids:
                         new_targets[tid] = target
+                    elif (
+                        window_id in new_window_states
+                        and is_recoverable_missing_window(window_id)
+                    ):
+                        new_targets[tid] = target
                     else:
-                        display = self.window_display_names.get(window_id, window_id)
-                        new_id = live_by_name.get(display)
-                        if new_id:
-                            logger.info(
-                                "Re-resolved thread target %s -> %s (name=%s)",
-                                window_id,
-                                new_id,
-                                display,
-                            )
-                            new_targets[tid] = AgentTarget(
-                                backend_id=target.backend_id,
-                                node_id=target.node_id,
-                                session_id=target.session_id,
-                                window_id=new_id,
-                            )
-                            self.window_display_names[new_id] = display
-                            changed = True
-                        elif (
-                            window_id in new_window_states
-                            and is_recoverable_missing_window(window_id)
-                        ):
-                            new_targets[tid] = target
-                        else:
-                            logger.info(
-                                "Dropping stale thread target: user=%d, thread=%d, wid=%s",
-                                uid,
-                                tid,
-                                window_id,
-                            )
-                            changed = True
+                        logger.info(
+                            "Dropping stale thread target: user=%d, thread=%d, wid=%s",
+                            uid,
+                            tid,
+                            window_id,
+                        )
+                        changed = True
                 else:
                     new_id = live_by_name.get(window_id)
                     if new_id:
@@ -698,16 +830,10 @@ class SessionManager:
                 if self._is_window_id(key):
                     if key in live_ids:
                         new_key = key
+                    elif key in valid_window_ids:
+                        new_key = key
                     else:
-                        display = self.window_display_names.get(key, key)
-                        new_id = live_by_name.get(display)
-                        if new_id:
-                            new_key = new_id
-                            changed = True
-                        elif key in valid_window_ids:
-                            new_key = key
-                        else:
-                            changed = True
+                        changed = True
                 else:
                     new_id = live_by_name.get(key)
                     if new_id:
@@ -1274,6 +1400,21 @@ class SessionManager:
             self.window_states[window_id] = WindowState()
         return self.window_states[window_id]
 
+    def _set_local_target_session(self, window_id: str, session_id: str) -> None:
+        """Keep explicit local topic targets aligned with their live session."""
+        for targets in self.thread_targets.values():
+            for thread_id, target in list(targets.items()):
+                if target.backend_id != "local" or target.window_id != window_id:
+                    continue
+                if target.session_id == session_id:
+                    continue
+                targets[thread_id] = AgentTarget(
+                    backend_id=target.backend_id,
+                    node_id=target.node_id,
+                    session_id=session_id,
+                    window_id=target.window_id,
+                )
+
     def clear_window_session(self, window_id: str) -> None:
         """Clear session association for a window (e.g., after /clear command)."""
         state = self.get_window_state(window_id)
@@ -1285,6 +1426,7 @@ class SessionManager:
         state.reasoning_effort = ""
         state.fast_mode = False
         state.hibernated_at = 0.0
+        self._set_local_target_session(window_id, "")
         self._save_state()
         logger.info("Cleared session for window_id %s", window_id)
 
@@ -1313,6 +1455,7 @@ class SessionManager:
         state.fast_mode = fast_mode
         state.launch_started_at = time.time()
         state.hibernated_at = 0.0
+        self._set_local_target_session(window_id, "")
         if window_name:
             self.window_display_names[window_id] = window_name
         self._save_state()
@@ -1519,6 +1662,7 @@ class SessionManager:
         state.usage_limit_exceeded = False
         state.launch_started_at = 0.0
         state.hibernated_at = 0.0
+        self._set_local_target_session(window_id, session_id)
         if agent_type:
             state.agent_type = normalize_agent_type(agent_type)
         canonical_id = _canonical_session_id(session_id)

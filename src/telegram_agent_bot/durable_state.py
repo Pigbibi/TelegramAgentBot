@@ -1,8 +1,9 @@
 """Small SQLite-backed runtime state for restart-safe message handling.
 
-The bot intentionally keeps this store narrow: prompt submission lifecycles,
-bounded continuation retries, and Telegram update IDs used for duplicate
-suppression. It does not replace the existing session or transcript state files.
+The bot keeps prompt submission lifecycles, bounded continuation retries,
+Telegram update IDs, and authoritative conversation routing in this store.
+The legacy JSON session file remains a compatibility mirror for non-routing
+settings and rollback.
 """
 
 from __future__ import annotations
@@ -85,6 +86,49 @@ class HealthAlertState:
     last_sent_at_epoch: float
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationRoute:
+    """Durable identity for one Telegram topic's agent destination."""
+
+    user_id: int
+    thread_id: int
+    backend_id: str
+    node_id: str
+    window_id: str = ""
+    session_id: str = ""
+    generation: int = 0
+
+    def with_generation(self, generation: int) -> "ConversationRoute":
+        """Return the same route with a persisted generation number."""
+        return ConversationRoute(
+            user_id=self.user_id,
+            thread_id=self.thread_id,
+            backend_id=self.backend_id,
+            node_id=self.node_id,
+            window_id=self.window_id,
+            session_id=self.session_id,
+            generation=generation,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationDeliveryOffset:
+    """Transcript cursor guarded by the session identity that created it."""
+
+    user_id: int
+    window_id: str
+    offset: int
+    session_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationRegistrySnapshot:
+    """One consistent routing and delivery-cursor read."""
+
+    routes: list[ConversationRoute]
+    delivery_offsets: list[ConversationDeliveryOffset]
+
+
 class DurableRuntimeStore:
     """Persist a bounded prompt spool and recently completed Telegram updates."""
 
@@ -156,6 +200,30 @@ class DurableRuntimeStore:
                     active INTEGER NOT NULL CHECK (active IN (0, 1)),
                     last_sent_at_epoch REAL NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS conversation_routes (
+                    user_id INTEGER NOT NULL,
+                    thread_id INTEGER NOT NULL,
+                    backend_id TEXT NOT NULL,
+                    node_id TEXT NOT NULL,
+                    window_id TEXT NOT NULL DEFAULT '',
+                    session_id TEXT NOT NULL DEFAULT '',
+                    generation INTEGER NOT NULL CHECK (generation >= 1),
+                    PRIMARY KEY (user_id, thread_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS conversation_delivery_offsets (
+                    user_id INTEGER NOT NULL,
+                    window_id TEXT NOT NULL,
+                    offset INTEGER NOT NULL CHECK (offset >= 0),
+                    session_id TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (user_id, window_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS conversation_registry_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
             )
             agent_input_columns = {
@@ -200,6 +268,128 @@ class DurableRuntimeStore:
                 (time.time() - _COMPLETED_UPDATE_RETENTION_SECONDS,),
             )
         os.chmod(self.path, 0o600)
+
+    def load_conversation_registry(self) -> ConversationRegistrySnapshot | None:
+        """Load the authoritative registry, or None before its first migration."""
+        with self._connect() as connection:
+            marker = connection.execute(
+                "SELECT value FROM conversation_registry_metadata "
+                "WHERE key = 'conversation_registry_v1'"
+            ).fetchone()
+            if marker is None:
+                return None
+            route_rows = connection.execute(
+                "SELECT user_id, thread_id, backend_id, node_id, window_id, "
+                "session_id, generation FROM conversation_routes "
+                "ORDER BY user_id, thread_id"
+            ).fetchall()
+            offset_rows = connection.execute(
+                "SELECT user_id, window_id, offset, session_id "
+                "FROM conversation_delivery_offsets ORDER BY user_id, window_id"
+            ).fetchall()
+        return ConversationRegistrySnapshot(
+            routes=[
+                ConversationRoute(
+                    user_id=int(row["user_id"]),
+                    thread_id=int(row["thread_id"]),
+                    backend_id=str(row["backend_id"]),
+                    node_id=str(row["node_id"]),
+                    window_id=str(row["window_id"]),
+                    session_id=str(row["session_id"]),
+                    generation=int(row["generation"]),
+                )
+                for row in route_rows
+            ],
+            delivery_offsets=[
+                ConversationDeliveryOffset(
+                    user_id=int(row["user_id"]),
+                    window_id=str(row["window_id"]),
+                    offset=int(row["offset"]),
+                    session_id=str(row["session_id"]),
+                )
+                for row in offset_rows
+            ],
+        )
+
+    def replace_conversation_registry(
+        self,
+        routes: list[ConversationRoute],
+        delivery_offsets: list[ConversationDeliveryOffset],
+    ) -> list[ConversationRoute]:
+        """Atomically replace the registry and return routes with generations."""
+        route_keys = {(route.user_id, route.thread_id) for route in routes}
+        offset_keys = {
+            (offset.user_id, offset.window_id) for offset in delivery_offsets
+        }
+        if len(route_keys) != len(routes):
+            raise ValueError("Conversation routes must be unique per Telegram topic")
+        if len(offset_keys) != len(delivery_offsets):
+            raise ValueError("Conversation delivery offsets must be unique per window")
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing_rows = connection.execute(
+                "SELECT user_id, thread_id, backend_id, node_id, window_id, "
+                "session_id, generation FROM conversation_routes"
+            ).fetchall()
+            existing = {
+                (int(row["user_id"]), int(row["thread_id"])): row
+                for row in existing_rows
+            }
+            persisted_routes: list[ConversationRoute] = []
+            for route in routes:
+                previous = existing.get((route.user_id, route.thread_id))
+                if previous is None:
+                    generation = 1
+                elif (
+                    str(previous["backend_id"]),
+                    str(previous["node_id"]),
+                    str(previous["window_id"]),
+                    str(previous["session_id"]),
+                ) == (
+                    route.backend_id,
+                    route.node_id,
+                    route.window_id,
+                    route.session_id,
+                ):
+                    generation = int(previous["generation"])
+                else:
+                    generation = int(previous["generation"]) + 1
+                persisted_routes.append(route.with_generation(generation))
+
+            connection.execute("DELETE FROM conversation_routes")
+            connection.executemany(
+                "INSERT INTO conversation_routes "
+                "(user_id, thread_id, backend_id, node_id, window_id, session_id, "
+                "generation) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        route.user_id,
+                        route.thread_id,
+                        route.backend_id,
+                        route.node_id,
+                        route.window_id,
+                        route.session_id,
+                        route.generation,
+                    )
+                    for route in persisted_routes
+                ],
+            )
+            connection.execute("DELETE FROM conversation_delivery_offsets")
+            connection.executemany(
+                "INSERT INTO conversation_delivery_offsets "
+                "(user_id, window_id, offset, session_id) VALUES (?, ?, ?, ?)",
+                [
+                    (offset.user_id, offset.window_id, offset.offset, offset.session_id)
+                    for offset in delivery_offsets
+                ],
+            )
+            connection.execute(
+                "INSERT INTO conversation_registry_metadata (key, value) "
+                "VALUES ('conversation_registry_v1', 'ready') "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+            )
+        return persisted_routes
 
     @staticmethod
     def _record_from_row(row: sqlite3.Row) -> PendingAgentInput:

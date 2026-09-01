@@ -203,6 +203,13 @@ to stop the bound window and remove its binding.
 | `/agentcmd`, `/cmd` | Forward an arbitrary agent slash command |
 | `/skills`, `/plugins` | Open the active agent's native skills or plugin command |
 
+For a read-only routing check from the service host, run:
+
+```bash
+telegram-agent-bot doctor
+telegram-agent-bot doctor --json
+```
+
 Agent commands such as `/clear`, `/compact`, `/goal`, `/help`, `/memory`, and
 `/model` are forwarded to the active CLI session. The stable `/plugins` entry
 maps to Codex `/plugins` or Claude Code `/plugin`. Invoke plugin-provided skills

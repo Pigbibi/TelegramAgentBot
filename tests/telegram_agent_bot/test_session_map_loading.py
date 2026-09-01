@@ -18,6 +18,7 @@ os.environ.setdefault(
 )
 
 import telegram_agent_bot.session as session_module
+from telegram_agent_bot.backends.base import AgentTarget
 from telegram_agent_bot.session import SessionManager, WindowState
 
 
@@ -385,6 +386,7 @@ class SessionMapLoadingTests(unittest.IsolatedAsyncioTestCase):
         }
         manager.thread_bindings = {5992562050: {14847: "@2"}}
         manager.user_window_offsets = {5992562050: {"@2": 4096}}
+        manager.user_window_offset_sessions = {}
         manager.window_display_names = {"@2": "QuantPlatformKit"}
         manager.group_chat_ids = {"5992562050:14847": -1003811990090}
 
@@ -439,6 +441,121 @@ class SessionMapLoadingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.window_display_names["@2"], "QuantPlatformKit")
         self.assertEqual(manager.group_chat_ids["5992562050:14847"], -1003811990090)
         self.assertNotIn("telegram-agent-bot:@2", session_map)
+
+    async def test_startup_does_not_rebind_stale_window_id_by_display_name(
+        self,
+    ) -> None:
+        manager = SessionManager()
+        manager.window_states = {
+            "@2": WindowState(
+                session_id="session-original",
+                cwd="/home/ubuntu/Projects/QuantPlatformKit",
+                window_name="QuantPlatformKit",
+            )
+        }
+        manager.thread_bindings = {5992562050: {14847: "@2"}}
+        manager.thread_targets = {
+            5992562050: {
+                14847: AgentTarget(
+                    backend_id="local",
+                    node_id="local",
+                    session_id="session-original",
+                    window_id="@2",
+                )
+            }
+        }
+        manager.user_window_offsets = {5992562050: {"@2": 4096}}
+        manager.user_window_offset_sessions = {5992562050: {"@2": "session-original"}}
+        manager.window_display_names = {"@2": "QuantPlatformKit"}
+
+        with tempfile.TemporaryDirectory(
+            prefix="telegram-agent-bot-session-map-"
+        ) as tmpdir:
+            session_map_file = Path(tmpdir) / "session_map.json"
+            session_map_file.write_text("{}")
+
+            with (
+                patch.object(
+                    session_module.config, "session_map_file", session_map_file
+                ),
+                patch.object(
+                    session_module.tmux_manager,
+                    "list_windows",
+                    AsyncMock(
+                        return_value=[
+                            SimpleNamespace(
+                                window_id="@9",
+                                cwd="/home/ubuntu/Projects/QuantPlatformKit",
+                                window_name="QuantPlatformKit",
+                            )
+                        ]
+                    ),
+                ),
+            ):
+                await manager.resolve_stale_ids()
+
+        self.assertEqual(manager.thread_bindings[5992562050][14847], "@2")
+        self.assertEqual(
+            manager.thread_targets[5992562050][14847].window_id,
+            "@2",
+        )
+        self.assertIn("@2", manager.window_states)
+        self.assertNotIn("@9", manager.window_states)
+        self.assertEqual(manager.user_window_offsets[5992562050]["@2"], 4096)
+
+    async def test_startup_migrates_legacy_window_name_keys(self) -> None:
+        manager = SessionManager()
+        manager.window_states = {
+            "QuantPlatformKit": WindowState(
+                session_id="session-original",
+                cwd="/home/ubuntu/Projects/QuantPlatformKit",
+                window_name="QuantPlatformKit",
+            )
+        }
+        manager.thread_bindings = {5992562050: {14847: "QuantPlatformKit"}}
+        manager.thread_targets = {
+            5992562050: {
+                14847: AgentTarget(
+                    backend_id="local",
+                    node_id="local",
+                    session_id="session-original",
+                    window_id="QuantPlatformKit",
+                )
+            }
+        }
+
+        with tempfile.TemporaryDirectory(
+            prefix="telegram-agent-bot-session-map-"
+        ) as tmpdir:
+            session_map_file = Path(tmpdir) / "session_map.json"
+            session_map_file.write_text("{}")
+
+            with (
+                patch.object(
+                    session_module.config, "session_map_file", session_map_file
+                ),
+                patch.object(
+                    session_module.tmux_manager,
+                    "list_windows",
+                    AsyncMock(
+                        return_value=[
+                            SimpleNamespace(
+                                window_id="@9",
+                                cwd="/home/ubuntu/Projects/QuantPlatformKit",
+                                window_name="QuantPlatformKit",
+                            )
+                        ]
+                    ),
+                ),
+            ):
+                await manager.resolve_stale_ids()
+
+        self.assertEqual(manager.thread_bindings[5992562050][14847], "@9")
+        self.assertEqual(
+            manager.thread_targets[5992562050][14847].window_id,
+            "@9",
+        )
+        self.assertIn("@9", manager.window_states)
 
 
 if __name__ == "__main__":

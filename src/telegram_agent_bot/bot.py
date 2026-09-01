@@ -110,6 +110,7 @@ from .durable_state import (
     AGENT_INPUT_MODE_TURN,
     AGENT_INPUT_QUEUED,
     AGENT_INPUT_SUBMITTED_UNCONFIRMED,
+    PendingAgentInput,
     TRANSIENT_RETRY_SCHEDULED,
     DurableRuntimeStore,
     TransientAgentRetry,
@@ -324,6 +325,7 @@ class _QueuedAgentInput:
 _AGENT_INPUT_POLL_INTERVAL_SECONDS = 1.0
 _AGENT_INPUT_PERSIST_RETRY_SECONDS = 5.0
 _AGENT_INPUT_CONFIRM_RETRY_SECONDS = 60.0
+_AGENT_INPUT_CONFIRM_MAX_WAIT_SECONDS = 5 * 60.0
 _INPUT_ROUTE_CHOICE_MAX_AGE_SECONDS = 15 * 60.0
 _TRANSIENT_AGENT_RETRY_DELAYS_SECONDS = (15.0, 45.0, 120.0)
 _TRANSIENT_AGENT_ERROR_CODES = frozenset({"server_overloaded"})
@@ -2565,6 +2567,15 @@ def _target_has_persisted_agent_input_confirmation(
         return True
 
 
+def _agent_input_confirmation_expired(record: PendingAgentInput) -> bool:
+    """Return whether an unconfirmed submission may no longer block this topic."""
+    if record.submitted_at_epoch is None:
+        return False
+    return (
+        time.time() - record.submitted_at_epoch >= _AGENT_INPUT_CONFIRM_MAX_WAIT_SECONDS
+    )
+
+
 async def _run_agent_input_confirmation(
     bot: Bot,
     record_id: int,
@@ -2588,6 +2599,21 @@ async def _run_agent_input_confirmation(
                 record = _runtime_store.get_agent_input(record_id)
                 if record is None or record.state != AGENT_INPUT_SUBMITTED_UNCONFIRMED:
                     confirmed = True
+                    return
+                if _agent_input_confirmation_expired(record):
+                    _runtime_store.confirm_agent_input(record_id)
+                    confirmed = True
+                    logger.warning(
+                        "Retired unconfirmed agent input after confirmation deadline "
+                        "(record=%d window=%s)",
+                        record_id,
+                        record.window_id,
+                    )
+                    await _notify_agent_input_confirmation_expired(
+                        bot,
+                        record.user_id,
+                        record.thread_id or None,
+                    )
                     return
 
                 bound_window_id = session_manager.resolve_window_for_thread(
@@ -3514,6 +3540,30 @@ async def _notify_agent_input_confirmation_delayed(
     except Exception:
         logger.exception(
             "Failed to notify delayed agent input confirmation (user=%d thread=%s)",
+            user_id,
+            thread_id,
+        )
+
+
+async def _notify_agent_input_confirmation_expired(
+    bot: Bot,
+    user_id: int,
+    thread_id: int | None,
+) -> None:
+    """Explain why an unconfirmed input was retired without a replay."""
+    try:
+        await safe_send(
+            bot,
+            session_manager.resolve_chat_id(user_id, thread_id),
+            "⚠️ The earlier message was not confirmed in the agent transcript "
+            "within 5 minutes. It was not resent, avoiding duplicate input. "
+            "Later queued messages can continue now; resend the earlier message "
+            "only if the agent did not receive it.",
+            message_thread_id=thread_id,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to notify expired agent input confirmation (user=%d thread=%s)",
             user_id,
             thread_id,
         )
@@ -8235,6 +8285,7 @@ async def post_init(application: Application) -> None:
 
     try:
         _runtime_store.initialize()
+        session_manager.activate_durable_registry(_runtime_store)
         _runtime_store.delete_expired_input_choices(
             time.time() - _INPUT_ROUTE_CHOICE_MAX_AGE_SECONDS
         )
