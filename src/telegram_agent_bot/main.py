@@ -28,6 +28,8 @@ _USAGE = """Usage:
                       Check for or apply source-checkout updates
   telegram-agent-bot codex-update [--check]
                       Check for or apply Codex CLI updates
+  telegram-agent-bot doctor [--json]
+                      Check persisted topic routing without changing runtime state
   telegram-agent-bot --version     Show version information
   telegram-agent-bot --help        Show this help message
 """
@@ -74,7 +76,7 @@ def _print_usage(stream: TextIO) -> None:
 
 def _parse_cli_mode(
     argv: Sequence[str],
-) -> Literal["bot", "hook", "update", "codex-update", "version", "exit"]:
+) -> Literal["bot", "hook", "update", "codex-update", "doctor", "version", "exit"]:
     """Parse top-level CLI arguments for telegram-agent-bot."""
     if not argv:
         return "bot"
@@ -86,6 +88,8 @@ def _parse_cli_mode(
         return "update"
     if command == "codex-update":
         return "codex-update"
+    if command == "doctor":
+        return "doctor"
     if command in {"-V", "--version", "version"}:
         return "version"
 
@@ -117,6 +121,10 @@ def main() -> None:
         from .updater import codex_update_main
 
         raise SystemExit(codex_update_main(sys.argv[2:]))
+    if mode == "doctor":
+        from .runtime_doctor import doctor_main
+
+        raise SystemExit(doctor_main(sys.argv[2:]))
     if mode == "version":
         from . import __version__
 

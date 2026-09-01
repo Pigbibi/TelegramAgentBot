@@ -9,6 +9,8 @@ from telegram_agent_bot.durable_state import (
     AGENT_INPUT_SUBMITTED_UNCONFIRMED,
     TRANSIENT_RETRY_SCHEDULED,
     TRANSIENT_RETRY_WAITING_RESULT,
+    ConversationDeliveryOffset,
+    ConversationRoute,
     DurableRuntimeStore,
 )
 
@@ -312,3 +314,63 @@ def test_health_alert_cooldown_state_survives_reopen(tmp_path):
     state = second.load_health_alert_states()["disk"]
     assert state.active is True
     assert state.last_sent_at_epoch == 1234.5
+
+
+def test_conversation_registry_preserves_generation_and_delivery_identity(tmp_path):
+    store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+    store.initialize()
+    route = ConversationRoute(
+        user_id=12345,
+        thread_id=42,
+        backend_id="local",
+        node_id="local",
+        window_id="@4",
+        session_id="sid-4",
+    )
+    offset = ConversationDeliveryOffset(
+        user_id=12345,
+        window_id="@4",
+        offset=2048,
+        session_id="sid-4",
+    )
+
+    store.replace_conversation_registry([route], [offset])
+    first = store.load_conversation_registry()
+    assert first is not None
+    assert first.routes == [route.with_generation(1)]
+    assert first.delivery_offsets == [offset]
+
+    store.replace_conversation_registry([route], [offset])
+    assert store.load_conversation_registry().routes == [route.with_generation(1)]
+
+    resumed = ConversationRoute(
+        user_id=12345,
+        thread_id=42,
+        backend_id="local",
+        node_id="local",
+        window_id="@4",
+        session_id="sid-5",
+    )
+    store.replace_conversation_registry(
+        [resumed],
+        [
+            ConversationDeliveryOffset(
+                user_id=12345,
+                window_id="@4",
+                offset=0,
+                session_id="sid-5",
+            )
+        ],
+    )
+
+    second = store.load_conversation_registry()
+    assert second is not None
+    assert second.routes == [resumed.with_generation(2)]
+    assert second.delivery_offsets == [
+        ConversationDeliveryOffset(
+            user_id=12345,
+            window_id="@4",
+            offset=0,
+            session_id="sid-5",
+        )
+    ]

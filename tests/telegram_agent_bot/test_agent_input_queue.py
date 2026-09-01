@@ -337,6 +337,53 @@ async def test_deferred_confirmation_reports_delay_without_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_unconfirmed_input_deadline_releases_later_queue_without_replay(
+    monkeypatch,
+):
+    record = bot_module._runtime_store.enqueue_agent_input(
+        user_id=12345,
+        thread_id=42,
+        window_id="@1",
+        text="possibly lost input",
+        max_pending=20,
+        created_at_epoch=1000.0,
+    )
+    assert record is not None
+    assert bot_module._runtime_store.mark_agent_input_submitted(
+        record.id,
+        submitted_at_epoch=1000.0,
+        transcript_session_id="sid-1",
+        transcript_offset=512,
+    )
+    retired = AsyncMock()
+    wait_for_confirmation = AsyncMock(return_value=False)
+    monkeypatch.setattr(bot_module, "_AGENT_INPUT_CONFIRM_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(bot_module, "_AGENT_INPUT_CONFIRM_MAX_WAIT_SECONDS", 60.0)
+    monkeypatch.setattr(bot_module.time, "time", lambda: 1061.0)
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "wait_for_transcript_user_message",
+        wait_for_confirmation,
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_notify_agent_input_confirmation_expired",
+        retired,
+    )
+
+    await bot_module._run_agent_input_confirmation(
+        MagicMock(),
+        record.id,
+        (12345, 42, "@1"),
+        recover_submission=False,
+    )
+
+    assert bot_module._runtime_store.get_agent_input(record.id) is None
+    wait_for_confirmation.assert_not_awaited()
+    retired.assert_awaited_once_with(ANY, 12345, 42)
+
+
+@pytest.mark.asyncio
 async def test_delayed_confirmation_notice_is_neutral(monkeypatch):
     safe_send = AsyncMock()
     bot = MagicMock()

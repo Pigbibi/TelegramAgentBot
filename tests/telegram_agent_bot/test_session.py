@@ -10,6 +10,7 @@ import pytest
 from telegram_agent_bot.config import config
 from telegram_agent_bot import session as session_module
 from telegram_agent_bot.backends.base import AgentTarget
+from telegram_agent_bot.durable_state import DurableRuntimeStore
 from telegram_agent_bot.session import SessionManager
 
 
@@ -613,6 +614,65 @@ class TestWindowState:
 
         assert mgr.user_window_offsets == {100: {"@1": 42}}
         assert mgr.user_window_offset_sessions == {100: {"@1": "session-1"}}
+
+    def test_durable_registry_migrates_routes_and_overrides_stale_json(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(config, "state_file", tmp_path / "state.json")
+        manager = SessionManager()
+        manager.register_session_to_window("@1", "sid-1", "/tmp/project")
+        manager.bind_thread(100, 1, "@1")
+        manager.update_user_window_offset(100, "@1", 42, "sid-1")
+
+        store = DurableRuntimeStore(tmp_path / "runtime.sqlite3")
+        store.initialize()
+        manager.activate_durable_registry(store)
+
+        first = store.load_conversation_registry()
+        assert first is not None
+        assert first.routes[0].session_id == "sid-1"
+        assert first.routes[0].generation == 1
+        assert first.delivery_offsets[0].offset == 42
+        assert first.delivery_offsets[0].session_id == "sid-1"
+        first_identity = manager.get_route_delivery_identity(100, 1, "@1")
+        assert first_identity is not None
+        assert first_identity.generation == 1
+        assert first_identity.session_id == "sid-1"
+
+        manager.register_session_to_window("@1", "sid-2", "/tmp/project")
+        second = store.load_conversation_registry()
+        assert second is not None
+        assert second.routes[0].generation == 2
+        assert manager.get_target_for_thread(100, 1).session_id == "sid-2"
+        second_identity = manager.get_route_delivery_identity(100, 1, "@1")
+        assert second_identity is not None
+        assert second_identity.generation == 2
+        assert second_identity.session_id == "sid-2"
+
+        stale = SessionManager()
+        stale.thread_bindings = {100: {1: "@stale"}}
+        stale.thread_targets = {
+            100: {
+                1: AgentTarget(
+                    backend_id="local",
+                    node_id="local",
+                    session_id="sid-stale",
+                    window_id="@stale",
+                )
+            }
+        }
+        stale.user_window_offsets = {100: {"@stale": 999}}
+        stale.user_window_offset_sessions = {100: {"@stale": "sid-stale"}}
+        stale.activate_durable_registry(store)
+
+        assert stale.get_target_for_thread(100, 1) == AgentTarget(
+            backend_id="local",
+            node_id="local",
+            session_id="sid-2",
+            window_id="@1",
+        )
+        assert stale.user_window_offsets == {100: {"@1": 42}}
+        assert stale.user_window_offset_sessions == {100: {"@1": "sid-1"}}
 
     def test_get_creates_new(self, mgr: SessionManager) -> None:
         state = mgr.get_window_state("@0")

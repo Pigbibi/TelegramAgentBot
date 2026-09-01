@@ -123,6 +123,23 @@ systemctl --user restart io.github.telegramagentbot.service
 The tmux windows continue running across an ordinary bot-service restart, but
 messages in flight should still be allowed to settle first.
 
+If the tmux server itself was replaced, AgentBot deliberately does not reconnect
+a persisted `@window_id` to another window with the same display name. Run
+`telegram-agent-bot doctor` first. Restore the original tmux socket when
+possible; otherwise unbind the affected topic and explicitly resume or create
+the intended session. This prevents a stale topic from sending input to a new
+conversation with the same project name.
+
+After the first startup on this version, `runtime.sqlite3` is the authoritative
+store for topic routes, route generations, and transcript offsets. `state.json`
+remains a compatibility mirror for window metadata and UI settings. Back up and
+restore both files together; do not edit only one while the service is running.
+
+If an input reaches tmux but is absent from the agent transcript after five
+minutes, AgentBot retires that uncertain record without replaying it. This
+unblocks later input while avoiding a duplicate prompt; resend the earlier
+message only if the agent did not receive it.
+
 Source installations may enable idle-only updates in `.env`:
 
 ```ini
@@ -216,7 +233,7 @@ created outside AgentBot are hidden unless
 
 Stop the controller before taking a consistent application-state backup. Back
 up `$TELEGRAM_AGENT_BOT_DIR` with owner-only permissions. The directory can
-contain secrets and account material.
+contain secrets, account material, `state.json`, and `runtime.sqlite3`.
 
 Agent transcripts remain under the selected Codex or Claude Code home and must
 be backed up separately when needed.

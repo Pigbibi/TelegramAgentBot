@@ -11,6 +11,7 @@ from telegram_agent_bot.agent_io import CaptureResult
 from telegram_agent_bot.backends.base import AgentTarget
 from telegram_agent_bot.handlers import message_queue
 from telegram_agent_bot.handlers.delivery_errors import PermanentDeliveryError
+from telegram_agent_bot.session import RouteDeliveryIdentity
 
 
 def test_status_message_info_persists_for_restart(monkeypatch, tmp_path):
@@ -192,6 +193,49 @@ async def test_enqueue_can_wait_until_content_is_processed(monkeypatch):
     )
 
     assert completed == [303]
+    await message_queue.shutdown_workers()
+
+
+@pytest.mark.asyncio
+async def test_stale_route_generation_never_delivers_content_or_status(monkeypatch):
+    await message_queue.shutdown_workers()
+    bot = AsyncMock()
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "get_route_delivery_identity",
+        lambda *_args: RouteDeliveryIdentity(7, "sid-old"),
+    )
+    monkeypatch.setattr(
+        message_queue.session_manager,
+        "is_current_route_delivery",
+        lambda *_args: False,
+    )
+    send = AsyncMock(return_value=SimpleNamespace(message_id=321))
+    monkeypatch.setattr(message_queue, "send_with_fallback", send)
+
+    delivered = await message_queue.enqueue_content_message(
+        bot=bot,
+        user_id=1,
+        window_id="@4",
+        parts=["old answer"],
+        thread_id=42,
+        wait_until_sent=True,
+    )
+    await message_queue._process_status_update_task(
+        bot,
+        1,
+        message_queue.MessageTask(
+            task_type="status_update",
+            text="💭 Thinking (1s)",
+            window_id="@4",
+            thread_id=42,
+            route_generation=7,
+            route_session_id="sid-old",
+        ),
+    )
+
+    assert delivered is False
+    send.assert_not_awaited()
     await message_queue.shutdown_workers()
 
 

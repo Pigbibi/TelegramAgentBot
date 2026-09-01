@@ -14,10 +14,17 @@ os.environ.setdefault(
     tempfile.mkdtemp(prefix="telegram-agent-bot-test-projects-"),
 )
 
-from telegram_agent_bot.main import AlreadyRunningError, acquire_instance_lock
+from telegram_agent_bot.main import (
+    AlreadyRunningError,
+    _parse_cli_mode,
+    acquire_instance_lock,
+)
 
 
 class InstanceLockTests(unittest.TestCase):
+    def test_parse_cli_mode_accepts_doctor(self) -> None:
+        self.assertEqual(_parse_cli_mode(["doctor"]), "doctor")
+
     def test_acquire_instance_lock_writes_current_pid(self) -> None:
         lock_path = (
             Path(tempfile.mkdtemp(prefix="telegram-agent-bot-lock-"))

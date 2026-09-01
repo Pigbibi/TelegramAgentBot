@@ -32,7 +32,7 @@ from telegram.error import BadRequest, NetworkError, RetryAfter
 
 from ..config import config
 from ..markdown_v2 import convert_markdown
-from ..session import session_manager
+from ..session import RouteDeliveryIdentity, session_manager
 from ..agent_io import capture_agent_output
 from ..utils import atomic_write_json
 from .message_sender import (
@@ -106,6 +106,8 @@ class MessageTask:
         repr=False,
         compare=False,
     )
+    route_generation: int | None = None
+    route_session_id: str = ""
     retry_count: int = 0
 
 
@@ -409,6 +411,18 @@ def _queue_key(user_id: int, thread_id: int | None = None) -> QueueKey:
     return (user_id, thread_id or 0)
 
 
+def _task_matches_current_route(user_id: int, task: MessageTask) -> bool:
+    """Fence queued UI output to the topic run that created it."""
+    if task.route_generation is None:
+        return True
+    return session_manager.is_current_route_delivery(
+        user_id,
+        task.thread_id,
+        task.window_id or "",
+        RouteDeliveryIdentity(task.route_generation, task.route_session_id),
+    )
+
+
 def get_message_queue(
     user_id: int, thread_id: int | None = None
 ) -> asyncio.Queue[MessageTask] | None:
@@ -456,6 +470,10 @@ def _inspect_queue(queue: asyncio.Queue[MessageTask]) -> list[MessageTask]:
 def _can_merge_tasks(base: MessageTask, candidate: MessageTask) -> bool:
     """Check if two content tasks can be merged."""
     if base.window_id != candidate.window_id:
+        return False
+    if base.route_generation != candidate.route_generation:
+        return False
+    if base.route_session_id != candidate.route_session_id:
         return False
     if candidate.task_type != "content":
         return False
@@ -533,6 +551,8 @@ async def _merge_content_tasks(
             role=first.role,
             thread_id=first.thread_id,
             delivery_future=first.delivery_future,
+            route_generation=first.route_generation,
+            route_session_id=first.route_session_id,
             retry_count=first.retry_count,
         ),
         merge_count,
@@ -671,7 +691,10 @@ async def _message_queue_worker(bot: Bot, user_id: int, thread_id_or_0: int) -> 
                 elif task.task_type == "status_update":
                     await _process_status_update_task(bot, user_id, task)
                 elif task.task_type == "status_clear":
-                    await _do_clear_status_message(bot, user_id, task.thread_id or 0)
+                    if _task_matches_current_route(user_id, task):
+                        await _do_clear_status_message(
+                            bot, user_id, task.thread_id or 0
+                        )
             except PermanentDeliveryError as exc:
                 exc.with_target(user_id=user_id, thread_id=current_task.thread_id)
                 failure_count = _record_permanent_delivery_failure(
@@ -886,6 +909,15 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> bo
     """Process a content message task."""
     wid = task.window_id or ""
     tid = task.thread_id or 0
+    if not _task_matches_current_route(user_id, task):
+        logger.info(
+            "Dropped stale content delivery: user=%d thread=%d window=%s generation=%s",
+            user_id,
+            tid,
+            wid,
+            task.route_generation,
+        )
+        return False
     chat_id = session_manager.resolve_chat_id(user_id, task.thread_id)
     logger.debug(
         "Process content: user=%d, thread=%d, window_id=%s, content_type=%s, parts=%d",
@@ -1170,6 +1202,15 @@ async def _process_status_update_task(
     """Process a status update task."""
     wid = task.window_id or ""
     tid = task.thread_id or 0
+    if not _task_matches_current_route(user_id, task):
+        logger.info(
+            "Dropped stale status delivery: user=%d thread=%d window=%s generation=%s",
+            user_id,
+            tid,
+            wid,
+            task.route_generation,
+        )
+        return
     chat_id = session_manager.resolve_chat_id(user_id, task.thread_id)
     skey = (user_id, tid)
     status_text = task.text or ""
@@ -1393,6 +1434,9 @@ async def enqueue_content_message(
     if wait_until_sent:
         delivery_future = asyncio.get_running_loop().create_future()
 
+    route_identity = session_manager.get_route_delivery_identity(
+        user_id, thread_id, window_id
+    )
     task = MessageTask(
         task_type="content",
         text=text,
@@ -1405,6 +1449,10 @@ async def enqueue_content_message(
         thread_id=thread_id,
         image_data=image_data,
         delivery_future=delivery_future,
+        route_generation=(
+            route_identity.generation if route_identity is not None else None
+        ),
+        route_session_id=(route_identity.session_id if route_identity else ""),
     )
     queue.put_nowait(task)
     if delivery_future is not None:
@@ -1435,6 +1483,9 @@ async def enqueue_status_update(
         return
 
     # Deduplicate: skip if text matches what's already displayed
+    route_identity = session_manager.get_route_delivery_identity(
+        user_id, thread_id, window_id
+    )
     if status_text:
         skey = (user_id, tid)
         info = _status_msg_info.get(skey)
@@ -1450,9 +1501,21 @@ async def enqueue_status_update(
             text=status_text,
             window_id=window_id,
             thread_id=thread_id,
+            route_generation=(
+                route_identity.generation if route_identity is not None else None
+            ),
+            route_session_id=(route_identity.session_id if route_identity else ""),
         )
     else:
-        task = MessageTask(task_type="status_clear", thread_id=thread_id)
+        task = MessageTask(
+            task_type="status_clear",
+            window_id=window_id,
+            thread_id=thread_id,
+            route_generation=(
+                route_identity.generation if route_identity is not None else None
+            ),
+            route_session_id=(route_identity.session_id if route_identity else ""),
+        )
 
     dropped = await _enqueue_coalesced_status_task(
         queue,
