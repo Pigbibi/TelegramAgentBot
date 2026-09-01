@@ -1,6 +1,7 @@
 """Regression tests for keeping Telegram topics isolated by Codex session."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
 
 import pytest
 
@@ -328,6 +329,61 @@ class TestSessionPickerIsolation:
             window_name="project",
         )
         safe_edit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_create_and_bind_window_keeps_resumed_hook_session_identity(self):
+        class DummyCallbackQuery:
+            def __init__(self) -> None:
+                self.answer = AsyncMock()
+                self.from_user = MagicMock(id=12345)
+
+        class DummyUser:
+            id = 12345
+
+        query = DummyCallbackQuery()
+        context = _make_context()
+        user = DummyUser()
+        hook_state = SimpleNamespace(session_id="resumed-session")
+
+        with (
+            patch("telegram.CallbackQuery", DummyCallbackQuery),
+            patch("telegram.User", DummyUser),
+            patch("telegram_agent_bot.bot.session_manager") as mock_sm,
+            patch(
+                "telegram_agent_bot.bot.safe_edit", new_callable=AsyncMock
+            ),
+            patch("telegram_agent_bot.bot.get_default_account_name", return_value=""),
+            patch(
+                "telegram_agent_bot.bot.create_agent_session",
+                new_callable=AsyncMock,
+            ) as create_agent_session,
+        ):
+            create_agent_session.return_value = CreateSessionResult(
+                ok=True,
+                message="Resumed window 'project'",
+                target=AgentTarget("local", "local", window_id="@1"),
+                display_name="project",
+            )
+            mock_sm.get_window_state.return_value = hook_state
+            mock_sm.wait_for_session_map_entry = AsyncMock(return_value=True)
+            mock_sm.resolve_chat_id.return_value = -1001234567890
+
+            from telegram_agent_bot.bot import _create_and_bind_window
+
+            await _create_and_bind_window(
+                query,
+                context,
+                user,
+                "/tmp/project",
+                42,
+                resume_session_id="selected-session",
+            )
+
+        mock_sm.wait_for_session_map_entry.assert_awaited_once_with(
+            "@1", timeout=15.0
+        )
+        mock_sm.register_session_to_window.assert_not_called()
+        assert hook_state.session_id == "resumed-session"
 
     @pytest.mark.asyncio
     async def test_create_and_bind_window_accepts_remote_backend_target(self):
