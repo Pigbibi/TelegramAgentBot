@@ -337,19 +337,26 @@ class DurableRuntimeStore:
         self,
         user_id: int,
         thread_id: int,
+        *,
+        window_id: str | None = None,
     ) -> bool:
-        """Return whether this Telegram route has an unresolved submission."""
+        """Return whether a route or explicit target has an unresolved submission."""
+        window_filter = ""
+        parameters: list[object] = [
+            user_id,
+            thread_id,
+            AGENT_INPUT_SUBMITTED_UNCONFIRMED,
+            AGENT_INPUT_MODE_QUEUE,
+        ]
+        if window_id is not None:
+            window_filter = "AND window_id = ? "
+            parameters.append(window_id)
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT 1 FROM agent_input_queue "
                 "WHERE user_id = ? AND thread_id = ? AND state = ? "
-                "AND submission_mode != ? LIMIT 1",
-                (
-                    user_id,
-                    thread_id,
-                    AGENT_INPUT_SUBMITTED_UNCONFIRMED,
-                    AGENT_INPUT_MODE_QUEUE,
-                ),
+                f"AND submission_mode != ? {window_filter}LIMIT 1",
+                tuple(parameters),
             ).fetchone()
         return row is not None
 

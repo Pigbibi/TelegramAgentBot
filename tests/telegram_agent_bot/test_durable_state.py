@@ -44,6 +44,8 @@ def test_agent_input_survives_store_reopen(tmp_path):
     assert submitted.transcript_session_id == "sid-4"
     assert submitted.transcript_offset == 2048
     assert second.has_unconfirmed_agent_input(12345, 42) is True
+    assert second.has_unconfirmed_agent_input(12345, 42, window_id="@4") is True
+    assert second.has_unconfirmed_agent_input(12345, 42, window_id="@new") is False
 
     third = DurableRuntimeStore(path)
     third.initialize()
