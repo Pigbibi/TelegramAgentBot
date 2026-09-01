@@ -149,6 +149,130 @@ def test_restore_submitted_input_does_not_retarget_rebound_topic(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_rebound_confirmation_is_retired_without_replaying_input(monkeypatch):
+    record = bot_module._runtime_store.enqueue_agent_input(
+        user_id=12345,
+        thread_id=42,
+        window_id="@old",
+        text="already submitted",
+        max_pending=20,
+    )
+    assert record is not None
+    assert bot_module._runtime_store.mark_agent_input_submitted(
+        record.id,
+        transcript_session_id="sid-old",
+        transcript_offset=512,
+    )
+    wait_for_transcript = AsyncMock(return_value=False)
+    refresh_submission = AsyncMock()
+    notify = AsyncMock()
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "resolve_window_for_thread",
+        lambda _user_id, _thread_id: "@new",
+    )
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "window_matches_session",
+        lambda window_id, session_id: (window_id, session_id) == ("@new", "sid-old"),
+    )
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "wait_for_transcript_user_message",
+        wait_for_transcript,
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_refresh_session_map_after_first_prompt",
+        refresh_submission,
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_notify_rebound_agent_input_unconfirmed",
+        notify,
+    )
+
+    await bot_module._run_agent_input_confirmation(
+        MagicMock(),
+        record.id,
+        (12345, 42, "@old"),
+        recover_submission=True,
+    )
+
+    assert bot_module._runtime_store.get_agent_input(record.id) is None
+    wait_for_transcript.assert_awaited_once_with(
+        "@new",
+        "already submitted",
+        timeout=bot_module.config.transcript_confirm_timeout_seconds,
+        expected_session_id="sid-old",
+        after_offset=512,
+    )
+    refresh_submission.assert_not_awaited()
+    notify.assert_awaited_once_with(ANY, 12345, 42)
+
+
+@pytest.mark.asyncio
+async def test_old_window_confirmation_does_not_block_new_target(monkeypatch):
+    old_record = bot_module._runtime_store.enqueue_agent_input(
+        user_id=12345,
+        thread_id=42,
+        window_id="@old",
+        text="old input",
+        max_pending=20,
+    )
+    assert old_record is not None
+    assert bot_module._runtime_store.mark_agent_input_submitted(old_record.id)
+
+    old_confirmation = MagicMock()
+    old_confirmation.done.return_value = False
+    bot_module._agent_input_confirmation_tasks[old_record.id] = old_confirmation
+    bot_module._agent_input_confirmation_targets[old_record.id] = (
+        12345,
+        42,
+        "@old",
+    )
+    bot_module._agent_input_confirmation_modes[old_record.id] = "turn"
+    send_message = AsyncMock(return_value=(True, "Sent"))
+    monkeypatch.setattr(
+        bot_module,
+        "capture_agent_output",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                text="previous output\n\n›\n\n  gpt-5.5 · ~/repo",
+                missing=False,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "transcript_confirmation_baseline",
+        AsyncMock(return_value=("sid-new", 1024)),
+    )
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "resolve_window_for_thread",
+        lambda _user_id, _thread_id: "@new",
+    )
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+    monkeypatch.setattr(
+        bot_module,
+        "_ensure_agent_input_confirmation_task",
+        lambda *_args, **_kwargs: None,
+    )
+
+    ok, message, queued = await bot_module._send_or_queue_agent_input(
+        MagicMock(),
+        12345,
+        42,
+        "@new",
+        "new input",
+    )
+
+    assert (ok, message, queued) == (True, "Sent", False)
+    send_message.assert_awaited_once_with(12345, 42, "@new", "new input")
+
+
+@pytest.mark.asyncio
 async def test_deferred_confirmation_deletes_submitted_record(monkeypatch):
     record = bot_module._runtime_store.enqueue_agent_input(
         user_id=12345,

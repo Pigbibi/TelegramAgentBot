@@ -2260,7 +2260,7 @@ def _route_can_use_native_input(key: tuple[int, int, str]) -> bool:
         _route_has_agent_input_queue(key)
         or _route_has_agent_input_drain(key)
         or _target_has_agent_input_confirmation(key)
-        or _route_has_persisted_agent_input_confirmation(key)
+        or _target_has_persisted_agent_input_confirmation(key)
     )
 
 
@@ -2516,9 +2516,16 @@ def _same_agent_input_route(
     return left[:2] == right[:2]
 
 
+def _is_current_bound_agent_input_target(key: tuple[int, int, str]) -> bool:
+    """Return whether the topic authoritatively points at this exact window."""
+    return session_manager.resolve_window_for_thread(key[0], key[1] or None) == key[2]
+
+
 def _target_has_agent_input_confirmation(key: tuple[int, int, str]) -> bool:
+    exact_target_only = _is_current_bound_agent_input_target(key)
     return any(
         _same_agent_input_route(target, key)
+        and (target == key or not exact_target_only)
         and _agent_input_confirmation_modes.get(record_id) != AGENT_INPUT_MODE_QUEUE
         and not task.done()
         for record_id, task in _agent_input_confirmation_tasks.items()
@@ -2540,11 +2547,15 @@ def _route_has_agent_input_drain(key: tuple[int, int, str]) -> bool:
     )
 
 
-def _route_has_persisted_agent_input_confirmation(
+def _target_has_persisted_agent_input_confirmation(
     key: tuple[int, int, str],
 ) -> bool:
     try:
-        return _runtime_store.has_unconfirmed_agent_input(key[0], key[1])
+        return _runtime_store.has_unconfirmed_agent_input(
+            key[0],
+            key[1],
+            window_id=(key[2] if _is_current_bound_agent_input_target(key) else None),
+        )
     except Exception:
         logger.exception(
             "Failed to inspect persisted agent input confirmations (user=%d thread=%d)",
@@ -2577,6 +2588,58 @@ async def _run_agent_input_confirmation(
                 record = _runtime_store.get_agent_input(record_id)
                 if record is None or record.state != AGENT_INPUT_SUBMITTED_UNCONFIRMED:
                     confirmed = True
+                    return
+
+                bound_window_id = session_manager.resolve_window_for_thread(
+                    record.user_id,
+                    record.thread_id or None,
+                )
+                if bound_window_id and bound_window_id != record.window_id:
+                    # The old target can no longer accept or confirm this input.
+                    # If the rebound window continues the same transcript, do one
+                    # final read-only check there. Never replay text into the new
+                    # window: later prompts must be allowed to proceed normally.
+                    if (
+                        record.transcript_session_id
+                        and session_manager.window_matches_session(
+                            bound_window_id,
+                            record.transcript_session_id,
+                        )
+                    ):
+                        confirmed = (
+                            await session_manager.wait_for_transcript_user_message(
+                                bound_window_id,
+                                record.text,
+                                timeout=config.transcript_confirm_timeout_seconds,
+                                expected_session_id=record.transcript_session_id,
+                                after_offset=record.transcript_offset,
+                            )
+                        )
+                    if confirmed:
+                        _runtime_store.confirm_agent_input(record_id)
+                        logger.info(
+                            "Confirmed rebound agent input from the continued "
+                            "transcript (record=%d old_window=%s new_window=%s)",
+                            record_id,
+                            record.window_id,
+                            bound_window_id,
+                        )
+                        return
+
+                    _runtime_store.confirm_agent_input(record_id)
+                    confirmed = True
+                    logger.warning(
+                        "Retired unconfirmed agent input after topic rebound "
+                        "(record=%d old_window=%s new_window=%s)",
+                        record_id,
+                        record.window_id,
+                        bound_window_id,
+                    )
+                    await _notify_rebound_agent_input_unconfirmed(
+                        bot,
+                        record.user_id,
+                        record.thread_id or None,
+                    )
                     return
 
                 if recover_submission:
@@ -2813,7 +2876,7 @@ def _ensure_agent_input_drain_task(
 ) -> None:
     if _target_has_agent_input_confirmation(
         key
-    ) or _route_has_persisted_agent_input_confirmation(key):
+    ) or _target_has_persisted_agent_input_confirmation(key):
         return
     if _route_has_agent_input_drain(key):
         return
@@ -3005,7 +3068,7 @@ async def _send_or_queue_agent_input(
             _route_has_agent_input_queue(key)
             or _route_has_agent_input_drain(key)
             or _target_has_agent_input_confirmation(key)
-            or _route_has_persisted_agent_input_confirmation(key)
+            or _target_has_persisted_agent_input_confirmation(key)
         ):
             queued, depth, limit = _queue_agent_input(key, text)
             if not queued:
@@ -3451,6 +3514,30 @@ async def _notify_agent_input_confirmation_delayed(
     except Exception:
         logger.exception(
             "Failed to notify delayed agent input confirmation (user=%d thread=%s)",
+            user_id,
+            thread_id,
+        )
+
+
+async def _notify_rebound_agent_input_unconfirmed(
+    bot: Bot,
+    user_id: int,
+    thread_id: int | None,
+) -> None:
+    """Explain why an old-window confirmation was retired without a replay."""
+    try:
+        await safe_send(
+            bot,
+            session_manager.resolve_chat_id(user_id, thread_id),
+            "⚠️ A message submitted to the previous agent window never appeared "
+            "in its transcript. It was not resent after the session moved, avoiding "
+            "duplicate input. Later messages will continue normally; resend the "
+            "earlier message if you still need it.",
+            message_thread_id=thread_id,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to notify retired rebound input (user=%d thread=%s)",
             user_id,
             thread_id,
         )
