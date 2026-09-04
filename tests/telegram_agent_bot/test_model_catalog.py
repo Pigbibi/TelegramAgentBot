@@ -39,6 +39,24 @@ def test_extract_codex_model_ids_uses_app_server_model_field() -> None:
     ) == ["gpt-5.6-luna", "o3"]
 
 
+def test_codex_default_metadata_ignores_hidden_models_and_truthy_strings() -> None:
+    from telegram_agent_bot.model_catalog import _extract_codex_models
+
+    models = _extract_codex_models(
+        {
+            "data": [
+                {"model": "gpt-hidden", "hidden": True, "isDefault": True},
+                {"model": "gpt-5.6-sol", "isDefault": "false"},
+                {"model": "gpt-6-astra", "isDefault": True},
+            ]
+        }
+    )
+    assert [(m.model, m.is_default) for m in models] == [
+        ("gpt-5.6-sol", False),
+        ("gpt-6-astra", True),
+    ]
+
+
 def test_extract_codex_models_includes_reasoning_metadata() -> None:
     from telegram_agent_bot import model_catalog
     from telegram_agent_bot.model_catalog import _extract_codex_models
@@ -231,3 +249,83 @@ async def test_refresh_model_catalog_keeps_last_codex_catalog_on_failure(
 
     assert model_catalog.config.codex_models == ("gpt-5.6-sol",)
     assert model_catalog.config.codex_model_efforts == previous_efforts
+
+
+@pytest.mark.asyncio
+async def test_auto_default_follows_releases_and_survives_missing_metadata(
+    monkeypatch,
+) -> None:
+    from telegram_agent_bot import model_catalog as catalog
+
+    monkeypatch.setattr(catalog.config, "model_discovery_enabled", True)
+    monkeypatch.setattr(catalog.config, "codex_model_auto", True)
+    monkeypatch.setattr(catalog.config, "codex_model", "")
+    monkeypatch.setattr(catalog.config, "codex_models_raw", "auto")
+    monkeypatch.setattr(catalog.config, "codex_models", ())
+    monkeypatch.setattr(catalog.config, "codex_model_efforts", {})
+    monkeypatch.setattr(catalog.config, "codex_model_default_efforts", {})
+    monkeypatch.setattr(catalog, "_load_provider_env", lambda: {})
+    discovery = AsyncMock(
+        side_effect=[
+            [catalog.CodexModelInfo("gpt-5.6-sol", is_default=True)],
+            [
+                catalog.CodexModelInfo("gpt-5.6-sol"),
+                catalog.CodexModelInfo("gpt-6-astra", is_default=True),
+            ],
+            [],
+            [catalog.CodexModelInfo("gpt-5.6-luna")],
+        ]
+    )
+    monkeypatch.setattr(catalog, "_discover_codex_models", discovery)
+
+    await catalog.refresh_model_catalog("codex")
+    assert catalog.config.codex_model == "gpt-5.6-sol"
+    await catalog.refresh_model_catalog("codex")
+    assert catalog.config.codex_model == "gpt-6-astra"
+    assert catalog.config.codex_models == ("gpt-6-astra", "gpt-5.6-sol")
+    await catalog.refresh_model_catalog("codex")
+    assert catalog.config.codex_model == "gpt-6-astra"
+    assert catalog.config.codex_models[0] == "gpt-6-astra"
+    await catalog.refresh_model_catalog("codex")
+    assert catalog.config.codex_model == "gpt-6-astra"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auto", "manual_list", "discovery_enabled", "expected"),
+    [
+        (False, "auto", True, "gpt-5.6-sol"),
+        (True, "gpt-5.6-sol", True, "gpt-5.6-sol"),
+        (True, "gpt-5.6-sol,gpt-6-astra", True, "gpt-6-astra"),
+        (True, "auto", False, "gpt-5.6-sol"),
+    ],
+)
+async def test_auto_default_respects_operator_overrides(
+    monkeypatch, auto, manual_list, discovery_enabled, expected
+) -> None:
+    from telegram_agent_bot import model_catalog as catalog
+
+    monkeypatch.setattr(catalog.config, "model_discovery_enabled", discovery_enabled)
+    monkeypatch.setattr(catalog.config, "codex_model_auto", auto)
+    monkeypatch.setattr(catalog.config, "codex_model", "gpt-5.6-sol")
+    monkeypatch.setattr(catalog.config, "codex_models_raw", manual_list)
+    monkeypatch.setattr(
+        catalog.config,
+        "codex_models",
+        catalog.config._parse_models(manual_list, "gpt-5.6-sol"),
+    )
+    monkeypatch.setattr(catalog.config, "codex_model_efforts", {})
+    monkeypatch.setattr(catalog.config, "codex_model_default_efforts", {})
+    monkeypatch.setattr(catalog, "_load_provider_env", lambda: {})
+    discovery = AsyncMock(
+        return_value=[catalog.CodexModelInfo("gpt-6-astra", is_default=True)]
+    )
+    monkeypatch.setattr(catalog, "_discover_codex_models", discovery)
+
+    await catalog.refresh_model_catalog("codex")
+
+    assert catalog.config.codex_model == expected
+    if manual_list != "auto":
+        assert catalog.config.codex_models == tuple(manual_list.split(","))
+    if not discovery_enabled:
+        discovery.assert_not_awaited()

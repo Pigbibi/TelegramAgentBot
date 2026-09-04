@@ -53,6 +53,7 @@ class CodexModelInfo:
     model: str
     supported_efforts: tuple[str, ...] | None = None
     default_effort: str = ""
+    is_default: bool = False
 
 
 def _load_provider_env() -> dict[str, str]:
@@ -126,6 +127,8 @@ def _extract_codex_models(payload: object) -> list[CodexModelInfo]:
     for item in payload["data"]:
         if not isinstance(item, dict):
             continue
+        if item.get("hidden") is True:
+            continue
         model_id = item.get("model") or item.get("id")
         if not isinstance(model_id, str) or not _MODEL_ID_RE.fullmatch(model_id):
             continue
@@ -163,6 +166,7 @@ def _extract_codex_models(payload: object) -> list[CodexModelInfo]:
                 model=model_id,
                 supported_efforts=supported_efforts,
                 default_effort=default_effort,
+                is_default=item.get("isDefault") is True,
             )
         )
     return list(dict.fromkeys(models))
@@ -365,6 +369,23 @@ async def refresh_model_catalog(agent_type: str | None = None) -> None:
         claude_models = await claude_task
 
     if codex_models:
+        if config.codex_model_auto:
+            allowed = (
+                None
+                if _auto_requested(config.codex_models_raw)
+                else set(config.codex_models)
+            )
+            default_model = next(
+                (
+                    item.model
+                    for item in codex_models
+                    if item.is_default and (allowed is None or item.model in allowed)
+                ),
+                None,
+            )
+            if default_model and default_model != config.codex_model:
+                logger.info("Following Codex default model: %s", default_model)
+                config.codex_model = default_model
         if _auto_requested(config.codex_models_raw):
             config.codex_models = _merge_models(
                 config.codex_model, [item.model for item in codex_models]
