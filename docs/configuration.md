@@ -40,7 +40,7 @@ chmod 600 ~/.telegram-agent-bot/.env
 | `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex` | Default agent: `codex` or `claude` |
 | `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | `codex` | Command used to start Codex |
 | `TELEGRAM_AGENT_BOT_CLAUDE_COMMAND` | `claude` | Command used to start Claude Code |
-| `TELEGRAM_AGENT_BOT_CODEX_MODEL` | `gpt-5.4-mini` | Default Codex model shown for new topics |
+| `TELEGRAM_AGENT_BOT_CODEX_MODEL` | `gpt-5.4-mini` | Default Codex model for new topics; `auto` follows the account's current Codex default |
 | `TELEGRAM_AGENT_BOT_CLAUDE_MODEL` | `deepseek-v4-flash` | Default Claude Code model shown for new topics |
 | `TELEGRAM_AGENT_BOT_CODEX_MODELS` | automatic | Comma-separated model picker override |
 | `TELEGRAM_AGENT_BOT_CLAUDE_MODELS` | automatic | Comma-separated model picker override |
@@ -55,6 +55,18 @@ sets the initial default and provider-neutral account command behavior.
 Automatic model discovery keeps the configured default available if discovery
 fails. Set an explicit comma-separated list when a gateway uses custom aliases
 or when operators need a fixed picker.
+
+To follow new Codex model releases automatically, set
+`TELEGRAM_AGENT_BOT_CODEX_MODEL=auto` and leave model discovery enabled. At startup
+and whenever Codex is selected in the topic setup picker, the bot uses the visible
+model marked `isDefault` by the installed CLI's `model/list` response. It follows
+the account's official default rather than guessing from model names or list order.
+An explicit model picker list still limits which default can be selected.
+
+Existing topic selections stay unchanged. If discovery fails or returns no default
+metadata, the last resolved default is retained. Before the first successful
+resolution, the bot omits `--model` so the CLI uses its own configuration. Setting
+a concrete model ID instead of `auto` keeps that default pinned.
 
 ## tmux and project paths
 

@@ -65,9 +65,18 @@ class TestConfigValid:
     def test_default_models_are_agent_specific(self):
         cfg = Config()
         assert cfg.codex_model == "gpt-5.4-mini"
+        assert cfg.codex_model_auto is False
         assert cfg.codex_models == ("gpt-5.4-mini",)
         assert cfg.claude_model == "deepseek-v4-flash"
         assert cfg.claude_models == ("deepseek-v4-flash",)
+
+    @pytest.mark.parametrize("value", ["auto", " AUTO "])
+    def test_codex_auto_default_is_resolved_by_discovery(self, monkeypatch, value):
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_CODEX_MODEL", value)
+        cfg = Config()
+        assert cfg.codex_model_auto is True
+        assert cfg.codex_model == ""
+        assert cfg.codex_models == ()
 
     def test_agent_startup_timeout_defaults_to_three_minutes(self):
         cfg = Config()

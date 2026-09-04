@@ -172,6 +172,11 @@ class Config:
         self.codex_model = os.getenv(
             "TELEGRAM_AGENT_BOT_CODEX_MODEL", "gpt-5.4-mini"
         ).strip()
+        self.codex_model_auto = self.codex_model.lower() == "auto"
+        if self.codex_model_auto:
+            # Resolve from the account's model catalog before showing the picker.
+            # On initial discovery failure, omit --model and let Codex choose.
+            self.codex_model = ""
         self.claude_command = os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_COMMAND", "claude")
         self.claude_model = os.getenv(
             "TELEGRAM_AGENT_BOT_CLAUDE_MODEL", "deepseek-v4-flash"
