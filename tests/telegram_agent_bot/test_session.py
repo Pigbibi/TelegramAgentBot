@@ -570,11 +570,12 @@ class TestGroupChatId:
         mgr.set_group_chat_id(100, 1, -1001234567890)
         assert mgr.resolve_chat_id(100) == 100
 
-    def test_set_group_chat_id_overwrites(self, mgr: SessionManager) -> None:
-        """set_group_chat_id updates the stored value on change."""
+    def test_set_group_chat_id_rejects_other_group(self, mgr: SessionManager) -> None:
+        """A colliding topic ID cannot move an existing route to another group."""
         mgr.set_group_chat_id(100, 1, -999)
-        mgr.set_group_chat_id(100, 1, -888)
-        assert mgr.resolve_chat_id(100, 1) == -888
+        with pytest.raises(ValueError, match="another group"):
+            mgr.set_group_chat_id(100, 1, -888)
+        assert mgr.resolve_chat_id(100, 1) == -999
 
     def test_multiple_threads_independent(self, mgr: SessionManager) -> None:
         """Different threads for the same user store independent group chat_ids."""
