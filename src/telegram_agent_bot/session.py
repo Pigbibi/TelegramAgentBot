@@ -232,6 +232,10 @@ class CodexSession:
     file_path: str
 
 
+class GroupChatRouteConflict(ValueError):
+    """A topic identity is already owned by a different Telegram group."""
+
+
 @dataclass(frozen=True)
 class RouteDeliveryIdentity:
     """The route generation and transcript identity that own one UI event."""
@@ -984,6 +988,9 @@ class SessionManager:
         """
         tid = thread_id or 0
         key = f"{user_id}:{tid}"
+        existing_chat_id = self.group_chat_ids.get(key)
+        if thread_id is not None and existing_chat_id not in (None, chat_id):
+            raise GroupChatRouteConflict("Topic route belongs to another group")
         if self.group_chat_ids.get(key) != chat_id:
             self.group_chat_ids[key] = chat_id
             self._save_state()

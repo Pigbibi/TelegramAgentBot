@@ -62,10 +62,12 @@ from telegram.error import BadRequest, NetworkError, TelegramError, TimedOut
 from telegram.ext import (
     AIORateLimiter,
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 from telegram.request import HTTPXRequest
@@ -243,6 +245,7 @@ from .idle_sessions import idle_session_hibernator
 from .screenshot import text_to_image
 from .session import (
     CodexSession,
+    GroupChatRouteConflict,
     _session_ids_match,
     is_shell_pane_command,
     session_manager,
@@ -781,6 +784,31 @@ def _get_thread_id(update: Update) -> int | None:
     if tid is None or tid == 1:
         return None
     return tid
+
+
+async def inbound_group_route_guard(
+    update: Update,
+    _context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Claim a group route before callbacks, health updates or input side effects."""
+    user = update.effective_user
+    chat = update.effective_chat
+    if (
+        not user
+        or not is_user_allowed(user.id)
+        or chat is None
+        or chat.type not in ("group", "supergroup")
+    ):
+        return
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        return
+    try:
+        # Synchronous claim: another chat cannot win between validation and use.
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+    except GroupChatRouteConflict:
+        logger.warning("Rejected a topic route owned by another group")
+        raise ApplicationHandlerStop from None
 
 
 async def inbound_route_health_handler(
@@ -8500,6 +8528,9 @@ def create_bot() -> Application:
     )
 
     application.add_error_handler(application_error_handler)
+
+    # TypeHandler also covers callbacks; reject collisions before every handler.
+    application.add_handler(TypeHandler(Update, inbound_group_route_guard), group=-2)
 
     # Group -1 observes every inbound message before command/content handlers.
     # A message arriving inside a forum topic proves that a previously
