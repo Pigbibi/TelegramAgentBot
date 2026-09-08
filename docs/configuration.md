@@ -4,7 +4,7 @@ Topic routing is keyed by user and topic ID, not by group. An existing topic
 route cannot be reassigned by sending a message or callback from another group
 with the same topic ID; that update is rejected before command or media handling.
 Keep each user's topic IDs unique across groups. This guard preserves existing
-SQLite state and queued output; it is not a multi-group identity migration.
+SQLite state and queued output. Use a separate bot state directory for another chat.
 
 TelegramAgentBot reads environment variables from the current directory's
 `.env` first, then from `$TELEGRAM_AGENT_BOT_DIR/.env`. The application directory

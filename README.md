@@ -2,258 +2,94 @@
 
 [简体中文](README_CN.md)
 
-[![Check](https://github.com/Pigbibi/TelegramAgentBot/actions/workflows/check.yml/badge.svg)](https://github.com/Pigbibi/TelegramAgentBot/actions/workflows/check.yml)
-[![Secret Scan](https://github.com/Pigbibi/TelegramAgentBot/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/Pigbibi/TelegramAgentBot/actions/workflows/secret-scan.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+Control live Codex CLI and Claude Code sessions from Telegram. Each topic connects to a tmux window, so you can send instructions remotely and attach to the same terminal locally.
 
-Control Codex CLI and Claude Code sessions from Telegram without replacing the
-terminal workflow. TelegramAgentBot maps each Telegram forum topic to a tmux
-window, forwards messages to the selected agent, and streams public session
-output back to Telegram.
-
-tmux remains the source of truth. You can attach to the same session locally at
-any time, and a bot restart does not discard the underlying terminal session.
-
-## Highlights
-
-- One Telegram topic maps to one tmux window and one agent session.
-- Start a Codex or Claude Code session, select a model, and choose a reasoning
-  level from Telegram.
-- Send text, voice messages, images, files, and control keys to a live session.
-- Receive assistant replies, public progress, tool summaries, command output,
-  and interactive prompts.
-- Resume tracked sessions and preserve topic bindings across bot restarts.
-- Steer running Codex and Claude Code turns with native Enter behavior. Codex
-  next-turn input uses Tab; Claude Code uses the bounded durable Bot queue.
-- Open native skills, plugins, permissions, MCP, model, and status commands from
-  Telegram, with agent-aware command spelling.
-- Monitor host health and receive cooldown-controlled operator alerts.
-- Use the built-in local tmux backend or install the optional socket backend
-  for remote agent nodes.
-- Dispatch GitHub issues to existing Codex windows with the optional bridge.
-
-## How it works
-
-```text
-Telegram forum topic
-        │
-        ▼
-TelegramAgentBot ─── durable bindings and input queue
-        │
-        ▼
-tmux window ─── Codex CLI or Claude Code
-        │
-        ▼
-agent transcript ─── public output back to Telegram
-```
-
-TelegramAgentBot controls a real CLI process. It does not create a separate SDK
-conversation, and it does not expose private model reasoning.
+The bot forwards public replies, progress and interactive prompts. Session bindings survive bot restarts; the underlying tmux session remains independent of the bot process.
 
 ## Requirements
 
-- Python 3.12 or newer
-- [uv](https://docs.astral.sh/uv/) for the recommended install path
-- tmux
-- Codex CLI or Claude Code, already installed and authenticated for the service
-  user
-- A Telegram bot with threaded mode enabled
-- Linux with systemd user services, or macOS with launchd, for the included
-  bootstrap scripts
+- Python 3.12+, [uv](https://docs.astral.sh/uv/) and tmux.
+- Codex CLI or Claude Code installed and authenticated for the service user.
+- A Telegram bot with threaded mode enabled and a restricted `ALLOWED_USERS` list.
+- Linux/systemd or macOS/launchd for the supplied service setup.
 
 ## Quick start
 
-### 1. Create a Telegram bot
-
-1. Open [@BotFather](https://t.me/BotFather) in Telegram.
-2. Create a bot and copy its token.
-3. Open the bot settings and enable **Threaded Mode**.
-4. Find the numeric Telegram user IDs that may control the bot.
-
-Only IDs listed in `ALLOWED_USERS` can interact with TelegramAgentBot.
-
-### 2. Install the application
-
-Linux or VPS:
+On Linux or a VPS:
 
 ```bash
-mkdir -p ~/.telegram-agent-bot/app
 git clone https://github.com/Pigbibi/TelegramAgentBot.git \
   ~/.telegram-agent-bot/app/TelegramAgentBot
 cd ~/.telegram-agent-bot/app/TelegramAgentBot
 ./scripts/bootstrap-linux.sh
 ```
 
-macOS:
+On macOS, clone the repository and run `./scripts/bootstrap-macos.sh`. The bootstrap installs dependencies, hooks and a service definition while preserving an existing configuration.
 
-```bash
-git clone https://github.com/Pigbibi/TelegramAgentBot.git
-cd TelegramAgentBot
-./scripts/bootstrap-macos.sh
-```
+Edit `~/.telegram-agent-bot/.env` using the [configuration template](.env.example):
 
-The bootstrap script installs dependencies, creates the application directory,
-installs the session-tracking hook, and writes the platform service definition.
-It does not overwrite an existing configuration file.
+| Setting | Purpose |
+| --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Bot credential from BotFather |
+| `ALLOWED_USERS` | Trusted numeric Telegram user IDs |
+| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex` or `claude` |
+| `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | Project directory shown by the bot |
+| `TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME` | Dedicated tmux socket name |
 
-Keep a Linux service checkout outside directories that agents can browse or
-clean, such as `~/Projects`. The Linux bootstrap validates this boundary.
-
-### 3. Configure the bot
-
-Edit `~/.telegram-agent-bot/.env`:
-
-```ini
-TELEGRAM_BOT_TOKEN=replace_with_your_bot_token
-ALLOWED_USERS=123456789
-
-TELEGRAM_AGENT_BOT_AGENT_TYPE=codex
-TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME=telegram-agent-bot
-TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH=~/Projects
-```
-
-For Claude Code as the default agent:
-
-```ini
-TELEGRAM_AGENT_BOT_AGENT_TYPE=claude
-TELEGRAM_AGENT_BOT_CLAUDE_COMMAND=claude
-```
-
-The annotated configuration template is [`.env.example`](.env.example). See
-[Configuration](docs/configuration.md) for supported settings and operational
-guidance.
-
-### 4. Authenticate the agent CLI
-
-Run the login command as the same OS user that runs TelegramAgentBot:
-
-```bash
-codex login
-```
-
-For Claude Code, configure its supported authentication method and confirm that
-`claude` starts successfully in a normal terminal.
-
-### 5. Start the service
-
-Linux:
+Authenticate the chosen CLI as the same operating-system user, then start the Linux service:
 
 ```bash
 systemctl --user daemon-reload
 systemctl --user enable --now io.github.telegramagentbot.service
-systemctl --user status io.github.telegramagentbot.service --no-pager
 ```
 
-On a VPS, enable lingering if the user service must run without an interactive
-login:
+For macOS startup, Linux lingering, logs and upgrades, follow [Deployment](docs/deployment.md). Keep the service checkout separate from directories managed by agent tasks.
 
-```bash
-sudo loginctl enable-linger "$USER"
-```
+## Use a session
 
-macOS:
+1. Send a message in a Telegram topic.
+2. Select a project and an existing session, or create a session.
+3. Choose the agent and available model settings.
+4. Send text, voice, images or files in the same topic.
 
-```bash
-launchctl bootstrap "gui/$(id -u)" \
-  ~/Library/LaunchAgents/io.github.telegramagentbot.plist
-launchctl kickstart -k "gui/$(id -u)/io.github.telegramagentbot"
-```
-
-See [Deployment](docs/deployment.md) for logs, upgrades, manual installation,
-and service troubleshooting.
-
-## Using the bot
-
-1. Create a forum topic in the Telegram chat.
-2. Send a message in that topic.
-3. Choose a project directory.
-4. Select an existing tracked session or create a new one.
-5. Choose the agent, model, reasoning level, and Fast mode when offered.
-6. Continue sending text or voice messages in the same topic.
-
-The relationship is always:
-
-```text
-one topic = one backend target = one active agent session
-```
-
-Use `/unbind` to detach Telegram without stopping the tmux window. Use `/kill`
-to stop the bound window and remove its binding.
-
-### Telegram commands
-
-| Command | Purpose |
+| Command | Action |
 | --- | --- |
-| `/start` | Show the welcome message |
-| `/history` | Show message history for the current topic |
-| `/mode [clean\|trace]` | Choose concise output or public tool trace |
-| `/screenshot` | Capture the visible terminal pane |
-| `/esc` | Send Escape and discard unsent AgentBot inputs |
-| `/interrupt [message]` | Interrupt; optionally submit a replacement message |
-| `/steer <message>` | Guide the current Codex or Claude Code turn (native Enter) |
-| `/queue <message>` | Queue the next turn (Codex native Tab; Claude durable Bot FIFO) |
-| `/kill` | Stop the bound window and remove the topic binding |
-| `/unbind` | Remove the binding but keep the window running |
-| `/usage` | Show Codex usage information |
-| `/health` | Show a bounded host and AgentBot health snapshot |
-| `/agentlogin [name]` | Authenticate the configured default agent |
-| `/agentaccount` | List, select, save, or clear agent accounts |
-| `/codexlogin`, `/codexaccount` | Manage Codex authentication |
-| `/claudelogin`, `/claudeaccount` | Manage Claude Code authentication |
-| `/agentcmd`, `/cmd` | Forward an arbitrary agent slash command |
-| `/skills`, `/plugins` | Open the active agent's native skills or plugin command |
+| `/steer <message>` | Guide the active turn |
+| `/queue <message>` | Send input for a later turn |
+| `/interrupt [message]` | Interrupt, optionally with replacement input |
+| `/esc` | Send Escape and discard unsent bot input |
+| `/history` | Show topic history |
+| `/health` | Inspect host and bot health |
+| `/unbind` | Detach the topic while keeping its terminal |
+| `/kill` | Stop the bound window and remove the binding |
 
-For a read-only routing check from the service host, run:
+Use one Telegram chat per bot state directory. Topic IDs are scoped by Telegram chat; the bot refuses conflicting cross-chat bindings. See [Features](docs/features.md) for all commands, authentication controls and queue behavior.
+
+## Operations and security
+
+The bot can control a real terminal. Restrict allowed users, protect its `.env` and state directory, and review the agent's permission settings. Keep tmux and optional backend sockets behind SSH or a private network.
+
+Check routing without restarting sessions:
 
 ```bash
-telegram-agent-bot doctor
 telegram-agent-bot doctor --json
 ```
 
-Agent commands such as `/clear`, `/compact`, `/goal`, `/help`, `/memory`, and
-`/model` are forwarded to the active CLI session. The stable `/plugins` entry
-maps to Codex `/plugins` or Claude Code `/plugin`. Invoke plugin-provided skills
-whose names contain `:` or `-` through `/agentcmd`, for example
-`/agentcmd /plugin-name:skill-name arguments`.
-
-## Security model
-
-TelegramAgentBot can type into a terminal on your behalf. Treat it as remote
-shell-adjacent software:
-
-- Keep `ALLOWED_USERS` restricted to trusted numeric user IDs.
-- Store `.env`, account snapshots, and bridge configuration outside the Git
-  checkout with owner-only permissions.
-- Do not expose tmux sockets or the optional socket backend directly to the
-  public internet.
-- Use SSH or a private network for remote node transport.
-- Review agent approval and sandbox settings before enabling unattended use.
-- Test backup-account switching on the target host before enabling automatic
-  account rotation.
-
-To report a vulnerability, follow [SECURITY.md](SECURITY.md). Do not open a
-public issue containing credentials, tokens, private prompts, or exploit
-details.
+Before upgrading or restarting the bot, inspect active tasks and queued input. A green health check does not establish that an agent task completed.
 
 ## Documentation
 
-- [Documentation index](docs/README.md)
-- [Features](docs/features.md)
-- [Configuration](docs/configuration.md)
-- [Deployment and upgrades](docs/deployment.md)
-- [Agent backend plugins](docs/agent_backend_plugins.md)
-- [Socket backend](plugins/socket_backend/README.md)
-- [GitHub issue bridge](docs/github_codex_bridge.md)
-- [VPS cleanup timer](docs/vps_cleanup.md)
+- [Configuration](docs/configuration.md) · [Deployment](docs/deployment.md)
+- [Features and commands](docs/features.md) · [Documentation index](docs/README.md)
+- [Backend plugins](docs/agent_backend_plugins.md) · [Socket backend](plugins/socket_backend/README.md)
+- [GitHub issue bridge](docs/github_codex_bridge.md) · [VPS cleanup](docs/vps_cleanup.md)
 
-## Contributing and support
+For development, run `uv sync --dev`, then the checks in [CONTRIBUTING.md](CONTRIBUTING.md). Bundled fonts retain their own licenses in `src/telegram_agent_bot/fonts/`.
 
-Bug reports and focused pull requests are welcome. Read
-[CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change and use
-[SUPPORT.md](SUPPORT.md) to choose the right support channel. Community
-participation is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+## Support and contributing
+
+[Support](SUPPORT.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md)
 
 ## License
 
-TelegramAgentBot is available under the [MIT License](LICENSE). Bundled fonts
-retain their licenses under `src/telegram_agent_bot/fonts/`.
+[MIT](LICENSE).
