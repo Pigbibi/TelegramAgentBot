@@ -397,6 +397,30 @@ class Config:
                 ),
             ),
         )
+        self.health_disk_recover_percent = min(
+            self.health_disk_used_percent,
+            min(
+                100.0,
+                max(
+                    1.0,
+                    float(
+                        os.getenv(
+                            "TELEGRAM_AGENT_BOT_HEALTH_DISK_RECOVER_PERCENT",
+                            "80",
+                        )
+                    ),
+                ),
+            ),
+        )
+        self.health_disk_min_free_gb = max(
+            0.0,
+            float(
+                os.getenv(
+                    "TELEGRAM_AGENT_BOT_HEALTH_DISK_MIN_FREE_GB",
+                    "6",
+                )
+            ),
+        )
         self.health_queue_oldest_seconds = max(
             60.0,
             float(

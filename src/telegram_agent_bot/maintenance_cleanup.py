@@ -425,6 +425,10 @@ def _run_best_effort(command: Sequence[str], *, dry_run: bool) -> None:
 def clean_system_caches(config: CleanupConfig) -> None:
     _run_best_effort(["sudo", "-n", "apt-get", "clean"], dry_run=config.dry_run)
     _run_best_effort(
+        ["sudo", "-n", "npm", "cache", "clean", "--force"],
+        dry_run=config.dry_run,
+    )
+    _run_best_effort(
         ["sudo", "-n", "journalctl", "--vacuum-size=100M"],
         dry_run=config.dry_run,
     )

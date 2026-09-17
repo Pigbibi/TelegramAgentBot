@@ -6,6 +6,7 @@ import asyncio
 import logging
 import shutil
 import time
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -117,6 +118,27 @@ def _format_bytes(value: int) -> str:
             return f"{amount:.0f} {unit}" if unit == "B" else f"{amount:.1f} {unit}"
         amount /= 1024.0
     return f"{amount:.1f} TiB"
+
+
+def _disk_is_tight(
+    host: HostMetrics,
+    config: Any,
+    *,
+    disk_already_active: bool,
+) -> bool:
+    """Alert at the high watermark; clear only after percent and free space recover."""
+    alert_percent = float(config.health_disk_used_percent)
+    recover_percent = min(
+        alert_percent,
+        float(getattr(config, "health_disk_recover_percent", alert_percent)),
+    )
+    threshold = recover_percent if disk_already_active else alert_percent
+    if host.disk_used_percent < threshold:
+        return False
+    min_free_gb = float(getattr(config, "health_disk_min_free_gb", 0.0))
+    if min_free_gb <= 0:
+        return True
+    return host.disk_free_bytes < min_free_gb * (1024**3)
 
 
 def format_health_snapshot(
@@ -240,6 +262,10 @@ class VpsHealthMonitor:
             self._alert_states = {}
         return self._alert_states
 
+    def active_issue_keys(self) -> set[str]:
+        """Return currently alerting issue keys from durable state."""
+        return {key for key, state in self._load_alert_states().items() if state.active}
+
     async def snapshot(self, session_monitor: Any | None) -> HealthSnapshot:
         """Collect bounded host, queue, delivery, and scheduler metrics."""
         host = await asyncio.to_thread(collect_host_metrics)
@@ -317,7 +343,12 @@ class VpsHealthMonitor:
         )
 
     @staticmethod
-    def issues(snapshot: HealthSnapshot, config: Any) -> tuple[HealthIssue, ...]:
+    def issues(
+        snapshot: HealthSnapshot,
+        config: Any,
+        *,
+        active_keys: Collection[str] = (),
+    ) -> tuple[HealthIssue, ...]:
         """Evaluate one snapshot against configurable small-host thresholds."""
         found: list[HealthIssue] = []
         chinese = getattr(config, "health_notification_language", "en") == "zh"
@@ -344,7 +375,9 @@ class VpsHealthMonitor:
                     + f"{snapshot.host.swap_used_percent:.0f}%",
                 )
             )
-        if snapshot.host.disk_used_percent >= config.health_disk_used_percent:
+        if _disk_is_tight(
+            snapshot.host, config, disk_already_active="disk" in active_keys
+        ):
             found.append(
                 HealthIssue(
                     "disk",
@@ -491,7 +524,11 @@ class VpsHealthMonitor:
         while True:
             try:
                 snapshot = await self.snapshot(session_monitor_getter())
-                issues = self.issues(snapshot, config)
+                issues = self.issues(
+                    snapshot,
+                    config,
+                    active_keys=self.active_issue_keys(),
+                )
                 decision = self.decide(
                     issues,
                     cooldown_seconds=float(config.health_alert_cooldown_seconds),

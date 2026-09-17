@@ -1690,7 +1690,11 @@ async def health_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
         return
     try:
         snapshot = await _health_monitor.snapshot(session_monitor)
-        issues = _health_monitor.issues(snapshot, config)
+        issues = _health_monitor.issues(
+            snapshot,
+            config,
+            active_keys=_health_monitor.active_issue_keys(),
+        )
         await safe_reply(
             update.message,
             format_health_snapshot(
