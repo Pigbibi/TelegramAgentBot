@@ -262,3 +262,59 @@ def test_transcript_lag_tracking_forgets_drained_sessions(tmp_path):
     assert monitor._measure_transcript_lag({}, {}, now_monotonic=20.0) == 0.0
     assert monitor._transcript_lag_started == {}
     assert monitor._transcript_delivery_offsets == {}
+
+
+def _disk_config(**overrides):
+    values = {
+        "health_memory_available_mb": 256.0,
+        "health_swap_used_percent": 75.0,
+        "health_disk_used_percent": 85.0,
+        "health_disk_recover_percent": 80.0,
+        "health_disk_min_free_gb": 6.0,
+        "health_queue_oldest_seconds": 600.0,
+        "health_transcript_lag_seconds": 120.0,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _disk_host(*, used_gb: float, free_gb: float) -> HostMetrics:
+    used = int(used_gb * 1024**3)
+    free = int(free_gb * 1024**3)
+    return HostMetrics(
+        memory_total_bytes=2 * 1024**3,
+        memory_available_bytes=512 * 1024**2,
+        swap_total_bytes=4 * 1024**3,
+        swap_used_bytes=1 * 1024**3,
+        disk_total_bytes=used + free,
+        disk_used_bytes=used,
+        disk_free_bytes=free,
+    )
+
+
+def test_disk_alert_requires_high_percent_and_low_free_space():
+    config = _disk_config()
+    plenty_free = _snapshot(host=_disk_host(used_gb=51, free_gb=9))
+    tight = _snapshot(host=_disk_host(used_gb=34, free_gb=5))
+
+    assert plenty_free.host.disk_used_percent >= 85.0
+    assert VpsHealthMonitor.issues(plenty_free, config) == ()
+    assert [issue.key for issue in VpsHealthMonitor.issues(tight, config)] == ["disk"]
+
+
+def test_disk_alert_uses_hysteresis_until_percent_or_free_space_recovers():
+    config = _disk_config()
+    still_tight = _snapshot(host=_disk_host(used_gb=31, free_gb=5.5))
+    percent_recovered = _snapshot(host=_disk_host(used_gb=24, free_gb=8))
+    free_recovered = _snapshot(host=_disk_host(used_gb=33, free_gb=7))
+
+    assert 80.0 <= still_tight.host.disk_used_percent < 85.0
+    assert VpsHealthMonitor.issues(still_tight, config) == ()
+    assert [
+        issue.key
+        for issue in VpsHealthMonitor.issues(still_tight, config, active_keys={"disk"})
+    ] == ["disk"]
+    assert (
+        VpsHealthMonitor.issues(percent_recovered, config, active_keys={"disk"}) == ()
+    )
+    assert VpsHealthMonitor.issues(free_recovered, config, active_keys={"disk"}) == ()

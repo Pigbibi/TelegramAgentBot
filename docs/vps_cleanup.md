@@ -123,6 +123,7 @@ System cache commands are best effort:
 
 ```text
 sudo -n apt-get clean
+sudo -n npm cache clean --force
 sudo -n journalctl --vacuum-size=100M
 ```
 

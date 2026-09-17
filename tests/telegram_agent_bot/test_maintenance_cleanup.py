@@ -176,3 +176,18 @@ def test_clean_tmp_keeps_bot_locks_and_removes_old_artifacts(tmp_path: Path) -> 
     assert lock_dir.exists()
     assert tmux_dir.exists()
     assert not old_artifact.exists()
+
+
+def test_clean_system_caches_clears_root_npm_cache(monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        cleanup,
+        "_run_best_effort",
+        lambda command, dry_run: commands.append(list(command)),
+    )
+
+    cleanup.clean_system_caches(SimpleNamespace(dry_run=False))
+
+    assert ["sudo", "-n", "apt-get", "clean"] in commands
+    assert ["sudo", "-n", "npm", "cache", "clean", "--force"] in commands
+    assert ["sudo", "-n", "journalctl", "--vacuum-size=100M"] in commands

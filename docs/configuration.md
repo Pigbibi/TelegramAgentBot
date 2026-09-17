@@ -152,6 +152,8 @@ is loaded so child agent processes do not inherit them.
 | `TELEGRAM_AGENT_BOT_HEALTH_MEMORY_AVAILABLE_MB` | `256` | Low-memory threshold |
 | `TELEGRAM_AGENT_BOT_HEALTH_SWAP_USED_PERCENT` | `75` | Swap alert threshold |
 | `TELEGRAM_AGENT_BOT_HEALTH_DISK_USED_PERCENT` | `85` | Disk alert threshold |
+| `TELEGRAM_AGENT_BOT_HEALTH_DISK_RECOVER_PERCENT` | `80` | Disk recovery threshold; clamped at or below the alert percent |
+| `TELEGRAM_AGENT_BOT_HEALTH_DISK_MIN_FREE_GB` | `6` | Disk alerts also require free space below this many GiB; `0` disables |
 | `TELEGRAM_AGENT_BOT_HEALTH_QUEUE_OLDEST_SECONDS` | `3600` | Oldest-input alert threshold |
 | `TELEGRAM_AGENT_BOT_HEALTH_TRANSCRIPT_LAG_SECONDS` | `300` | Transcript-delivery lag threshold |
 

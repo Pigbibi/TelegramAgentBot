@@ -40,6 +40,8 @@ def _base_env(monkeypatch, tmp_path):
         "TELEGRAM_AGENT_BOT_HEALTH_MEMORY_AVAILABLE_MB",
         "TELEGRAM_AGENT_BOT_HEALTH_SWAP_USED_PERCENT",
         "TELEGRAM_AGENT_BOT_HEALTH_DISK_USED_PERCENT",
+        "TELEGRAM_AGENT_BOT_HEALTH_DISK_RECOVER_PERCENT",
+        "TELEGRAM_AGENT_BOT_HEALTH_DISK_MIN_FREE_GB",
         "TELEGRAM_AGENT_BOT_HEALTH_QUEUE_OLDEST_SECONDS",
         "TELEGRAM_AGENT_BOT_HEALTH_TRANSCRIPT_LAG_SECONDS",
     ):
@@ -119,8 +121,19 @@ class TestConfigValid:
         assert cfg.health_memory_available_mb == 256.0
         assert cfg.health_swap_used_percent == 75.0
         assert cfg.health_disk_used_percent == 85.0
+        assert cfg.health_disk_recover_percent == 80.0
+        assert cfg.health_disk_min_free_gb == 6.0
         assert cfg.health_queue_oldest_seconds == 3600.0
         assert cfg.health_transcript_lag_seconds == 300.0
+
+    def test_disk_recover_percent_is_clamped_to_alert_percent(
+        self, monkeypatch, _base_env
+    ):
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_HEALTH_DISK_USED_PERCENT", "75")
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_HEALTH_DISK_RECOVER_PERCENT", "90")
+        cfg = Config()
+        assert cfg.health_disk_used_percent == 75.0
+        assert cfg.health_disk_recover_percent == 75.0
 
     def test_health_notification_language_can_be_selected(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_HEALTH_NOTIFICATION_LANGUAGE", "zh")
