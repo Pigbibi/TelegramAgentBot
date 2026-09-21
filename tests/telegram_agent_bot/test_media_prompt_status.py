@@ -12,6 +12,7 @@ from telegram_agent_bot.backends.files import FileUploadResult
 def _make_context():
     context = MagicMock()
     context.bot = AsyncMock()
+    context.user_data = {}
     return context
 
 
@@ -141,6 +142,113 @@ async def test_busy_media_offers_native_routing_choice(
     assert offer_kwargs["text"].startswith(attachment_prefix)
     assert offer_kwargs["text"].endswith(expected_suffix)
     send_or_queue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler_name", "directory_attr", "media_kind", "expected_name"),
+    [
+        ("photo_handler", "_IMAGES_DIR", "photo", "photo-1.jpg"),
+        ("document_handler", "_FILES_DIR", "document", "report.pdf"),
+    ],
+)
+async def test_first_media_starts_session_setup_and_is_kept_for_delivery(
+    monkeypatch,
+    tmp_path,
+    handler_name,
+    directory_attr,
+    media_kind,
+    expected_name,
+):
+    """A new topic can begin with an attachment, without asking for a text first."""
+    update = _make_base_update()
+    context = _make_context()
+    update.message.caption = "please review"
+
+    media = MagicMock()
+    media.file_unique_id = f"{media_kind}-1"
+    if media_kind == "photo":
+        update.message.photo = [media]
+    else:
+        media.file_name = expected_name
+        update.message.document = media
+
+    show_picker = AsyncMock()
+    safe_reply = AsyncMock()
+    monkeypatch.setattr(bot_module, "is_user_allowed", lambda _user_id: True)
+    monkeypatch.setattr(bot_module, "_get_thread_id", lambda _update: 42)
+    monkeypatch.setattr(bot_module, directory_attr, tmp_path)
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "set_group_chat_id",
+        lambda _user_id, _thread_id, _chat_id: None,
+    )
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "get_ambiguous_window_for_thread",
+        lambda _user_id, _thread_id: None,
+    )
+    monkeypatch.setattr(
+        bot_module.session_manager,
+        "get_window_for_thread",
+        lambda _user_id, _thread_id: None,
+    )
+    monkeypatch.setattr(bot_module, "_remote_target_for_thread", lambda *_args: None)
+    monkeypatch.setattr(bot_module.config, "project_roots_configured", True)
+    monkeypatch.setattr(bot_module, "_download_telegram_media", AsyncMock())
+    monkeypatch.setattr(bot_module, "_show_root_or_directory_picker", show_picker)
+    monkeypatch.setattr(bot_module, "safe_reply", safe_reply)
+
+    await getattr(bot_module, handler_name)(update, context)
+
+    assert context.user_data["_pending_thread_id"] == 42
+    pending = context.user_data["_pending_thread_media"]
+    assert pending["kind"] == media_kind
+    assert pending["caption"] == "please review"
+    assert pending["filename"].endswith(expected_name)
+    show_picker.assert_awaited_once_with(update.message, context)
+    safe_reply.assert_awaited_once_with(
+        update.message,
+        "📎 Attachment received. Choose a project to start a session; it will be sent automatically.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_retained_first_attachment_uploads_when_remote_session_is_created(
+    tmp_path,
+    monkeypatch,
+):
+    attachment = tmp_path / "brief.pdf"
+    attachment.write_bytes(b"test attachment")
+    context = _make_context()
+    context.user_data["_pending_thread_media"] = {
+        "kind": "document",
+        "path": str(attachment),
+        "filename": "brief.pdf",
+        "caption": "review this",
+    }
+    upload = AsyncMock(
+        return_value=FileUploadResult(ok=True, path="/remote/uploads/brief.pdf")
+    )
+    monkeypatch.setattr(bot_module, "upload_agent_file", upload)
+
+    message, error = await bot_module._take_pending_thread_message(
+        context,
+        user_id=12345,
+        thread_id=42,
+        remote=True,
+    )
+
+    assert error is None
+    assert message == "review this\n\n(file attached: /remote/uploads/brief.pdf)"
+    upload.assert_awaited_once_with(
+        12345,
+        42,
+        "",
+        str(attachment),
+        filename="brief.pdf",
+    )
+    assert "_pending_thread_media" not in context.user_data
 
 
 @pytest.mark.asyncio

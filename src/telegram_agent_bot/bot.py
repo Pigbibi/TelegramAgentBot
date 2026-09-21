@@ -370,6 +370,7 @@ PHOTO_QUEUED_MESSAGE = (
 FILE_QUEUED_MESSAGE = (
     f"📎 File queued for {PRODUCT_NAME}; it will send after the current response."
 )
+PENDING_THREAD_MEDIA_KEY = "_pending_thread_media"
 SESSION_STILL_RUNNING_MESSAGE = f"The {PRODUCT_NAME} session is still running in tmux."
 HELP_COMMAND_DESCRIPTION = f"↗ Show {PRODUCT_NAME} help"
 ESC_COMMAND_DESCRIPTION = f"Interrupt current {PRODUCT_NAME} run"
@@ -475,6 +476,15 @@ class _RootSelection(TypedDict):
     path: str
     backend_id: str
     node_id: str
+
+
+class _PendingThreadMedia(TypedDict):
+    """Attachment retained while a new topic is choosing its first session."""
+
+    kind: str
+    path: str
+    filename: str
+    caption: str
 
 
 def _default_directory_browser_path(root_path: str | None = None) -> str:
@@ -712,6 +722,153 @@ async def _show_root_or_directory_picker(
         await safe_edit(target, msg_text, reply_markup=keyboard)
     else:
         await safe_reply(target, msg_text, reply_markup=keyboard)
+
+
+def _clear_pending_thread_input(user_data: dict | None) -> None:
+    """Forget the first message retained while a topic is being configured."""
+    if user_data is not None:
+        user_data.pop("_pending_thread_id", None)
+        user_data.pop("_pending_thread_text", None)
+        user_data.pop(PENDING_THREAD_MEDIA_KEY, None)
+
+
+async def _start_unbound_topic_creation(
+    message: Any,
+    context: ContextTypes.DEFAULT_TYPE,
+    user: Any,
+    thread_id: int,
+    *,
+    text: str | None = None,
+) -> None:
+    """Open the normal session picker and retain the topic's first input."""
+    if context.user_data is not None:
+        context.user_data["_pending_thread_id"] = thread_id
+        if text is not None:
+            context.user_data["_pending_thread_text"] = text
+            context.user_data.pop(PENDING_THREAD_MEDIA_KEY, None)
+
+    if getattr(config, "project_roots_configured", False) or (
+        _active_remote_root_browser() is not None
+    ):
+        logger.info(
+            "Unbound topic: showing configured project root picker (user=%d, thread=%d)",
+            user.id,
+            thread_id,
+        )
+        await _show_root_or_directory_picker(message, context)
+        return
+
+    all_windows = await tmux_manager.list_windows()
+    bound_ids = {wid for _, _, wid in session_manager.iter_thread_bindings()}
+    bindable_unbound = [
+        (w.window_id, w.window_name, w.cwd)
+        for w in all_windows
+        if w.window_id not in bound_ids
+        and _has_trackable_session_for_window(w.window_id)
+    ]
+    logger.debug(
+        "Window picker check: all=%s, bound=%s, bindable_unbound=%s",
+        [w.window_name for w in all_windows],
+        bound_ids,
+        [name for _, name, _ in bindable_unbound],
+    )
+
+    if bindable_unbound:
+        logger.info(
+            "Unbound topic: showing window picker (%d bindable windows, user=%d, thread=%d)",
+            len(bindable_unbound),
+            user.id,
+            thread_id,
+        )
+        msg_text, keyboard, win_ids = build_window_picker(bindable_unbound)
+        if context.user_data is not None:
+            context.user_data[STATE_KEY] = STATE_SELECTING_WINDOW
+            context.user_data[UNBOUND_WINDOWS_KEY] = win_ids
+        await safe_reply(message, msg_text, reply_markup=keyboard)
+        return
+
+    logger.info(
+        "Unbound topic: showing project root or directory picker (user=%d, thread=%d)",
+        user.id,
+        thread_id,
+    )
+    await _show_root_or_directory_picker(message, context)
+
+
+def _store_pending_thread_media(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    kind: str,
+    path: Path,
+    filename: str,
+    caption: str,
+) -> None:
+    """Keep a downloaded first attachment until the topic selects a session."""
+    if context.user_data is None:
+        return
+    context.user_data.pop("_pending_thread_text", None)
+    context.user_data[PENDING_THREAD_MEDIA_KEY] = {
+        "kind": kind,
+        "path": str(path),
+        "filename": filename,
+        "caption": caption,
+    }
+
+
+async def _take_pending_thread_message(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    thread_id: int,
+    remote: bool,
+) -> tuple[str | None, str | None]:
+    """Return the retained first input, uploading an attachment when needed."""
+    if context.user_data is None:
+        return None, None
+
+    pending_text = context.user_data.pop("_pending_thread_text", None)
+    pending_media = context.user_data.pop(PENDING_THREAD_MEDIA_KEY, None)
+    if pending_text:
+        return sanitize_forward_text(pending_text), None
+    if not isinstance(pending_media, dict):
+        return None, None
+
+    pending_media = cast(_PendingThreadMedia, pending_media)
+    kind = pending_media.get("kind")
+    source_path = pending_media.get("path")
+    filename = pending_media.get("filename")
+    caption = pending_media.get("caption") or ""
+    if (
+        kind not in {"photo", "document"}
+        or not isinstance(source_path, str)
+        or not source_path
+        or not isinstance(filename, str)
+        or not filename
+    ):
+        return None, "The saved attachment is invalid. Please send it again."
+    if not Path(source_path).is_file():
+        return (
+            None,
+            "The saved attachment is no longer available. Please send it again.",
+        )
+
+    agent_file_path = source_path
+    if remote:
+        upload = await upload_agent_file(
+            user_id,
+            thread_id,
+            "",
+            source_path,
+            filename=filename,
+        )
+        if upload is None or not upload.ok or not upload.path:
+            detail = upload.message if upload is not None else "backend unavailable"
+            return None, f"File transfer failed: {detail or 'backend unavailable'}"
+        agent_file_path = upload.path
+
+    attachment_kind = "image" if kind == "photo" else "file"
+    suffix = f"({attachment_kind} attached: {agent_file_path})"
+    return f"{caption}\n\n{suffix}" if caption else suffix, None
 
 
 def _build_request(
@@ -1002,9 +1159,8 @@ def _clear_creation_state(user_data: dict | None) -> None:
     clear_session_picker_state(user_data)
     clear_profile_picker_state(user_data)
     if user_data is not None:
+        _clear_pending_thread_input(user_data)
         for key in (
-            "_pending_thread_id",
-            "_pending_thread_text",
             "_selected_path",
             "_selected_backend_id",
             "_selected_node_id",
@@ -4648,12 +4804,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     remote_target = None
     if wid is None:
         remote_target = _remote_target_for_thread(user.id, thread_id)
-        if remote_target is None:
-            await safe_reply(
-                update.message,
-                "❌ No session bound to this topic. Send a text message first to create one.",
-            )
-            return
 
     w = None
     if wid is not None:
@@ -4670,6 +4820,21 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except (TelegramError, OSError) as exc:
         logger.exception("Failed to download Telegram photo")
         await safe_reply(update.message, f"❌ Failed to download image: {exc}")
+        return
+
+    if wid is None and remote_target is None:
+        _store_pending_thread_media(
+            context,
+            kind="photo",
+            path=file_path,
+            filename=filename,
+            caption=update.message.caption or "",
+        )
+        await safe_reply(
+            update.message,
+            "📎 Attachment received. Choose a project to start a session; it will be sent automatically.",
+        )
+        await _start_unbound_topic_creation(update.message, context, user, thread_id)
         return
 
     agent_file_path = str(file_path)
@@ -4838,12 +5003,6 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     remote_target = None
     if wid is None:
         remote_target = _remote_target_for_thread(user.id, thread_id)
-        if remote_target is None:
-            await safe_reply(
-                update.message,
-                "❌ No session bound to this topic. Send a text message first to create one.",
-            )
-            return
 
     w = None
     if wid is not None:
@@ -4861,6 +5020,21 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except (TelegramError, OSError) as exc:
         logger.exception("Failed to download Telegram document")
         await safe_reply(update.message, f"❌ Failed to download file: {exc}")
+        return
+
+    if wid is None and remote_target is None:
+        _store_pending_thread_media(
+            context,
+            kind="document",
+            path=file_path,
+            filename=document_name,
+            caption=update.message.caption or "",
+        )
+        await safe_reply(
+            update.message,
+            "📎 Attachment received. Choose a project to start a session; it will be sent automatically.",
+        )
+        await _start_unbound_topic_creation(update.message, context, user, thread_id)
         return
 
     agent_file_path = str(file_path)
@@ -6102,8 +6276,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
         # Stale picker state from a different thread — clear it
         clear_window_picker_state(context.user_data)
-        context.user_data.pop("_pending_thread_id", None)
-        context.user_data.pop("_pending_thread_text", None)
+        _clear_pending_thread_input(context.user_data)
 
     # Ignore text in project root picker mode (only for the same thread)
     if context.user_data and context.user_data.get(STATE_KEY) == STATE_SELECTING_ROOT:
@@ -6116,8 +6289,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
         # Stale root picker state from a different thread — clear it
         clear_root_picker_state(context.user_data)
-        context.user_data.pop("_pending_thread_id", None)
-        context.user_data.pop("_pending_thread_text", None)
+        _clear_pending_thread_input(context.user_data)
 
     # Ignore text in directory browsing mode (only for the same thread)
     if (
@@ -6133,8 +6305,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
         # Stale browsing state from a different thread — clear it
         clear_browse_state(context.user_data)
-        context.user_data.pop("_pending_thread_id", None)
-        context.user_data.pop("_pending_thread_text", None)
+        _clear_pending_thread_input(context.user_data)
 
     # Ignore text in session picker mode (only for the same thread)
     if (
@@ -6150,8 +6321,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
         # Stale picker state from a different thread — clear it
         clear_session_picker_state(context.user_data)
-        context.user_data.pop("_pending_thread_id", None)
-        context.user_data.pop("_pending_thread_text", None)
+        _clear_pending_thread_input(context.user_data)
         context.user_data.pop("_selected_path", None)
 
     # Must be in a named topic
@@ -6189,63 +6359,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 await safe_reply(update.message, f"❌ {message}")
             return
 
-        if getattr(config, "project_roots_configured", False) or (
-            _active_remote_root_browser() is not None
-        ):
-            logger.info(
-                "Unbound topic: showing configured project root picker (user=%d, thread=%d)",
-                user.id,
-                thread_id,
-            )
-            if context.user_data is not None:
-                context.user_data["_pending_thread_id"] = thread_id
-                context.user_data["_pending_thread_text"] = text
-            await _show_root_or_directory_picker(update.message, context)
-            return
-
-        # Unbound topic — check for unbound windows first
-        all_windows = await tmux_manager.list_windows()
-        bound_ids = {wid for _, _, wid in session_manager.iter_thread_bindings()}
-        bindable_unbound = [
-            (w.window_id, w.window_name, w.cwd)
-            for w in all_windows
-            if w.window_id not in bound_ids
-            and _has_trackable_session_for_window(w.window_id)
-        ]
-        logger.debug(
-            "Window picker check: all=%s, bound=%s, bindable_unbound=%s",
-            [w.window_name for w in all_windows],
-            bound_ids,
-            [name for _, name, _ in bindable_unbound],
-        )
-
-        if bindable_unbound:
-            # Show window picker
-            logger.info(
-                "Unbound topic: showing window picker (%d bindable windows, user=%d, thread=%d)",
-                len(bindable_unbound),
-                user.id,
-                thread_id,
-            )
-            msg_text, keyboard, win_ids = build_window_picker(bindable_unbound)
-            if context.user_data is not None:
-                context.user_data[STATE_KEY] = STATE_SELECTING_WINDOW
-                context.user_data[UNBOUND_WINDOWS_KEY] = win_ids
-                context.user_data["_pending_thread_id"] = thread_id
-                context.user_data["_pending_thread_text"] = text
-            await safe_reply(update.message, msg_text, reply_markup=keyboard)
-            return
-
-        # No unbound windows — show root/directory picker to create a new session
-        logger.info(
-            "Unbound topic: showing project root or directory picker (user=%d, thread=%d)",
-            user.id,
+        await _start_unbound_topic_creation(
+            update.message,
+            context,
+            user,
             thread_id,
+            text=text,
         )
-        if context.user_data is not None:
-            context.user_data["_pending_thread_id"] = thread_id
-            context.user_data["_pending_thread_text"] = text
-        await _show_root_or_directory_picker(update.message, context)
         return
 
     # Bound topic — forward to bound window
@@ -6469,17 +6589,22 @@ async def _create_and_bind_window(
                     resolved_chat,
                 )
 
-                pending_text = (
-                    context.user_data.get("_pending_thread_text")
-                    if context.user_data
-                    else None
+                pending_text, pending_error = await _take_pending_thread_message(
+                    context,
+                    user_id=query.from_user.id,
+                    thread_id=pending_thread_id,
+                    remote=True,
                 )
-                if pending_text:
-                    pending_text = sanitize_forward_text(pending_text)
                 if context.user_data is not None:
-                    context.user_data.pop("_pending_thread_text", None)
                     context.user_data.pop("_pending_thread_id", None)
-                if pending_text:
+                if pending_error:
+                    await safe_send(
+                        context.bot,
+                        resolved_chat,
+                        f"❌ Failed to send pending attachment: {pending_error}",
+                        message_thread_id=pending_thread_id,
+                    )
+                elif pending_text:
                     send_ok, send_msg = await _send_message_to_agent(
                         query.from_user.id,
                         pending_thread_id,
@@ -6509,8 +6634,7 @@ async def _create_and_bind_window(
         if not created_wid:
             await safe_edit(query, "❌ Agent backend did not return a local window id")
             if pending_thread_id is not None and context.user_data is not None:
-                context.user_data.pop("_pending_thread_id", None)
-                context.user_data.pop("_pending_thread_text", None)
+                _clear_pending_thread_input(context.user_data)
             if answer_callback:
                 try:
                     await query.answer("Failed")
@@ -6602,23 +6726,28 @@ async def _create_and_bind_window(
                 resolved_chat,
             )
 
-            # Send pending text if any
-            pending_text = (
-                context.user_data.get("_pending_thread_text")
-                if context.user_data
-                else None
+            # Send the first text or attachment retained while the topic chose a session.
+            pending_text, pending_error = await _take_pending_thread_message(
+                context,
+                user_id=query.from_user.id,
+                thread_id=pending_thread_id,
+                remote=False,
             )
-            if pending_text:
-                pending_text = sanitize_forward_text(pending_text)
-            if pending_text:
+            if context.user_data is not None:
+                context.user_data.pop("_pending_thread_id", None)
+            if pending_error:
+                await safe_send(
+                    context.bot,
+                    resolved_chat,
+                    f"❌ Failed to send pending attachment: {pending_error}",
+                    message_thread_id=pending_thread_id,
+                )
+            elif pending_text:
                 logger.debug(
-                    "Forwarding pending text to window %s (len=%d)",
+                    "Forwarding pending topic input to window %s (len=%d)",
                     created_wname,
                     len(pending_text),
                 )
-                if context.user_data is not None:
-                    context.user_data.pop("_pending_thread_text", None)
-                    context.user_data.pop("_pending_thread_id", None)
                 send_ok, send_msg, queued = await _send_or_queue_to_starting_window(
                     context.bot,
                     query.from_user.id,
@@ -6649,16 +6778,13 @@ async def _create_and_bind_window(
                         f"❌ Failed to send pending message: {send_msg}",
                         message_thread_id=pending_thread_id,
                     )
-            elif context.user_data is not None:
-                context.user_data.pop("_pending_thread_id", None)
         else:
             # Should not happen in topic-only mode, but handle gracefully
             await safe_edit(query, f"✅ {message}")
     else:
         await safe_edit(query, f"❌ {message}")
         if pending_thread_id is not None and context.user_data is not None:
-            context.user_data.pop("_pending_thread_id", None)
-            context.user_data.pop("_pending_thread_text", None)
+            _clear_pending_thread_input(context.user_data)
     if answer_callback:
         try:
             await query.answer("Created" if success else "Failed")
@@ -7201,8 +7327,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         clear_root_picker_state(context.user_data)
         if context.user_data is not None:
-            context.user_data.pop("_pending_thread_id", None)
-            context.user_data.pop("_pending_thread_text", None)
+            _clear_pending_thread_input(context.user_data)
         await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
 
@@ -7548,8 +7673,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if pending_thread_id is not None and confirm_thread_id != pending_thread_id:
             clear_browse_state(context.user_data)
             if context.user_data is not None:
-                context.user_data.pop("_pending_thread_id", None)
-                context.user_data.pop("_pending_thread_text", None)
+                _clear_pending_thread_input(context.user_data)
             await query.answer("Stale browser (topic mismatch)", show_alert=True)
             return
 
@@ -7571,8 +7695,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         clear_browse_state(context.user_data)
         if context.user_data is not None:
-            context.user_data.pop("_pending_thread_id", None)
-            context.user_data.pop("_pending_thread_text", None)
+            _clear_pending_thread_input(context.user_data)
         await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
 
@@ -7710,8 +7833,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         clear_session_picker_state(context.user_data)
         if context.user_data is not None:
-            context.user_data.pop("_pending_thread_id", None)
-            context.user_data.pop("_pending_thread_text", None)
+            _clear_pending_thread_input(context.user_data)
             context.user_data.pop("_selected_path", None)
             context.user_data.pop("_selected_backend_id", None)
             context.user_data.pop("_selected_node_id", None)
@@ -7776,16 +7898,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             f"✅ Bound to window `{display}`",
         )
 
-        # Forward pending text if any
-        pending_text = (
-            context.user_data.get("_pending_thread_text") if context.user_data else None
+        # Forward the first text or attachment retained while choosing a window.
+        pending_text, pending_error = await _take_pending_thread_message(
+            context,
+            user_id=user.id,
+            thread_id=thread_id,
+            remote=False,
         )
-        if pending_text:
-            pending_text = sanitize_forward_text(pending_text)
         if context.user_data is not None:
-            context.user_data.pop("_pending_thread_text", None)
             context.user_data.pop("_pending_thread_id", None)
-        if pending_text:
+        if pending_error:
+            await safe_send(
+                context.bot,
+                resolved_chat,
+                f"❌ Failed to send pending attachment: {pending_error}",
+                message_thread_id=thread_id,
+            )
+        elif pending_text:
             send_ok, send_msg, queued = await _send_or_queue_agent_input(
                 context.bot,
                 user.id,
@@ -7840,8 +7969,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         clear_window_picker_state(context.user_data)
         if context.user_data is not None:
-            context.user_data.pop("_pending_thread_id", None)
-            context.user_data.pop("_pending_thread_text", None)
+            _clear_pending_thread_input(context.user_data)
         await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
 

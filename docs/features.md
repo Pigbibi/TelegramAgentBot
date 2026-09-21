@@ -25,7 +25,7 @@ The bot accepts:
 
 - text messages;
 - Telegram voice messages through a configured transcription provider;
-- photos and files, saved locally before their paths are sent to the agent;
+- photos and files, saved locally before their paths are sent to the agent; they can also be the first message in a new topic and are delivered after session setup;
 - Escape and interrupt controls;
 - agent-native active-turn guidance and next-turn queueing;
 - agent slash commands, skills, and plugins;
