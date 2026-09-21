@@ -2,14 +2,14 @@
 
 [简体中文](README_CN.md)
 
-Control live Codex CLI and Claude Code sessions from Telegram. Each topic connects to a tmux window, so you can send instructions remotely and attach to the same terminal locally.
+Control live Codex CLI, Claude Code, and Cursor Agent sessions from Telegram. Each topic connects to a tmux window, so you can send instructions remotely and attach to the same terminal locally.
 
 The bot forwards public replies, progress and interactive prompts. Session bindings survive bot restarts; the underlying tmux session remains independent of the bot process.
 
 ## Requirements
 
 - Python 3.12+, [uv](https://docs.astral.sh/uv/) and tmux.
-- Codex CLI or Claude Code installed and authenticated for the service user.
+- Codex CLI, Claude Code, or Cursor Agent CLI installed and authenticated for the service user.
 - A Telegram bot with threaded mode enabled and a restricted `ALLOWED_USERS` list.
 - Linux/systemd or macOS/launchd for the supplied service setup.
 
@@ -32,7 +32,7 @@ Edit `~/.telegram-agent-bot/.env` using the [configuration template](.env.exampl
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | Bot credential from BotFather |
 | `ALLOWED_USERS` | Trusted numeric Telegram user IDs |
-| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex` or `claude` |
+| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex`, `claude`, or `cursor` |
 | `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | Project directory shown by the bot |
 | `TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME` | Dedicated tmux socket name |
 
@@ -42,6 +42,19 @@ Authenticate the chosen CLI as the same operating-system user, then start the Li
 systemctl --user daemon-reload
 systemctl --user enable --now io.github.telegramagentbot.service
 ```
+
+For Cursor Agent, install and authenticate Cursor's CLI as the service user, then set:
+
+```ini
+TELEGRAM_AGENT_BOT_AGENT_TYPE=cursor
+TELEGRAM_AGENT_BOT_CURSOR_COMMAND=agent
+# Optional model picker; otherwise Cursor uses its CLI default.
+# TELEGRAM_AGENT_BOT_CURSOR_MODELS=gpt-5,sonnet-4
+```
+
+Cursor uses the same tmux topic routing and terminal output capture. Its account
+storage is not copied into AgentBot account snapshots. Authenticate it first in
+the service user's interactive terminal with `agent login`.
 
 For macOS startup, Linux lingering, logs and upgrades, follow [Deployment](docs/deployment.md). Keep the service checkout separate from directories managed by agent tasks.
 

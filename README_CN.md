@@ -2,14 +2,14 @@
 
 [English](README.md)
 
-通过 Telegram 控制正在运行的 Codex CLI 和 Claude Code 会话。每个话题对应一个 tmux 窗口，方便远程发送指令，也能在本机连接同一个终端。
+通过 Telegram 控制正在运行的 Codex CLI、Claude Code 和 Cursor Agent 会话。每个话题对应一个 tmux 窗口，方便远程发送指令，也能在本机连接同一个终端。
 
 机器人转发公开回复、进度和交互提示。重启机器人后话题绑定可以恢复；底层 tmux 会话独立于机器人进程存在。
 
 ## 运行要求
 
 - Python 3.12+、[uv](https://docs.astral.sh/uv/) 和 tmux。
-- 服务用户已安装并认证 Codex CLI 或 Claude Code。
+- 服务用户已安装并认证 Codex CLI、Claude Code 或 Cursor Agent CLI。
 - 已开启 threaded mode 的 Telegram bot，以及受限的 `ALLOWED_USERS` 列表。
 - 配套服务脚本支持 Linux/systemd 和 macOS/launchd。
 
@@ -32,7 +32,7 @@ macOS 克隆后运行 `./scripts/bootstrap-macos.sh`。安装脚本配置依赖�
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | BotFather 提供的机器人凭据 |
 | `ALLOWED_USERS` | 允许操作的 Telegram 数字用户 ID |
-| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex` 或 `claude` |
+| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex`、`claude` 或 `cursor` |
 | `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | 机器人展示的项目目录 |
 | `TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME` | 独立 tmux socket 名称 |
 

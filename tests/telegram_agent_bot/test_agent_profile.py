@@ -4,7 +4,10 @@ import pytest
 
 from telegram_agent_bot.agent_profile import AgentProfile
 from telegram_agent_bot.config import config
-from telegram_agent_bot.handlers.directory_browser import build_profile_picker
+from telegram_agent_bot.handlers.directory_browser import (
+    build_agent_picker,
+    build_profile_picker,
+)
 from telegram_agent_bot.tmux_manager import _agent_command_for_launch
 
 
@@ -18,6 +21,32 @@ def test_claude_code_alias_and_low_effort_are_normalized():
     assert profile.agent_type == "claude"
     assert profile.reasoning_effort == "low"
     assert profile.display_name == "Claude Code"
+
+
+def test_cursor_agent_alias_uses_cursor_profile_without_reasoning_override():
+    profile = AgentProfile(
+        agent_type="cursor-agent",
+        model="gpt-5",
+        reasoning_effort="high",
+    )
+
+    assert profile.agent_type == "cursor"
+    assert profile.display_name == "Cursor Agent"
+
+
+def test_cursor_picker_omits_unsupported_reasoning_and_fast_controls():
+    text, keyboard = build_profile_picker(AgentProfile(agent_type="cursor"), [])
+
+    assert "Reasoning:" not in text
+    assert "Fast mode:" not in text
+    assert [button.text for row in keyboard.inline_keyboard for button in row] == [
+        "✅ Create session",
+        "Cancel",
+    ]
+    _picker_text, picker_keyboard = build_agent_picker()
+    assert "🔵 Cursor Agent" in [
+        button.text for row in picker_keyboard.inline_keyboard for button in row
+    ]
 
 
 def test_fast_is_no_longer_a_reasoning_effort():
@@ -121,6 +150,19 @@ def test_claude_launch_uses_effort_flag_and_env_file(tmp_path):
         f"set -a; . {env_file}; set +a; "
         "/usr/bin/claude --model deepseek-v4-pro --effort low"
     )
+
+
+def test_cursor_launch_uses_model_without_unsupported_reasoning_flag():
+    profile = AgentProfile(
+        agent_type="cursor",
+        model="gpt-5",
+        reasoning_effort="high",
+    )
+
+    with patch.object(config, "cursor_command", "/usr/bin/agent"):
+        command = _agent_command_for_launch(profile)
+
+    assert command == "/usr/bin/agent --model gpt-5"
 
 
 def test_codex_uses_config_override_for_reasoning_effort():

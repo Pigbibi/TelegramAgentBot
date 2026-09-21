@@ -19,6 +19,7 @@ from .utils import app_dir
 from .agent_profile import (
     AGENT_CLAUDE,
     AGENT_CODEX,
+    AGENT_CURSOR,
     EFFORT_STANDARD,
     normalize_agent_type,
     normalize_effort,
@@ -116,7 +117,7 @@ class Config:
                 "Expected comma-separated Telegram user IDs."
             ) from e
 
-        # Agent type: "codex" (default) or "claude". Controls which CLI is launched,
+        # Agent type: "codex" (default), "claude", or "cursor". Controls which CLI is launched,
         # where transcripts are stored, and which update mechanism is used.
         raw_agent_type = os.getenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", AGENT_CODEX)
         normalized_raw_agent_type = raw_agent_type.strip().lower().replace("-", "")
@@ -124,16 +125,21 @@ class Config:
         if (normalized_raw_agent_type or AGENT_CODEX) not in (
             AGENT_CODEX,
             AGENT_CLAUDE,
+            AGENT_CURSOR,
             "claudecode",
+            "cursoragent",
+            "cursorcli",
         ):
             logger.warning(
                 "Unknown agent_type %r, falling back to 'codex'",
                 raw_agent_type,
             )
             self.agent_type = AGENT_CODEX
-        self.agent_type_display = (
-            "Codex" if self.agent_type == "codex" else "Claude Code"
-        )
+        self.agent_type_display = {
+            AGENT_CODEX: "Codex",
+            AGENT_CLAUDE: "Claude Code",
+            AGENT_CURSOR: "Cursor Agent",
+        }[self.agent_type]
 
         # Tmux session name/socket and window naming
         self.tmux_socket_name = os.getenv("TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME") or None
@@ -178,6 +184,7 @@ class Config:
             # On initial discovery failure, omit --model and let Codex choose.
             self.codex_model = ""
         self.claude_command = os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_COMMAND", "claude")
+        self.cursor_command = os.getenv("TELEGRAM_AGENT_BOT_CURSOR_COMMAND", "agent")
         self.claude_model = os.getenv(
             "TELEGRAM_AGENT_BOT_CLAUDE_MODEL", "deepseek-v4-flash"
         ).strip()
@@ -198,12 +205,14 @@ class Config:
         ).strip().lower() not in {"0", "false", "no", "off"}
         self.codex_models_raw = os.getenv("TELEGRAM_AGENT_BOT_CODEX_MODELS", "")
         self.claude_models_raw = os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_MODELS", "")
+        self.cursor_models_raw = os.getenv("TELEGRAM_AGENT_BOT_CURSOR_MODELS", "")
         self.codex_models = self._parse_models(self.codex_models_raw, self.codex_model)
         self.codex_model_efforts: dict[str, tuple[str, ...]] = {}
         self.codex_model_default_efforts: dict[str, str] = {}
         self.claude_models = self._parse_models(
             self.claude_models_raw, self.claude_model
         )
+        self.cursor_models = self._parse_models(self.cursor_models_raw, "")
         self.codex_bypass_hook_trust = (
             os.getenv("TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST", "").lower()
             == "true"

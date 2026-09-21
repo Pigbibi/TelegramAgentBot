@@ -30,6 +30,7 @@ from .account_manager import disable_codex_update_prompt, ensure_account_home
 from .agent_profile import (
     AGENT_CLAUDE,
     AGENT_CODEX,
+    AGENT_CURSOR,
     AgentProfile,
     normalize_agent_type,
 )
@@ -145,13 +146,15 @@ def _agent_command_for_launch(
 ) -> str:
     """Return the configured agent command with optional hook-trust bypass.
 
-    Supports both Codex and Claude Code CLIs.
+    Supports Codex, Claude Code, and Cursor Agent CLIs.
     """
     profile = profile or AgentProfile(agent_type=config.agent_type)
     codex_command = getattr(config, "codex_cli_command", config.codex_command)
-    cmd = command_override or (
-        config.claude_command if profile.agent_type == AGENT_CLAUDE else codex_command
-    )
+    configured_command = {
+        AGENT_CLAUDE: config.claude_command,
+        AGENT_CURSOR: config.cursor_command,
+    }.get(profile.agent_type, codex_command)
+    cmd = command_override or configured_command
     if profile.model:
         cmd = f"{cmd} --model {shlex.quote(profile.model)}"
     if profile.agent_type == AGENT_CLAUDE and profile.reasoning_effort:
@@ -950,7 +953,11 @@ class TmuxManager:
             reasoning_effort=reasoning_effort or "",
             fast_mode=fast_mode,
         )
-        command_override = config.codex_command if agent_type is None else None
+        command_override = (
+            config.codex_command
+            if agent_type is None and profile.agent_type != AGENT_CURSOR
+            else None
+        )
 
         # Validate directory first
         path = Path(work_dir).expanduser().resolve()
@@ -986,7 +993,7 @@ class TmuxManager:
 
                 # Start the agent (Codex or Claude) if requested
                 if start_codex:
-                    if not account_name:
+                    if not account_name and profile.agent_type == AGENT_CODEX:
                         disable_codex_update_prompt()
                     pane = window.active_pane
                     if pane:
@@ -998,11 +1005,15 @@ class TmuxManager:
                         if resume_session_id:
                             resume_target = _resume_target_id(resume_session_id)
                             resume_arg = shlex.quote(resume_target)
-                            if profile.agent_type == AGENT_CLAUDE:
+                            if profile.agent_type in {AGENT_CLAUDE, AGENT_CURSOR}:
                                 cmd = f"{cmd} --resume {resume_arg}"
                             else:
                                 cmd = f"{cmd} resume {resume_arg}"
                         if account_name:
+                            if profile.agent_type == AGENT_CURSOR:
+                                raise ValueError(
+                                    "Cursor Agent account snapshots are unsupported"
+                                )
                             if profile.agent_type == AGENT_CLAUDE:
                                 account_home = ensure_account_home(
                                     account_name, profile.agent_type
