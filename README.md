@@ -2,7 +2,7 @@
 
 [简体中文](README_CN.md)
 
-Control live Codex CLI, Claude Code, and Cursor Agent sessions from Telegram. Each topic connects to a tmux window, so you can send instructions remotely and attach to the same terminal locally.
+Control live Codex CLI, Claude Code (DeepSeek or official subscription), and Cursor Agent sessions from Telegram. Each topic connects to a tmux window, so remote messages, native active-turn input, and local terminal access share one session.
 
 The bot forwards public replies, progress and interactive prompts. Session bindings survive bot restarts; the underlying tmux session remains independent of the bot process.
 
@@ -32,7 +32,7 @@ Edit `~/.telegram-agent-bot/.env` using the [configuration template](.env.exampl
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | Bot credential from BotFather |
 | `ALLOWED_USERS` | Trusted numeric Telegram user IDs |
-| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex`, `claude`, or `cursor` |
+| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex`, `claude`, `claudeofficial`, or `cursor` |
 | `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | Project directory shown by the bot |
 | `TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME` | Dedicated tmux socket name |
 
@@ -56,13 +56,25 @@ Cursor uses the same tmux topic routing and terminal output capture. Its account
 storage is not copied into AgentBot account snapshots. Authenticate it first in
 the service user's interactive terminal with `agent login`.
 
+Claude has two intentionally separate modes:
+
+- `claude` loads the owner-only `claude.env` provider configuration, such as a
+  DeepSeek-compatible endpoint.
+- `claudeofficial` runs the same `claude` CLI without that environment file and
+  uses Claude Code's own subscription/API login and default model selection.
+
+Choose the mode per Telegram topic when creating a session. The picker keeps
+provider-specific controls visible only when that CLI supports them. Codex and
+Cursor support native active-turn steering and next-turn Tab queueing; Claude
+uses the durable AgentBot queue for ordinary next-turn input.
+
 For macOS startup, Linux lingering, logs and upgrades, follow [Deployment](docs/deployment.md). Keep the service checkout separate from directories managed by agent tasks.
 
 ## Use a session
 
 1. Send a message in a Telegram topic.
 2. Select a project and an existing session, or create a session.
-3. Choose the agent and available model settings.
+3. Choose the agent and only the model/settings supported by that runtime.
 4. Send text, voice, images or files in the same topic.
 
 | Command | Action |
@@ -77,6 +89,17 @@ For macOS startup, Linux lingering, logs and upgrades, follow [Deployment](docs/
 | `/kill` | Stop the bound window and remove the binding |
 
 Use one Telegram chat per bot state directory. Topic IDs are scoped by Telegram chat; the bot refuses conflicting cross-chat bindings. See [Features](docs/features.md) for all commands, authentication controls and queue behavior.
+
+### Shared Telegram groups
+
+One deployment can serve multiple operators. Add the bot to a Telegram
+supergroup with Topics enabled, and add each operator's numeric Telegram user ID
+to `ALLOWED_USERS`. Allowed users share the same group topic binding and durable
+input queue; private chats remain isolated per user. The bot's service user,
+filesystem access, CLI credentials, and project roots are shared by everyone on
+that deployment, so only add trusted operators. A separate bot token and
+deployment (often from a fork or private clone) is appropriate for independent
+credentials or project roots.
 
 ## Operations and security
 

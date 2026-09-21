@@ -13,7 +13,12 @@ import re
 import shutil
 from pathlib import Path
 
-from .agent_profile import AGENT_CLAUDE, normalize_agent_type
+from .agent_profile import (
+    SUPPORTED_AGENT_TYPES,
+    agent_capabilities,
+    is_claude_agent,
+    normalize_agent_type,
+)
 from .utils import app_dir
 
 logger = logging.getLogger(__name__)
@@ -51,7 +56,7 @@ def _account_storage_paths(agent_type: str | None = None) -> tuple[Path, Path, P
 
 def agent_auth_dir(agent_type: str | None = None) -> Path:
     """Return the home auth directory for the configured agent type."""
-    if _configured_agent_type(agent_type) == AGENT_CLAUDE:
+    if agent_capabilities(_configured_agent_type(agent_type)).uses_claude_home:
         return CLAUDE_DIR
     return CODEX_DIR
 
@@ -63,7 +68,7 @@ def agent_auth_filename(agent_type: str | None = None) -> str:
     across versions, so credentials.db is the legacy primary name while
     .credentials.json is also handled as a fallback.
     """
-    if _configured_agent_type(agent_type) == AGENT_CLAUDE:
+    if agent_capabilities(_configured_agent_type(agent_type)).uses_claude_home:
         return "credentials.db"
     return "auth.json"
 
@@ -99,15 +104,26 @@ def list_account_names(agent_type: str | None = None) -> list[str]:
     return sorted(names)
 
 
-def list_account_homes() -> list[Path]:
-    """List prepared per-account agent home directories."""
-    if not ACCOUNT_HOME_DIR.exists():
-        return []
-    homes = [
-        path
-        for path in ACCOUNT_HOME_DIR.iterdir()
-        if path.is_dir() and _has_auth_file(path)
-    ]
+def list_account_homes(agent_type: str | None = None) -> list[Path]:
+    """List prepared per-account homes, including provider namespaces."""
+    roots = (
+        (_account_storage_paths(agent_type)[2],)
+        if agent_type is not None
+        else (
+            ACCOUNT_HOME_DIR,
+            *(
+                AGENT_ACCOUNT_ROOT / supported / "homes"
+                for supported in SUPPORTED_AGENT_TYPES
+            ),
+        )
+    )
+    homes: set[Path] = set()
+    for root in roots:
+        if not root.exists():
+            continue
+        homes.update(
+            path for path in root.iterdir() if path.is_dir() and _has_auth_file(path)
+        )
     return sorted(homes)
 
 
@@ -230,7 +246,7 @@ def _disable_agent_update_prompt(agent_type: str, config_file: Path) -> None:
     For Codex: sets check_for_update_on_startup = false in config.toml.
     For Claude: no equivalent config file yet (the CLI handles its own update checks).
     """
-    if agent_type == "claude":
+    if is_claude_agent(agent_type):
         # Claude Code does not use config.toml for update prompts.
         return
     _disable_codex_update_prompt(config_file)
@@ -242,7 +258,7 @@ def disable_codex_update_prompt(
     """Disable the agent's startup update prompt for the selected home directory."""
     selected_agent = _configured_agent_type(agent_type)
     if codex_home is None:
-        if selected_agent == AGENT_CLAUDE:
+        if agent_capabilities(selected_agent).uses_claude_home:
             codex_home = agent_auth_dir(selected_agent)
         else:
             env_home = os.getenv("CODEX_HOME")
@@ -257,7 +273,7 @@ def _claude_dir_for_home(agent_home: Path) -> Path:
 
 def _agent_auth_path(codex_home: Path, agent_type: str | None = None) -> Path:
     """Return the auth file path for the configured agent type."""
-    if _configured_agent_type(agent_type) == AGENT_CLAUDE:
+    if agent_capabilities(_configured_agent_type(agent_type)).uses_claude_home:
         return _claude_dir_for_home(codex_home) / agent_auth_filename(agent_type)
     return codex_home / agent_auth_filename(agent_type)
 
@@ -266,7 +282,7 @@ def _agent_auth_candidates(
     codex_home: Path, agent_type: str | None = None
 ) -> tuple[Path, ...]:
     """Return known auth file locations for the configured agent type."""
-    if _configured_agent_type(agent_type) == AGENT_CLAUDE:
+    if agent_capabilities(_configured_agent_type(agent_type)).uses_claude_home:
         claude_home = _claude_dir_for_home(codex_home)
         return (
             claude_home / "credentials.db",
@@ -292,7 +308,10 @@ def save_account_snapshot(
     snapshot_dir.mkdir(parents=True, exist_ok=True)
 
     source_auth = codex_home / "auth.json"
-    if not source_auth.is_file() and selected_agent != AGENT_CLAUDE:
+    if (
+        not source_auth.is_file()
+        and not agent_capabilities(selected_agent).uses_claude_home
+    ):
         raise FileNotFoundError(f"Codex auth file not found: {source_auth}")
 
     # Try agent-specific auth filename first, fall back to auth.json
@@ -323,7 +342,7 @@ def prepare_account_home(name: str, agent_type: str | None = None) -> Path:
     )
     account_home = account_home_root / name
     account_home.mkdir(parents=True, exist_ok=True)
-    if selected_agent == AGENT_CLAUDE:
+    if agent_capabilities(selected_agent).uses_claude_home:
         claude_home = _claude_dir_for_home(account_home)
         claude_home.mkdir(parents=True, exist_ok=True)
         _copy_if_different(
@@ -340,7 +359,7 @@ def prepare_account_home(name: str, agent_type: str | None = None) -> Path:
         disable_codex_update_prompt(account_home, selected_agent)
     for child in ("memories", "tmp"):
         (account_home / child).mkdir(parents=True, exist_ok=True)
-    if selected_agent == AGENT_CLAUDE:
+    if agent_capabilities(selected_agent).uses_claude_home:
         # Claude Code uses its own directory layout under .claude
         (_claude_dir_for_home(account_home) / "projects").mkdir(
             parents=True, exist_ok=True
@@ -367,7 +386,10 @@ def ensure_account_home(name: str, agent_type: str | None = None) -> Path:
         claude_json_auth = snapshot_dir / ".credentials.json"
         if snapshot_auth.is_file():
             _copy_if_different(snapshot_auth, target_auth)
-        elif claude_json_auth.is_file() and selected_agent == AGENT_CLAUDE:
+        elif (
+            claude_json_auth.is_file()
+            and agent_capabilities(selected_agent).uses_claude_home
+        ):
             _copy_if_different(
                 claude_json_auth,
                 _claude_dir_for_home(account_home) / ".credentials.json",

@@ -100,7 +100,9 @@ from .agent_profile import (
     DEFAULT_CLAUDE_EFFORTS,
     DEFAULT_CODEX_EFFORTS,
     DEFAULT_CURSOR_EFFORTS,
+    agent_capabilities,
     agent_display_name,
+    is_claude_agent,
     normalize_agent_type,
     normalize_effort,
 )
@@ -458,7 +460,7 @@ def _adapt_forward_command_for_agent(cmd_text: str, agent_type: str) -> str:
     rest = match.group("rest") or ""
     normalized_agent_type = normalize_agent_type(agent_type)
     if command_name in {"plugin", "plugins"}:
-        native_name = "plugin" if normalized_agent_type == AGENT_CLAUDE else "plugins"
+        native_name = agent_capabilities(normalized_agent_type).plugin_command
         return f"/{native_name}{rest}"
     return normalized
 
@@ -915,7 +917,7 @@ def _resolve_profile_effort(agent_type: str, model: str, requested: str) -> str:
     if normalized == AGENT_CODEX:
         candidates.append(config.codex_model_default_efforts.get(model, ""))
         candidates.append(config.codex_reasoning_effort)
-    elif normalized == AGENT_CLAUDE:
+    elif is_claude_agent(normalized):
         candidates.append(config.claude_reasoning_effort)
     candidates.extend(("medium", supported[0] if supported else ""))
     return next((value for value in candidates if value in supported), "medium")
@@ -1578,10 +1580,11 @@ async def _native_input_command(
         )
         return
 
-    # Claude Code documents command queueing while it responds, but does not
-    # expose Codex's Tab-based native next-turn key for ordinary text. Keep
-    # /queue durable by using AgentBot's FIFO for Claude sessions.
-    if mode == AGENT_INPUT_MODE_QUEUE and agent_type == AGENT_CLAUDE:
+    # Providers without a native next-turn key use AgentBot's durable FIFO.
+    if (
+        mode == AGENT_INPUT_MODE_QUEUE
+        and not agent_capabilities(agent_type).supports_native_queue
+    ):
         success, message, queued = await _send_or_queue_agent_input(
             context.bot,
             user.id,
@@ -1598,7 +1601,7 @@ async def _native_input_command(
             await mark_window_working(context.bot, user.id, window_id, thread_id)
             await safe_reply(
                 update.message,
-                "✅ Claude Code was idle, so the message started a new turn.",
+                f"✅ {display_name} was idle, so the message started a new turn.",
             )
         return
 
@@ -1868,7 +1871,9 @@ def _format_account_status(agent_type: str | None = None) -> str:
     rotation = "enabled" if config.enable_account_rotation else "disabled"
     selected_agent = _requested_agent_type(agent_type)
     agent_label = agent_display_name(selected_agent)
-    env_var = "HOME" if selected_agent == AGENT_CLAUDE else "CODEX_HOME"
+    env_var = (
+        "HOME" if agent_capabilities(selected_agent).uses_claude_home else "CODEX_HOME"
+    )
     login_command = _agent_command_name(selected_agent, "login")
     lines = [
         f"🔐 {agent_label} account status",
@@ -2155,7 +2160,7 @@ async def _agent_account_command(
         await safe_reply(
             update.message,
             f"✅ New {agent_display_name(selected_agent)} sessions will use the "
-            f"service user's default {'HOME' if selected_agent == AGENT_CLAUDE else 'CODEX_HOME'}. "
+            f"service user's default {'HOME' if agent_capabilities(selected_agent).uses_claude_home else 'CODEX_HOME'}. "
             "Existing topics keep their current window; use /unbind to start fresh.",
         )
         return
@@ -2342,7 +2347,7 @@ def _window_agent_type(window_id: str) -> str:
 
 def _window_supports_native_input_routing(window_id: str) -> bool:
     """Return whether this window supports an Enter-based active-turn steer."""
-    return _window_agent_type(window_id) in {AGENT_CODEX, AGENT_CLAUDE}
+    return agent_capabilities(_window_agent_type(window_id)).supports_native_steer
 
 
 def _route_can_use_native_input(key: tuple[int, int, str]) -> bool:
@@ -2396,7 +2401,7 @@ async def _offer_input_route_choice(
         f"{display_name} 正在工作。请选择这条消息的处理方式：",
         reply_markup=build_input_routing_keyboard(
             record.id,
-            native_queue=agent_type == AGENT_CODEX,
+            native_queue=agent_capabilities(agent_type).supports_native_queue,
         ),
     )
     return True
@@ -2407,7 +2412,8 @@ def _agent_input_key(
     thread_id: int | None,
     window_id: str,
 ) -> tuple[int, int, str]:
-    return (user_id, thread_id or 0, window_id)
+    owner_id = session_manager.conversation_owner_id(user_id, thread_id)
+    return (owner_id, thread_id or 0, window_id)
 
 
 def _should_offer_input_route_choice(
@@ -3035,7 +3041,10 @@ async def _send_native_agent_input(
     """Durably submit native active-turn input without replaying its text."""
     agent_type = _window_agent_type(window_id)
     display_name = agent_display_name(agent_type)
-    if mode == AGENT_INPUT_MODE_QUEUE and agent_type != AGENT_CODEX:
+    if (
+        mode == AGENT_INPUT_MODE_QUEUE
+        and not agent_capabilities(agent_type).supports_native_queue
+    ):
         return (
             False,
             f"{display_name} has no native next-turn key; use the AgentBot queue.",
@@ -3153,8 +3162,8 @@ async def _send_native_agent_input(
                 submission_mode=mode,
             )
         if mode == AGENT_INPUT_MODE_QUEUE:
-            return True, "Queued in Codex for the next turn (Tab)."
-        if agent_type == AGENT_CLAUDE and text.lstrip().startswith("/"):
+            return True, f"Queued in {display_name} for the next turn (Tab)."
+        if is_claude_agent(agent_type) and text.lstrip().startswith("/"):
             return (
                 True,
                 "Command submitted; Claude Code will run it after the current turn "
@@ -6882,7 +6891,10 @@ async def _handle_input_routing_callback(
         await _safe_answer_callback(query, "Login required", show_alert=True)
         return
 
-    if mode == INPUT_ROUTE_QUEUE and agent_type == AGENT_CLAUDE:
+    if (
+        mode == INPUT_ROUTE_QUEUE
+        and not agent_capabilities(agent_type).supports_native_queue
+    ):
         success, message, queued = await _send_or_queue_agent_input(
             context.bot,
             user.id,

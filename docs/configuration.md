@@ -43,7 +43,7 @@ chmod 600 ~/.telegram-agent-bot/.env
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex` | Default agent: `codex` or `claude` |
+| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex` | Default agent: `codex`, `claude`, `claudeofficial`, or `cursor` |
 | `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | `codex` | Command used to start Codex |
 | `TELEGRAM_AGENT_BOT_CLAUDE_COMMAND` | `claude` | Command used to start Claude Code |
 | `TELEGRAM_AGENT_BOT_CODEX_MODEL` | `gpt-5.4-mini` | Default Codex model for new topics; `auto` follows the account's current Codex default |
@@ -56,7 +56,9 @@ chmod 600 ~/.telegram-agent-bot/.env
 | `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` | `$TELEGRAM_AGENT_BOT_DIR/claude.env` | Optional owner-only environment file for Claude Code providers |
 
 Each new topic can choose an agent independently. `TELEGRAM_AGENT_BOT_AGENT_TYPE`
-sets the initial default and provider-neutral account command behavior.
+sets the initial default. `claude` is the provider-configured mode and may load
+`TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE`; `claudeofficial` deliberately skips that
+file so the official Claude Code login and model defaults remain authoritative.
 
 Automatic model discovery keeps the configured default available if discovery
 fails. Set an explicit comma-separated list when a gateway uses custom aliases

@@ -93,6 +93,30 @@ def test_ensure_claude_account_home_copies_credentials_and_settings(
     assert (home / ".claude" / "projects").is_dir()
 
 
+def test_ensure_official_claude_account_home_uses_claude_namespace(
+    tmp_path, monkeypatch
+):
+    snapshot_dir = tmp_path / "snapshots"
+    account_home_dir = tmp_path / "homes"
+    claude_dir = tmp_path / "claude"
+    claude_dir.mkdir(parents=True)
+
+    account_dir = snapshot_dir / "official"
+    account_dir.mkdir(parents=True)
+    (account_dir / "credentials.db").write_bytes(b"official-claude")
+
+    monkeypatch.setattr(config, "agent_type", "claudeofficial")
+    monkeypatch.setattr(account_manager, "SNAPSHOT_DIR", snapshot_dir)
+    monkeypatch.setattr(account_manager, "ACCOUNT_HOME_DIR", account_home_dir)
+    monkeypatch.setattr(account_manager, "CLAUDE_DIR", claude_dir)
+
+    home = account_manager.ensure_account_home("official")
+
+    assert (home / ".claude" / "credentials.db").read_bytes() == b"official-claude"
+    assert (home / ".claude" / "projects").is_dir()
+    assert not (home / "auth.json").exists()
+
+
 def test_ensure_claude_account_home_copies_json_credentials(
     tmp_path, monkeypatch
 ) -> None:

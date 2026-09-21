@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-通过 Telegram 控制正在运行的 Codex CLI、Claude Code 和 Cursor Agent 会话。每个话题对应一个 tmux 窗口，方便远程发送指令，也能在本机连接同一个终端。
+通过 Telegram 控制正在运行的 Codex CLI、Claude Code（DeepSeek 或官方订阅）和 Cursor Agent 会话。每个话题对应一个 tmux 窗口，远程消息、回合中的原生输入和本机终端共享同一会话。
 
 机器人转发公开回复、进度和交互提示。重启机器人后话题绑定可以恢复；底层 tmux 会话独立于机器人进程存在。
 
@@ -32,7 +32,7 @@ macOS 克隆后运行 `./scripts/bootstrap-macos.sh`。安装脚本配置依赖�
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | BotFather 提供的机器人凭据 |
 | `ALLOWED_USERS` | 允许操作的 Telegram 数字用户 ID |
-| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex`、`claude` 或 `cursor` |
+| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex`、`claude`、`claudeofficial` 或 `cursor` |
 | `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | 机器人展示的项目目录 |
 | `TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME` | 独立 tmux socket 名称 |
 
@@ -45,11 +45,21 @@ systemctl --user enable --now io.github.telegramagentbot.service
 
 macOS 启动、Linux 退出登录后常驻、日志和升级方法见[部署说明](docs/deployment.md)。服务源码应与 agent 任务会管理的目录分开存放。
 
+Claude 有两个明确隔离的模式：
+
+- `claude` 会加载仅限文件所有者读取的 `claude.env`，可连接 DeepSeek 兼容端点。
+- `claudeofficial` 使用同一个 `claude` CLI，但不会加载该环境文件，使用 Claude
+  Code 自己的订阅/API 登录和默认模型。
+
+创建 Telegram 话题时可以逐个选择模式。界面只展示当前 CLI 支持的模型和操作：
+Codex、Cursor 支持当前回合引导及 Tab 排队；Claude 的普通下一轮输入由 AgentBot
+持久队列承接。
+
 ## 使用会话
 
 1. 在 Telegram 话题内发送消息。
 2. 选择项目，以及已有会话或新建会话。
-3. 选择 agent 和可用的模型设置。
+3. 选择 agent，以及该运行时实际支持的模型和设置。
 4. 在同一话题中继续发送文字、语音、图片或文件。
 
 | 命令 | 操作 |
@@ -64,6 +74,15 @@ macOS 启动、Linux 退出登录后常驻、日志和升级方法见[部署说�
 | `/kill` | 停止绑定窗口并解除绑定 |
 
 每个 bot 状态目录使用一个 Telegram 聊天。不同聊天中的话题 ID 可能重复，机器人会拒绝冲突的跨聊天绑定。完整命令、认证与队列行为见[功能说明](docs/features.md)。
+
+### 在 Telegram 群组中共享
+
+一个部署可以服务多个操作人。将 Bot 加入已开启 Topics 的 Telegram 超级群，
+并把每位操作人的 Telegram 数字用户 ID 加入 `ALLOWED_USERS`。白名单用户在同一
+群组话题中共享会话绑定和持久输入队列；私聊仍按用户隔离。该部署使用同一个
+服务用户、文件权限、CLI 登录凭据和项目目录，因此只应加入可信操作人。若希望
+使用独立凭据或项目目录，应使用独立 Bot Token 和独立部署（通常可从仓库 fork
+后部署）。
 
 ## 运维与安全
 
