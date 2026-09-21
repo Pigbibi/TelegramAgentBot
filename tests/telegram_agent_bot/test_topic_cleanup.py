@@ -56,6 +56,7 @@ class TopicStateCleanupTests(unittest.IsolatedAsyncioTestCase):
             "state": "selecting_window",
             "_pending_thread_id": 106,
             "_pending_thread_text": "hello",
+            "_pending_thread_media": {"kind": "photo"},
             "_selected_path": "/tmp",
         }
 
@@ -68,6 +69,7 @@ class TopicStateCleanupTests(unittest.IsolatedAsyncioTestCase):
         assert "state" not in user_data
         assert "_pending_thread_id" not in user_data
         assert "_pending_thread_text" not in user_data
+        assert "_pending_thread_media" not in user_data
         assert "_selected_path" not in user_data
 
     async def test_topic_closed_handler_deletes_topic_and_clears_window_state(

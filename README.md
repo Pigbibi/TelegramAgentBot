@@ -72,8 +72,8 @@ For macOS startup, Linux lingering, logs and upgrades, follow [Deployment](docs/
 
 ## Use a session
 
-1. Send a message in a Telegram topic.
-2. Select a project and an existing session, or create a session.
+1. Send text, an image, or a file in a Telegram topic.
+2. Select a project and an existing session, or create a session. A first image or file is retained and sent automatically once the session is ready.
 3. Choose the agent and only the model/settings supported by that runtime.
 4. Send text, voice, images or files in the same topic.
 
