@@ -2,7 +2,14 @@ from unittest.mock import patch
 
 import pytest
 
-from telegram_agent_bot.agent_profile import AgentProfile
+from telegram_agent_bot.agent_profile import (
+    AGENT_CLAUDE,
+    AGENT_CLAUDE_OFFICIAL,
+    AGENT_CODEX,
+    AGENT_CURSOR,
+    AgentProfile,
+    agent_capabilities,
+)
 from telegram_agent_bot.config import config
 from telegram_agent_bot.handlers.directory_browser import (
     build_agent_picker,
@@ -30,6 +37,25 @@ def test_claude_official_profile_is_distinct_from_deepseek_mode():
     assert profile.display_name == "Claude Code (Official)"
 
 
+@pytest.mark.parametrize(
+    ("agent_type", "plugin", "native_queue", "claude_home"),
+    [
+        (AGENT_CODEX, "plugins", True, False),
+        (AGENT_CLAUDE, "plugin", False, True),
+        (AGENT_CLAUDE_OFFICIAL, "plugin", False, True),
+        (AGENT_CURSOR, "plugins", True, False),
+    ],
+)
+def test_agent_capabilities_keep_provider_semantics_together(
+    agent_type, plugin, native_queue, claude_home
+):
+    capabilities = agent_capabilities(agent_type)
+
+    assert capabilities.plugin_command == plugin
+    assert capabilities.supports_native_queue is native_queue
+    assert capabilities.uses_claude_home is claude_home
+
+
 def test_cursor_agent_alias_uses_cursor_profile_without_reasoning_override():
     profile = AgentProfile(
         agent_type="cursor-agent",
@@ -54,6 +80,8 @@ def test_cursor_picker_omits_unsupported_reasoning_and_fast_controls():
     assert "🔵 Cursor Agent" in [
         button.text for row in picker_keyboard.inline_keyboard for button in row
     ]
+    assert len(picker_keyboard.inline_keyboard[0]) == 2
+    assert len(picker_keyboard.inline_keyboard[1]) == 2
 
 
 def test_fast_is_no_longer_a_reasoning_effort():

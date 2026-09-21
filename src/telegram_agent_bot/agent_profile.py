@@ -43,6 +43,59 @@ DEFAULT_CLAUDE_EFFORTS = (
 DEFAULT_CURSOR_EFFORTS: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class AgentCapabilities:
+    """Provider semantics consumed by the Telegram UI and local runtime."""
+
+    supports_model_selection: bool
+    supports_fast_mode: bool
+    supports_native_steer: bool
+    supports_native_queue: bool
+    supports_account_snapshots: bool
+    plugin_command: str
+    uses_claude_home: bool = False
+    loads_claude_env: bool = False
+
+
+_AGENT_CAPABILITIES = {
+    AGENT_CODEX: AgentCapabilities(
+        supports_model_selection=True,
+        supports_fast_mode=True,
+        supports_native_steer=True,
+        supports_native_queue=True,
+        supports_account_snapshots=True,
+        plugin_command="plugins",
+    ),
+    AGENT_CLAUDE: AgentCapabilities(
+        supports_model_selection=True,
+        supports_fast_mode=True,
+        supports_native_steer=True,
+        supports_native_queue=False,
+        supports_account_snapshots=True,
+        plugin_command="plugin",
+        uses_claude_home=True,
+        loads_claude_env=True,
+    ),
+    AGENT_CLAUDE_OFFICIAL: AgentCapabilities(
+        supports_model_selection=False,
+        supports_fast_mode=True,
+        supports_native_steer=True,
+        supports_native_queue=False,
+        supports_account_snapshots=True,
+        plugin_command="plugin",
+        uses_claude_home=True,
+    ),
+    AGENT_CURSOR: AgentCapabilities(
+        supports_model_selection=True,
+        supports_fast_mode=False,
+        supports_native_steer=True,
+        supports_native_queue=True,
+        supports_account_snapshots=False,
+        plugin_command="plugins",
+    ),
+}
+
+
 def normalize_agent_type(value: str | None, default: str = AGENT_CODEX) -> str:
     """Normalize user/config input to a supported agent type."""
     normalized = (value or default).strip().lower().replace("-", "")
@@ -85,6 +138,11 @@ def agent_display_name(agent_type: str) -> str:
 
 def is_claude_agent(agent_type: str) -> bool:
     return normalize_agent_type(agent_type) in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}
+
+
+def agent_capabilities(agent_type: str) -> AgentCapabilities:
+    """Return normalized runtime semantics for one supported agent type."""
+    return _AGENT_CAPABILITIES[normalize_agent_type(agent_type)]
 
 
 @dataclass(frozen=True)

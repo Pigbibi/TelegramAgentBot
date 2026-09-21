@@ -7,7 +7,7 @@ output delivery.
 ## Session control
 
 - Create a session in a project selected from Telegram.
-- Choose Codex or Claude Code for each new topic.
+- Choose Codex, Claude Code + DeepSeek, Claude Code Official, or Cursor Agent for each new topic.
 - Select a discovered or configured model and reasoning level.
 - Toggle Fast mode independently from the reasoning level.
 - Resume a tracked session in the selected directory.
@@ -31,18 +31,18 @@ The bot accepts:
 - agent slash commands, skills, and plugins;
 - inline-keyboard answers for supported interactive prompts.
 
-When a local Codex or Claude Code session is working, a text message offers
+When a local agent session is working, a text message offers
 **Guide current turn**, **Queue next turn**, **Interrupt and send**, and
-**Cancel** actions. Guidance maps to each CLI's Enter behavior. Codex next-turn
-input maps to native Tab; because Claude Code has no equivalent ordinary-text
-key, its next-turn action uses the durable AgentBot FIFO. `/steer <message>` and
-`/queue <message>` provide the same routing without the picker. If the agent
-becomes idle before the action is selected, the message safely starts a normal
-new turn.
+**Cancel** actions when that runtime supports them. Guidance maps to each CLI's
+Enter behavior. Codex and Cursor next-turn input maps to native Tab; because
+Claude Code has no equivalent ordinary-text key, its next-turn action uses the
+durable AgentBot FIFO. `/steer <message>` and `/queue <message>` provide the
+same routing without the picker. If the agent becomes idle before the action is
+selected, the message safely starts a normal new turn.
 
 The Telegram command menu exposes common native commands including `/skills`,
 `/plugins`, `/status`, `/permissions`, `/mcp`, `/plan`, and `/init`. `/plugins`
-is translated to Codex `/plugins` or Claude Code `/plugin` for the bound topic.
+is translated to Codex/Cursor `/plugins` or Claude Code `/plugin` for the bound topic.
 Use `/agentcmd /plugin-name:skill-name arguments` for plugin skills whose native
 command names cannot be represented as Telegram bot command names.
 
@@ -72,9 +72,16 @@ text when Telegram rejects the formatted form.
 
 ## Authentication and accounts
 
-The default session uses the agent credentials of the service user. Telegram
-commands can also create and select named account snapshots for Codex and Claude
-Code.
+The default session uses the selected CLI credentials of the service user.
+Telegram commands can also create and select named account snapshots for Codex
+and both Claude modes. Cursor authentication remains in Cursor's own CLI
+storage and is not copied into AgentBot snapshots.
+
+Multiple trusted operators may use one deployment. Add their numeric Telegram
+user IDs to `ALLOWED_USERS`; in a forum supergroup, users on the same topic share
+the topic binding and durable queue. This does not create per-user filesystem or
+CLI credential isolation. Use a separate Bot Token and deployment when operators
+must have independent project roots or agent accounts.
 
 Account selection affects new topics. Existing topics remain attached to their
 current sessions. Automatic account rotation after a usage-limit error is

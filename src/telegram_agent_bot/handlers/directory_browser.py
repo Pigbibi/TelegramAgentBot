@@ -31,6 +31,7 @@ from ..agent_profile import (
     DEFAULT_CLAUDE_EFFORTS,
     DEFAULT_CODEX_EFFORTS,
     DEFAULT_CURSOR_EFFORTS,
+    agent_capabilities,
     agent_display_name,
     effort_display_label,
 )
@@ -145,16 +146,18 @@ def build_agent_picker() -> tuple[str, InlineKeyboardMarkup]:
                     "🟢 Codex", callback_data=f"{CB_PROFILE_AGENT}{AGENT_CODEX}"
                 ),
                 InlineKeyboardButton(
+                    "🔵 Cursor Agent",
+                    callback_data=f"{CB_PROFILE_AGENT}{AGENT_CURSOR}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     "🟣 Claude + DeepSeek",
                     callback_data=f"{CB_PROFILE_AGENT}{AGENT_CLAUDE}",
                 ),
                 InlineKeyboardButton(
                     "🟣 Claude Official",
                     callback_data=f"{CB_PROFILE_AGENT}{AGENT_CLAUDE_OFFICIAL}",
-                ),
-                InlineKeyboardButton(
-                    "🔵 Cursor Agent",
-                    callback_data=f"{CB_PROFILE_AGENT}{AGENT_CURSOR}",
                 ),
             ],
             [InlineKeyboardButton("Cancel", callback_data=CB_PROFILE_CANCEL)],
@@ -169,12 +172,13 @@ def build_profile_picker(
     effort_values: Sequence[str] | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build model and reasoning-effort controls for a selected agent."""
+    capabilities = agent_capabilities(profile.agent_type)
     model_label = profile.model or "CLI default"
     lines = [
         f"*{agent_display_name(profile.agent_type)} settings*",
         f"Model: `{model_label}`",
     ]
-    if profile.agent_type != AGENT_CURSOR:
+    if capabilities.supports_fast_mode:
         lines.extend(
             [
                 f"Reasoning: `{profile.effort_label}`",
@@ -223,7 +227,7 @@ def build_profile_picker(
                 for value, label in effort_options[index : index + 2]
             ]
         )
-    if profile.agent_type != AGENT_CURSOR:
+    if capabilities.supports_fast_mode:
         buttons.append(
             [
                 InlineKeyboardButton(

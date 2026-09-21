@@ -52,6 +52,30 @@ class TestThreadBindings:
             window_id="@1",
         )
 
+    def test_allowed_users_share_one_group_topic_binding(
+        self, mgr: SessionManager
+    ) -> None:
+        mgr.set_group_chat_id(100, 42, -10001)
+        mgr.bind_thread(100, 42, "@1")
+        mgr.set_group_chat_id(200, 42, -10001)
+
+        assert mgr.conversation_owner_id(200, 42) == 100
+        assert mgr.get_window_for_thread(200, 42) == "@1"
+        assert mgr.resolve_chat_id(200, 42) == -10001
+
+        mgr.set_output_mode(200, 42, "trace")
+        assert mgr.get_output_mode(100, 42) == "trace"
+
+    def test_same_topic_id_in_another_group_does_not_alias(
+        self, mgr: SessionManager
+    ) -> None:
+        mgr.set_group_chat_id(100, 42, -10001)
+        mgr.bind_thread(100, 42, "@1")
+        mgr.set_group_chat_id(200, 42, -10002)
+
+        assert mgr.conversation_owner_id(200, 42) == 200
+        assert mgr.get_window_for_thread(200, 42) is None
+
     def test_get_target_falls_back_to_legacy_window_binding(
         self, mgr: SessionManager
     ) -> None:

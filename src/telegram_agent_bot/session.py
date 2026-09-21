@@ -1001,12 +1001,50 @@ class SessionManager:
                 chat_id,
             )
 
+    def conversation_owner_id(self, user_id: int, thread_id: int | None) -> int:
+        """Return the canonical owner for a private chat or shared group topic.
+
+        Telegram forum topics are shared resources. Older state is still stored
+        under the user who first touched a topic, so this lookup provides a
+        backwards-compatible alias for other allowed users in the same group.
+        """
+        if thread_id is None:
+            return user_id
+        tid = str(thread_id)
+        own_key = f"{user_id}:{tid}"
+        chat_id = self.group_chat_ids.get(own_key)
+        if chat_id is None:
+            return user_id
+
+        candidates = []
+        for key, mapped_chat_id in self.group_chat_ids.items():
+            owner_text, separator, thread_text = key.partition(":")
+            if separator != ":" or thread_text != tid or mapped_chat_id != chat_id:
+                continue
+            try:
+                candidate = int(owner_text)
+            except ValueError:
+                continue
+            if thread_id in self.thread_bindings.get(
+                candidate, {}
+            ) or thread_id in self.thread_targets.get(candidate, {}):
+                candidates.append(candidate)
+        return min(candidates) if candidates else user_id
+
     def clear_group_chat_id(self, user_id: int, thread_id: int | None) -> None:
         """Remove the stored group chat mapping for a topic."""
         tid = thread_id or 0
-        key = f"{user_id}:{tid}"
-        if key in self.group_chat_ids:
-            del self.group_chat_ids[key]
+        owner = self.conversation_owner_id(user_id, thread_id)
+        owner_chat_id = self.group_chat_ids.get(f"{owner}:{tid}")
+        keys = [
+            key
+            for key, chat_id in self.group_chat_ids.items()
+            if key.endswith(f":{tid}")
+            and (key == f"{owner}:{tid}" or chat_id == owner_chat_id)
+        ]
+        if keys:
+            for key in keys:
+                del self.group_chat_ids[key]
             self._save_state()
             logger.debug(
                 "Cleared group chat_id: user=%d, thread=%s",
@@ -1020,7 +1058,9 @@ class SessionManager:
 
     def get_output_mode(self, user_id: int, thread_id: int | None) -> str:
         """Return the persisted output mode for one Telegram topic."""
-        key = self._thread_state_key(user_id, thread_id)
+        key = self._thread_state_key(
+            self.conversation_owner_id(user_id, thread_id), thread_id
+        )
         return normalize_output_mode(
             self.thread_output_modes.get(key), config.output_mode_default
         )
@@ -1028,13 +1068,12 @@ class SessionManager:
     def set_output_mode(self, user_id: int, thread_id: int | None, mode: str) -> str:
         """Persist and return a normalized output mode for one topic."""
         normalized = normalize_output_mode(mode, config.output_mode_default)
-        self.thread_output_modes[self._thread_state_key(user_id, thread_id)] = (
-            normalized
-        )
+        owner = self.conversation_owner_id(user_id, thread_id)
+        self.thread_output_modes[self._thread_state_key(owner, thread_id)] = normalized
         self._save_state()
         logger.info(
             "Set output mode: user=%d thread=%s mode=%s",
-            user_id,
+            owner,
             thread_id,
             normalized,
         )
@@ -1056,7 +1095,8 @@ class SessionManager:
         supergroup forum topic routing.
         """
         if thread_id is not None:
-            key = f"{user_id}:{thread_id}"
+            owner = self.conversation_owner_id(user_id, thread_id)
+            key = f"{owner}:{thread_id}"
             group_id = self.group_chat_ids.get(key)
             if group_id is not None:
                 return group_id
@@ -2030,6 +2070,7 @@ class SessionManager:
             window_id: Tmux window ID (e.g. '@0')
             window_name: Display name for the window (optional)
         """
+        user_id = self.conversation_owner_id(user_id, thread_id)
         if user_id not in self.thread_bindings:
             self.thread_bindings[user_id] = {}
         self.thread_bindings[user_id][thread_id] = window_id
@@ -2058,6 +2099,7 @@ class SessionManager:
 
     def unbind_thread(self, user_id: int, thread_id: int) -> str | None:
         """Remove a thread binding. Returns the previously bound window_id, or None."""
+        user_id = self.conversation_owner_id(user_id, thread_id)
         bindings = self.thread_bindings.get(user_id)
         targets = self.thread_targets.get(user_id)
         target = targets.get(thread_id) if targets else None
@@ -2070,6 +2112,7 @@ class SessionManager:
                     self._thread_state_key(user_id, thread_id), None
                 )
                 self._save_state()
+                self.clear_group_chat_id(user_id, thread_id)
             return None
         window_id = bindings.pop(thread_id)
         if not bindings:
@@ -2080,6 +2123,7 @@ class SessionManager:
                 del self.thread_targets[user_id]
         self.thread_output_modes.pop(self._thread_state_key(user_id, thread_id), None)
         self._save_state()
+        self.clear_group_chat_id(user_id, thread_id)
         logger.info(
             "Unbound thread %d (was %s) for user %d",
             thread_id,
@@ -2090,6 +2134,7 @@ class SessionManager:
 
     def get_window_for_thread(self, user_id: int, thread_id: int) -> str | None:
         """Look up the window_id bound to a thread."""
+        user_id = self.conversation_owner_id(user_id, thread_id)
         bindings = self.thread_bindings.get(user_id)
         if not bindings:
             return None
@@ -2108,6 +2153,7 @@ class SessionManager:
         self, user_id: int, thread_id: int
     ) -> str | None:
         """Return the local window when this topic shares it with another topic."""
+        user_id = self.conversation_owner_id(user_id, thread_id)
         window_id = self.thread_bindings.get(user_id, {}).get(thread_id)
         if window_id and window_id in self.ambiguous_window_bindings():
             return window_id
@@ -2126,6 +2172,7 @@ class SessionManager:
         Local targets are dual-written to the legacy window_id binding so
         existing handlers and rollback paths keep working during migration.
         """
+        user_id = self.conversation_owner_id(user_id, thread_id)
         if user_id not in self.thread_targets:
             self.thread_targets[user_id] = {}
         self.thread_targets[user_id][thread_id] = target
@@ -2167,6 +2214,7 @@ class SessionManager:
         Falls back to the legacy local window binding without persisting a new
         shape. This keeps old state readable and rollback-safe.
         """
+        user_id = self.conversation_owner_id(user_id, thread_id)
         targets = self.thread_targets.get(user_id)
         if targets and thread_id in targets:
             target = targets[thread_id]

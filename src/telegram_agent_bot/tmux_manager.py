@@ -33,6 +33,7 @@ from .agent_profile import (
     AGENT_CODEX,
     AGENT_CURSOR,
     AgentProfile,
+    agent_capabilities,
     normalize_agent_type,
 )
 from .config import SENSITIVE_ENV_VARS, config
@@ -167,7 +168,7 @@ def _agent_command_for_launch(
     elif profile.reasoning_effort:
         if profile.agent_type == AGENT_CODEX:
             cmd = f'{cmd} -c model_reasoning_effort="{profile.reasoning_effort}"'
-    if profile.agent_type == AGENT_CLAUDE:
+    if agent_capabilities(profile.agent_type).loads_claude_env:
         env_file = getattr(config, "claude_env_file", None)
         if isinstance(env_file, Path) and env_file.is_file():
             cmd = f"set -a; . {shlex.quote(str(env_file))}; set +a; {cmd}"
@@ -185,7 +186,7 @@ def _agent_command_for_launch(
     first_exe = _first_command_executable(parts)
     # This flag is Codex-specific; Claude Code uses a different permission flag
     # with broader semantics, so do not inject it for Claude mode.
-    if profile.agent_type == AGENT_CLAUDE or first_exe != "codex":
+    if agent_capabilities(profile.agent_type).uses_claude_home or first_exe != "codex":
         return cmd
     return f"{cmd} {_HOOK_TRUST_BYPASS_FLAG}"
 
@@ -1019,14 +1020,12 @@ class TmuxManager:
                             else:
                                 cmd = f"{cmd} resume {resume_arg}"
                         if account_name:
-                            if profile.agent_type == AGENT_CURSOR:
+                            capabilities = agent_capabilities(profile.agent_type)
+                            if not capabilities.supports_account_snapshots:
                                 raise ValueError(
-                                    "Cursor Agent account snapshots are unsupported"
+                                    f"{profile.display_name} account snapshots are unsupported"
                                 )
-                            if profile.agent_type in {
-                                AGENT_CLAUDE,
-                                AGENT_CLAUDE_OFFICIAL,
-                            }:
+                            if capabilities.uses_claude_home:
                                 account_home = ensure_account_home(
                                     account_name, profile.agent_type
                                 )

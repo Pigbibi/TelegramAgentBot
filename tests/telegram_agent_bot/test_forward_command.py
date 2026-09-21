@@ -34,10 +34,18 @@ def _make_context() -> MagicMock:
 
 class TestForwardCommand:
     def test_plugin_command_spelling_is_agent_aware(self):
-        from telegram_agent_bot.agent_profile import AGENT_CLAUDE, AGENT_CODEX
+        from telegram_agent_bot.agent_profile import (
+            AGENT_CLAUDE,
+            AGENT_CLAUDE_OFFICIAL,
+            AGENT_CODEX,
+        )
         from telegram_agent_bot.bot import _adapt_forward_command_for_agent
 
         assert _adapt_forward_command_for_agent("/plugins", AGENT_CLAUDE) == "/plugin"
+        assert (
+            _adapt_forward_command_for_agent("/plugins", AGENT_CLAUDE_OFFICIAL)
+            == "/plugin"
+        )
         assert _adapt_forward_command_for_agent("/plugin", AGENT_CODEX) == "/plugins"
         assert (
             _adapt_forward_command_for_agent("/plugin install foo", AGENT_CLAUDE)
