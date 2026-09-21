@@ -24,6 +24,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from ..backends.browser import BrowserRoot, DirectoryListing
 from ..agent_profile import (
     AGENT_CLAUDE,
+    AGENT_CLAUDE_OFFICIAL,
     AGENT_CODEX,
     AGENT_CURSOR,
     AgentProfile,
@@ -144,8 +145,12 @@ def build_agent_picker() -> tuple[str, InlineKeyboardMarkup]:
                     "🟢 Codex", callback_data=f"{CB_PROFILE_AGENT}{AGENT_CODEX}"
                 ),
                 InlineKeyboardButton(
-                    "🟣 Claude Code",
+                    "🟣 Claude + DeepSeek",
                     callback_data=f"{CB_PROFILE_AGENT}{AGENT_CLAUDE}",
+                ),
+                InlineKeyboardButton(
+                    "🟣 Claude Official",
+                    callback_data=f"{CB_PROFILE_AGENT}{AGENT_CLAUDE_OFFICIAL}",
                 ),
                 InlineKeyboardButton(
                     "🔵 Cursor Agent",
@@ -199,7 +204,7 @@ def build_profile_picker(
             if effort_values is not None
             else (
                 DEFAULT_CLAUDE_EFFORTS
-                if profile.agent_type == AGENT_CLAUDE
+                if profile.agent_type in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}
                 else (
                     DEFAULT_CURSOR_EFFORTS
                     if profile.agent_type == AGENT_CURSOR

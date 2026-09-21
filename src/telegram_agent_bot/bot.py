@@ -93,6 +93,7 @@ from .agent_io import (
 )
 from .agent_profile import (
     AGENT_CLAUDE,
+    AGENT_CLAUDE_OFFICIAL,
     AGENT_CODEX,
     AGENT_CURSOR,
     AgentProfile,
@@ -881,7 +882,9 @@ def _build_resume_conflict_keyboard() -> InlineKeyboardMarkup:
 def _profile_models(agent_type: str) -> tuple[str, ...]:
     """Return configured model choices for one agent type."""
     normalized = normalize_agent_type(agent_type)
-    if normalized == AGENT_CLAUDE:
+    if normalized == AGENT_CLAUDE_OFFICIAL:
+        return ()
+    if normalized in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
         return config.claude_models
     if normalized == AGENT_CURSOR:
         return config.cursor_models
@@ -891,7 +894,7 @@ def _profile_models(agent_type: str) -> tuple[str, ...]:
 def _profile_effort_values(agent_type: str, model: str) -> tuple[str, ...]:
     """Return reasoning efforts supported by the selected agent/model."""
     normalized = normalize_agent_type(agent_type)
-    if normalized == AGENT_CLAUDE:
+    if normalized in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
         return DEFAULT_CLAUDE_EFFORTS
     if normalized == AGENT_CURSOR:
         return DEFAULT_CURSOR_EFFORTS
@@ -928,7 +931,7 @@ def _profile_from_context(user_data: dict | None) -> AgentProfile:
     normalized = normalize_agent_type(agent_type, config.agent_type)
     default_effort = (
         config.claude_reasoning_effort
-        if normalized == AGENT_CLAUDE
+        if normalized in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}
         else config.codex_reasoning_effort
         if normalized == AGENT_CODEX
         else ""
@@ -1772,6 +1775,7 @@ def _requested_agent_type(agent_type: str | None = None) -> str:
 def _agent_command_name(agent_type: str, action: str) -> str:
     prefix = {
         AGENT_CLAUDE: "claude",
+        AGENT_CLAUDE_OFFICIAL: "claude",
         AGENT_CURSOR: "cursor",
     }.get(agent_type, "codex")
     return f"/{prefix}{action}"
@@ -1786,7 +1790,7 @@ def _agent_login_executable(agent_type: str | None = None) -> str:
     selected_agent = _requested_agent_type(agent_type)
     if agent_type is None:
         command = config.codex_command
-    elif selected_agent == AGENT_CLAUDE:
+    elif selected_agent in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
         command = config.claude_command
     elif selected_agent == AGENT_CURSOR:
         command = config.cursor_command
@@ -1804,6 +1808,7 @@ def _agent_login_executable(agent_type: str | None = None) -> str:
         return shutil.which(part) or part
     default = {
         AGENT_CLAUDE: "claude",
+        AGENT_CLAUDE_OFFICIAL: "claude",
         AGENT_CURSOR: "agent",
     }.get(selected_agent, "codex")
     return shutil.which(default) or default
@@ -1813,7 +1818,7 @@ def _agent_login_args(agent_type: str | None = None) -> list[str]:
     """Return the argv used to start an interactive agent login."""
     selected_agent = _requested_agent_type(agent_type)
     executable = _agent_login_executable(agent_type)
-    if selected_agent == AGENT_CLAUDE:
+    if selected_agent in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
         return [executable, "auth", "login"]
     if selected_agent == AGENT_CURSOR:
         return [executable, "login"]
@@ -1934,7 +1939,7 @@ async def _agent_login_worker(
             env["NO_OPEN_BROWSER"] = "1"
         if account_name:
             account_home = prepare_account_home(account_name, agent_type)
-            if agent_type == AGENT_CLAUDE:
+            if agent_type in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
                 env["HOME"] = str(account_home)
             else:
                 env["CODEX_HOME"] = str(account_home)
@@ -6382,7 +6387,7 @@ async def _create_and_bind_window(
         reasoning_effort=reasoning_effort
         or (
             config.claude_reasoning_effort
-            if normalized_agent == AGENT_CLAUDE
+            if normalized_agent in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}
             else config.codex_reasoning_effort
             if normalized_agent == AGENT_CODEX
             else ""
@@ -7203,7 +7208,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         model = models[0] if models else ""
         configured_effort = (
             config.claude_reasoning_effort
-            if agent_type == AGENT_CLAUDE
+            if agent_type in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}
             else config.codex_reasoning_effort
             if agent_type == AGENT_CODEX
             else ""
@@ -7240,7 +7245,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             current_effort = context.user_data.get(
                 PROFILE_EFFORT_KEY,
                 config.claude_reasoning_effort
-                if agent_type == AGENT_CLAUDE
+                if agent_type in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}
                 else config.codex_reasoning_effort
                 if agent_type == AGENT_CODEX
                 else "",

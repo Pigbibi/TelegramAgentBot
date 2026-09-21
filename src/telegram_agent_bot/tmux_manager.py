@@ -29,6 +29,7 @@ import libtmux
 from .account_manager import disable_codex_update_prompt, ensure_account_home
 from .agent_profile import (
     AGENT_CLAUDE,
+    AGENT_CLAUDE_OFFICIAL,
     AGENT_CODEX,
     AGENT_CURSOR,
     AgentProfile,
@@ -152,12 +153,16 @@ def _agent_command_for_launch(
     codex_command = getattr(config, "codex_cli_command", config.codex_command)
     configured_command = {
         AGENT_CLAUDE: config.claude_command,
+        AGENT_CLAUDE_OFFICIAL: config.claude_command,
         AGENT_CURSOR: config.cursor_command,
     }.get(profile.agent_type, codex_command)
     cmd = command_override or configured_command
     if profile.model:
         cmd = f"{cmd} --model {shlex.quote(profile.model)}"
-    if profile.agent_type == AGENT_CLAUDE and profile.reasoning_effort:
+    if (
+        profile.agent_type in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}
+        and profile.reasoning_effort
+    ):
         cmd = f"{cmd} --effort {shlex.quote(profile.reasoning_effort)}"
     elif profile.reasoning_effort:
         if profile.agent_type == AGENT_CODEX:
@@ -1005,7 +1010,11 @@ class TmuxManager:
                         if resume_session_id:
                             resume_target = _resume_target_id(resume_session_id)
                             resume_arg = shlex.quote(resume_target)
-                            if profile.agent_type in {AGENT_CLAUDE, AGENT_CURSOR}:
+                            if profile.agent_type in {
+                                AGENT_CLAUDE,
+                                AGENT_CLAUDE_OFFICIAL,
+                                AGENT_CURSOR,
+                            }:
                                 cmd = f"{cmd} --resume {resume_arg}"
                             else:
                                 cmd = f"{cmd} resume {resume_arg}"
@@ -1014,7 +1023,10 @@ class TmuxManager:
                                 raise ValueError(
                                     "Cursor Agent account snapshots are unsupported"
                                 )
-                            if profile.agent_type == AGENT_CLAUDE:
+                            if profile.agent_type in {
+                                AGENT_CLAUDE,
+                                AGENT_CLAUDE_OFFICIAL,
+                            }:
                                 account_home = ensure_account_home(
                                     account_name, profile.agent_type
                                 )
