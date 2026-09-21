@@ -67,6 +67,33 @@ def test_agent_login_args_use_claude_auth_login() -> None:
         ]
 
 
+def test_agent_login_args_use_cursor_browser_flow() -> None:
+    from telegram_agent_bot import bot as bot_module
+
+    with (
+        patch.object(bot_module.config, "agent_type", "cursor"),
+        patch.object(bot_module.config, "cursor_command", "agent"),
+        patch("telegram_agent_bot.bot.shutil.which", return_value="/usr/bin/agent"),
+    ):
+        assert bot_module._agent_login_args() == ["/usr/bin/agent", "login"]
+
+
+@pytest.mark.asyncio
+async def test_cursor_login_wait_accepts_url_without_device_code() -> None:
+    from telegram_agent_bot.bot import _wait_for_agent_login_details
+
+    class _Stdout:
+        async def readline(self) -> bytes:
+            return b"Open https://cursor.com/login?state=test\n"
+
+    process = MagicMock(stdout=_Stdout())
+
+    assert await _wait_for_agent_login_details(process, require_code=False) == (
+        "https://cursor.com/login?state=test",
+        None,
+    )
+
+
 def test_explicit_agent_login_args_ignore_global_agent_type() -> None:
     from telegram_agent_bot import bot as bot_module
 

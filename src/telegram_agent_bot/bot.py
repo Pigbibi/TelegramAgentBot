@@ -1887,8 +1887,10 @@ def _format_account_status(agent_type: str | None = None) -> str:
 
 async def _wait_for_agent_login_details(
     process: asyncio.subprocess.Process,
+    *,
+    require_code: bool = True,
 ) -> tuple[str | None, str | None]:
-    """Read Codex login output until the URL/code pair appears."""
+    """Read login output until its required browser details appear."""
     if process.stdout is None:
         return None, None
 
@@ -1904,7 +1906,7 @@ async def _wait_for_agent_login_details(
             break
         output += line.decode("utf-8", errors="replace")
         login_url, login_code = _extract_device_login_details(output)
-        if login_url and login_code:
+        if login_url and (login_code or not require_code):
             return login_url, login_code
     return _extract_device_login_details(output)
 
@@ -1922,11 +1924,14 @@ async def _agent_login_worker(
 
     For Codex: runs ``codex login --device-auth``.
     For Claude Code: runs ``claude auth login``.
+    For Cursor Agent: runs ``agent login`` and sends its browser URL to Telegram.
     """
     account_home = None
     process: asyncio.subprocess.Process | None = None
     try:
         env = os.environ.copy()
+        if agent_type == AGENT_CURSOR:
+            env["NO_OPEN_BROWSER"] = "1"
         if account_name:
             account_home = prepare_account_home(account_name, agent_type)
             if agent_type == AGENT_CLAUDE:
@@ -1943,26 +1948,32 @@ async def _agent_login_worker(
             env=env,
         )
 
-        login_url, login_code = await _wait_for_agent_login_details(process)
-        if not login_url or not login_code:
+        require_code = agent_type != AGENT_CURSOR
+        login_url, login_code = await _wait_for_agent_login_details(
+            process,
+            require_code=require_code,
+        )
+        if not login_url or (require_code and not login_code):
             if process.returncode is None:
                 process.terminate()
             await safe_send(
                 bot,
                 chat_id,
-                "❌ Agent login did not print a device URL/code. "
+                "❌ Agent login did not print the required browser details. "
                 "Please check the service logs or try again.",
                 message_thread_id=thread_id,
             )
             return
 
+        login_details = f"Open: {login_url}\n"
+        if login_code:
+            login_details += f"Code: `{login_code}`\n"
         await safe_send(
             bot,
             chat_id,
             "🔐 Agent login started for "
             f"{_login_display_name(account_name, agent_type)}.\n"
-            f"Open: {login_url}\n"
-            f"Code: `{login_code}`\n"
+            f"{login_details}"
             "Expires in about 15 minutes. Only complete this login if you requested it.",
             message_thread_id=thread_id,
         )
@@ -2036,12 +2047,13 @@ async def _agent_login_command(
     selected_agent = _requested_agent_type(agent_type)
     args = context.args or []
     if selected_agent == AGENT_CURSOR:
+        if args:
+            await safe_reply(update.message, "Usage: /cursorlogin")
+            return
         await safe_reply(
             update.message,
-            "Cursor Agent 登录需要在服务用户的交互终端完成：运行 `agent login`，"
-            "完成后再从 Telegram 创建 Cursor 会话。",
+            "⏳ Starting Cursor Agent browser login. I will send the login URL here.",
         )
-        return
     if len(args) > 1:
         await safe_reply(
             update.message,
