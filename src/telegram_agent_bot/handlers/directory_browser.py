@@ -25,9 +25,11 @@ from ..backends.browser import BrowserRoot, DirectoryListing
 from ..agent_profile import (
     AGENT_CLAUDE,
     AGENT_CODEX,
+    AGENT_CURSOR,
     AgentProfile,
     DEFAULT_CLAUDE_EFFORTS,
     DEFAULT_CODEX_EFFORTS,
+    DEFAULT_CURSOR_EFFORTS,
     agent_display_name,
     effort_display_label,
 )
@@ -145,6 +147,10 @@ def build_agent_picker() -> tuple[str, InlineKeyboardMarkup]:
                     "🟣 Claude Code",
                     callback_data=f"{CB_PROFILE_AGENT}{AGENT_CLAUDE}",
                 ),
+                InlineKeyboardButton(
+                    "🔵 Cursor Agent",
+                    callback_data=f"{CB_PROFILE_AGENT}{AGENT_CURSOR}",
+                ),
             ],
             [InlineKeyboardButton("Cancel", callback_data=CB_PROFILE_CANCEL)],
         ]
@@ -162,10 +168,15 @@ def build_profile_picker(
     lines = [
         f"*{agent_display_name(profile.agent_type)} settings*",
         f"Model: `{model_label}`",
-        f"Reasoning: `{profile.effort_label}`",
-        f"Fast mode: `{profile.fast_label}`",
-        "\nChoose model and reasoning, then create:",
     ]
+    if profile.agent_type != AGENT_CURSOR:
+        lines.extend(
+            [
+                f"Reasoning: `{profile.effort_label}`",
+                f"Fast mode: `{profile.fast_label}`",
+            ]
+        )
+    lines.append("\nChoose model and settings, then create:")
     buttons: list[list[InlineKeyboardButton]] = []
     for index, model in enumerate(models):
         label = model[:22] + "…" if len(model) > 23 else model
@@ -189,7 +200,11 @@ def build_profile_picker(
             else (
                 DEFAULT_CLAUDE_EFFORTS
                 if profile.agent_type == AGENT_CLAUDE
-                else DEFAULT_CODEX_EFFORTS
+                else (
+                    DEFAULT_CURSOR_EFFORTS
+                    if profile.agent_type == AGENT_CURSOR
+                    else DEFAULT_CODEX_EFFORTS
+                )
             )
         )
     )
@@ -203,14 +218,15 @@ def build_profile_picker(
                 for value, label in effort_options[index : index + 2]
             ]
         )
-    buttons.append(
-        [
-            InlineKeyboardButton(
-                f"⚡ Fast: {profile.fast_label}",
-                callback_data=f"{CB_PROFILE_FAST}{'off' if profile.fast_mode else 'on'}",
-            )
-        ]
-    )
+    if profile.agent_type != AGENT_CURSOR:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"⚡ Fast: {profile.fast_label}",
+                    callback_data=f"{CB_PROFILE_FAST}{'off' if profile.fast_mode else 'on'}",
+                )
+            ]
+        )
     buttons.append(
         [InlineKeyboardButton("✅ Create session", callback_data=CB_PROFILE_CONFIRM)]
     )

@@ -19,6 +19,8 @@ def _base_env(monkeypatch, tmp_path):
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CODEX_COMMAND", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CODEX_MODEL", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("TELEGRAM_AGENT_BOT_CURSOR_COMMAND", raising=False)
+    monkeypatch.delenv("TELEGRAM_AGENT_BOT_CURSOR_MODELS", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CODEX_MODELS", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CLAUDE_MODELS", raising=False)
     monkeypatch.delenv("TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST", raising=False)
@@ -153,6 +155,16 @@ class TestConfigValid:
         assert cfg.agent_type == "claude"
         assert cfg.agent_type_display == "Claude Code"
         assert cfg.codex_command == "claude"
+
+    def test_cursor_agent_uses_configured_cursor_command(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "cursor")
+        monkeypatch.setenv("TELEGRAM_AGENT_BOT_CURSOR_COMMAND", "cursor-agent")
+        cfg = Config()
+
+        assert cfg.agent_type == "cursor"
+        assert cfg.agent_type_display == "Cursor Agent"
+        assert cfg.cursor_command == "cursor-agent"
+        assert cfg.cursor_models == ()
 
     def test_codex_hook_trust_bypass_can_be_enabled(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST", "true")

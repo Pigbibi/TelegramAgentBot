@@ -94,9 +94,11 @@ from .agent_io import (
 from .agent_profile import (
     AGENT_CLAUDE,
     AGENT_CODEX,
+    AGENT_CURSOR,
     AgentProfile,
     DEFAULT_CLAUDE_EFFORTS,
     DEFAULT_CODEX_EFFORTS,
+    DEFAULT_CURSOR_EFFORTS,
     agent_display_name,
     normalize_agent_type,
     normalize_effort,
@@ -879,7 +881,11 @@ def _build_resume_conflict_keyboard() -> InlineKeyboardMarkup:
 def _profile_models(agent_type: str) -> tuple[str, ...]:
     """Return configured model choices for one agent type."""
     normalized = normalize_agent_type(agent_type)
-    return config.claude_models if normalized == AGENT_CLAUDE else config.codex_models
+    if normalized == AGENT_CLAUDE:
+        return config.claude_models
+    if normalized == AGENT_CURSOR:
+        return config.cursor_models
+    return config.codex_models
 
 
 def _profile_effort_values(agent_type: str, model: str) -> tuple[str, ...]:
@@ -887,6 +893,8 @@ def _profile_effort_values(agent_type: str, model: str) -> tuple[str, ...]:
     normalized = normalize_agent_type(agent_type)
     if normalized == AGENT_CLAUDE:
         return DEFAULT_CLAUDE_EFFORTS
+    if normalized == AGENT_CURSOR:
+        return DEFAULT_CURSOR_EFFORTS
     return config.codex_model_efforts.get(model, DEFAULT_CODEX_EFFORTS)
 
 
@@ -904,7 +912,7 @@ def _resolve_profile_effort(agent_type: str, model: str, requested: str) -> str:
     if normalized == AGENT_CODEX:
         candidates.append(config.codex_model_default_efforts.get(model, ""))
         candidates.append(config.codex_reasoning_effort)
-    else:
+    elif normalized == AGENT_CLAUDE:
         candidates.append(config.claude_reasoning_effort)
     candidates.extend(("medium", supported[0] if supported else ""))
     return next((value for value in candidates if value in supported), "medium")
@@ -922,6 +930,8 @@ def _profile_from_context(user_data: dict | None) -> AgentProfile:
         config.claude_reasoning_effort
         if normalized == AGENT_CLAUDE
         else config.codex_reasoning_effort
+        if normalized == AGENT_CODEX
+        else ""
     )
     requested_effort = (
         user_data.get(PROFILE_EFFORT_KEY, default_effort)
@@ -1760,21 +1770,26 @@ def _requested_agent_type(agent_type: str | None = None) -> str:
 
 
 def _agent_command_name(agent_type: str, action: str) -> str:
-    prefix = "claude" if agent_type == AGENT_CLAUDE else "codex"
+    prefix = {
+        AGENT_CLAUDE: "claude",
+        AGENT_CURSOR: "cursor",
+    }.get(agent_type, "codex")
     return f"/{prefix}{action}"
 
 
 def _agent_login_executable(agent_type: str | None = None) -> str:
     """Return the agent executable to use for device login.
 
-    Supports both Codex (``codex login``) and Claude Code
-    (``claude auth login``).
+    Supports Codex (``codex login``), Claude Code (``claude auth login``),
+    and Cursor Agent (``agent login``).
     """
     selected_agent = _requested_agent_type(agent_type)
     if agent_type is None:
         command = config.codex_command
     elif selected_agent == AGENT_CLAUDE:
         command = config.claude_command
+    elif selected_agent == AGENT_CURSOR:
+        command = config.cursor_command
     else:
         command = getattr(config, "codex_cli_command", config.codex_command)
     try:
@@ -1787,7 +1802,10 @@ def _agent_login_executable(agent_type: str | None = None) -> str:
         if sep and name.isidentifier():
             continue
         return shutil.which(part) or part
-    default = "claude" if selected_agent == AGENT_CLAUDE else "codex"
+    default = {
+        AGENT_CLAUDE: "claude",
+        AGENT_CURSOR: "agent",
+    }.get(selected_agent, "codex")
     return shutil.which(default) or default
 
 
@@ -1797,6 +1815,8 @@ def _agent_login_args(agent_type: str | None = None) -> list[str]:
     executable = _agent_login_executable(agent_type)
     if selected_agent == AGENT_CLAUDE:
         return [executable, "auth", "login"]
+    if selected_agent == AGENT_CURSOR:
+        return [executable, "login"]
     return [executable, "login", "--device-auth"]
 
 
@@ -2015,6 +2035,13 @@ async def _agent_login_command(
 
     selected_agent = _requested_agent_type(agent_type)
     args = context.args or []
+    if selected_agent == AGENT_CURSOR:
+        await safe_reply(
+            update.message,
+            "Cursor Agent 登录需要在服务用户的交互终端完成：运行 `agent login`，"
+            "完成后再从 Telegram 创建 Cursor 会话。",
+        )
+        return
     if len(args) > 1:
         await safe_reply(
             update.message,
@@ -2076,6 +2103,12 @@ async def claude_login_command(
     await _agent_login_command(update, context, AGENT_CLAUDE)
 
 
+async def cursor_login_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    await _agent_login_command(update, context, AGENT_CURSOR)
+
+
 async def _agent_account_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE, agent_type: str | None = None
 ) -> None:
@@ -2087,6 +2120,13 @@ async def _agent_account_command(
         return
 
     selected_agent = _requested_agent_type(agent_type)
+    if selected_agent == AGENT_CURSOR:
+        await safe_reply(
+            update.message,
+            "Cursor Agent account snapshots are not supported. Use /cursorlogin "
+            "to authenticate the service user's Cursor CLI account.",
+        )
+        return
     args = context.args or []
     if not args or args[0].lower() == "list":
         await safe_reply(update.message, _format_account_status(selected_agent))
@@ -6332,12 +6372,18 @@ async def _create_and_bind_window(
             config.claude_reasoning_effort
             if normalized_agent == AGENT_CLAUDE
             else config.codex_reasoning_effort
+            if normalized_agent == AGENT_CODEX
+            else ""
         ),
         fast_mode=fast_mode,
     )
     # Account snapshots are agent-specific. Do not apply a Codex snapshot to a
     # Claude topic (or vice versa) when both agents are enabled per topic.
-    launch_account = account_name or get_default_account_name(profile.agent_type)
+    launch_account = (
+        None
+        if profile.agent_type == AGENT_CURSOR
+        else account_name or get_default_account_name(profile.agent_type)
+    )
     (
         success,
         message,
@@ -7147,6 +7193,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             config.claude_reasoning_effort
             if agent_type == AGENT_CLAUDE
             else config.codex_reasoning_effort
+            if agent_type == AGENT_CODEX
+            else ""
         )
         if context.user_data is not None:
             context.user_data[PROFILE_AGENT_KEY] = agent_type
@@ -7181,7 +7229,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 PROFILE_EFFORT_KEY,
                 config.claude_reasoning_effort
                 if agent_type == AGENT_CLAUDE
-                else config.codex_reasoning_effort,
+                else config.codex_reasoning_effort
+                if agent_type == AGENT_CODEX
+                else "",
             )
             context.user_data[PROFILE_MODEL_KEY] = model
             context.user_data[PROFILE_EFFORT_KEY] = _resolve_profile_effort(
@@ -8363,6 +8413,7 @@ async def post_init(application: Application) -> None:
         BotCommand("codexaccount", "Manage Codex accounts"),
         BotCommand("claudelogin", "Login to Claude Code"),
         BotCommand("claudeaccount", "Manage Claude Code accounts"),
+        BotCommand("cursorlogin", "Login to Cursor Agent"),
     ]
     # Add Codex slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -8562,6 +8613,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("codexaccount", codex_account_command))
     application.add_handler(CommandHandler("claudelogin", claude_login_command))
     application.add_handler(CommandHandler("claudeaccount", claude_account_command))
+    application.add_handler(CommandHandler("cursorlogin", cursor_login_command))
     application.add_handler(CommandHandler(["agentcmd", "cmd"], agent_command_mode))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
