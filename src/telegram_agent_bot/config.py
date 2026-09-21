@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from .utils import app_dir
 from .agent_profile import (
     AGENT_CLAUDE,
+    AGENT_CLAUDE_OFFICIAL,
     AGENT_CODEX,
     AGENT_CURSOR,
     EFFORT_STANDARD,
@@ -125,8 +126,11 @@ class Config:
         if (normalized_raw_agent_type or AGENT_CODEX) not in (
             AGENT_CODEX,
             AGENT_CLAUDE,
+            AGENT_CLAUDE_OFFICIAL,
             AGENT_CURSOR,
             "claudecode",
+            "claudeapp",
+            "claudesubscription",
             "cursoragent",
             "cursorcli",
         ):
@@ -138,6 +142,7 @@ class Config:
         self.agent_type_display = {
             AGENT_CODEX: "Codex",
             AGENT_CLAUDE: "Claude Code",
+            AGENT_CLAUDE_OFFICIAL: "Claude Code (Official)",
             AGENT_CURSOR: "Cursor Agent",
         }[self.agent_type]
 
@@ -171,7 +176,11 @@ class Config:
         # codex_cli_command lets mixed per-topic mode launch Codex even when
         # the global default is Claude Code.
         self.codex_cli_command = os.getenv("TELEGRAM_AGENT_BOT_CODEX_COMMAND", "codex")
-        _default_command = "claude" if self.agent_type == AGENT_CLAUDE else "codex"
+        _default_command = (
+            "claude"
+            if self.agent_type in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}
+            else "codex"
+        )
         self.codex_command = os.getenv(
             "TELEGRAM_AGENT_BOT_CODEX_COMMAND", _default_command
         )
@@ -249,7 +258,7 @@ class Config:
 
         if custom_projects_path:
             self.codex_projects_path = Path(custom_projects_path)
-        elif self.agent_type == "claude":
+        elif self.agent_type in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
             self.codex_projects_path = Path.home() / ".claude" / "projects"
         elif codex_home:
             self.codex_projects_path = Path(codex_home)

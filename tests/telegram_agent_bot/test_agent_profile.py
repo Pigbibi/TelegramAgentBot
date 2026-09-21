@@ -23,6 +23,13 @@ def test_claude_code_alias_and_low_effort_are_normalized():
     assert profile.display_name == "Claude Code"
 
 
+def test_claude_official_profile_is_distinct_from_deepseek_mode():
+    profile = AgentProfile(agent_type="claude-official", model="sonnet")
+
+    assert profile.agent_type == "claudeofficial"
+    assert profile.display_name == "Claude Code (Official)"
+
+
 def test_cursor_agent_alias_uses_cursor_profile_without_reasoning_override():
     profile = AgentProfile(
         agent_type="cursor-agent",
@@ -150,6 +157,20 @@ def test_claude_launch_uses_effort_flag_and_env_file(tmp_path):
         f"set -a; . {env_file}; set +a; "
         "/usr/bin/claude --model deepseek-v4-pro --effort low"
     )
+
+
+def test_claude_official_launch_does_not_source_deepseek_env(tmp_path):
+    env_file = tmp_path / "claude.env"
+    env_file.write_text("ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic\n")
+    profile = AgentProfile(agent_type="claudeofficial", model="sonnet")
+
+    with (
+        patch.object(config, "claude_command", "/usr/bin/claude"),
+        patch.object(config, "claude_env_file", env_file),
+    ):
+        command = _agent_command_for_launch(profile)
+
+    assert command == "/usr/bin/claude --model sonnet --effort medium"
 
 
 def test_cursor_launch_uses_model_without_unsupported_reasoning_flag():
