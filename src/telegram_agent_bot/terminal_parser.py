@@ -103,9 +103,7 @@ UI_PATTERNS: list[UIPattern] = [
     UIPattern(
         # Cursor Agent requires an explicit trust decision for a new workspace.
         name="CursorWorkspaceTrust",
-        top=(
-            re.compile(r"^\s*│\s*⚠ Workspace Trust Required\s*│?\s*$"),
-        ),
+        top=(re.compile(r"^\s*│\s*⚠ Workspace Trust Required\s*│?\s*$"),),
         bottom=(
             re.compile(
                 r"^\s*│\s*Use arrow keys to navigate, Enter to select, "
