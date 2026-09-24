@@ -347,6 +347,24 @@ class TestExtractInteractiveContent:
         assert "Would you like to run the following command?" in result.content
         assert "Press enter to confirm" in result.content
 
+    def test_cursor_command_approval_prompt_is_interactive(self):
+        pane = (
+            "Run this command?\n"
+            "  $ git status --short\n"
+            "  → Run (once)\n"
+            "    Run always (a)\n"
+            "    No (esc)\n"
+            "  & Enter to run (shift+tab) (esc to go back)\n"
+        )
+
+        result = extract_interactive_content(pane)
+
+        assert result is not None
+        assert result.name == "CursorCommandApproval"
+        assert is_interactive_ui(pane)
+        assert "Run this command?" in result.content
+        assert "Run (once)" in result.content
+
     def test_codex_edit_approval_prompt(self):
         pane = (
             "  Would you like to make the following edits?\n"

@@ -114,6 +114,18 @@ UI_PATTERNS: list[UIPattern] = [
         min_gap=2,
     ),
     UIPattern(
+        # Cursor Agent command approval prompts must be surfaced to the user.
+        name="CursorCommandApproval",
+        top=(re.compile(r"^\s*Run .+ command\?\s*$", re.IGNORECASE),),
+        bottom=(
+            re.compile(
+                r"^\s*&.*\bEsc\b.*\b(?:back|cancel|close)\b.*$",
+                re.IGNORECASE,
+            ),
+        ),
+        min_gap=2,
+    ),
+    UIPattern(
         # Codex command approval prompt shown by newer CLIs.
         name="CommandApproval",
         top=(
