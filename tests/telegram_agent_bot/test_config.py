@@ -153,7 +153,7 @@ class TestConfigValid:
         monkeypatch.setenv("TELEGRAM_AGENT_BOT_AGENT_TYPE", "claude")
         cfg = Config()
         assert cfg.agent_type == "claude"
-        assert cfg.agent_type_display == "Claude Code"
+        assert cfg.agent_type_display == "Claude Code API"
         assert cfg.codex_command == "claude"
 
     def test_cursor_agent_uses_configured_cursor_command(self, monkeypatch):

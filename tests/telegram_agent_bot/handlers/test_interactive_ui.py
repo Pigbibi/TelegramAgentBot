@@ -16,6 +16,7 @@ from telegram_agent_bot.handlers.callback_data import (
     CB_ASK_ESC,
     CB_ASK_LEFT,
     CB_ASK_RIGHT,
+    CB_ASK_REFRESH,
     CB_ASK_SPACE,
     CB_ASK_TAB,
     CB_ASK_TRUST,
@@ -133,3 +134,16 @@ class TestKeyboardLayoutForHookTrust:
         assert any(button.callback_data == f"{CB_ASK_TRUST}@5" for button in buttons)
         assert any(button.callback_data == f"{CB_ASK_ENTER}@5" for button in buttons)
         assert any(button.callback_data == f"{CB_ASK_ESC}@5" for button in buttons)
+
+
+class TestKeyboardLayoutForCursorWorkspaceTrust:
+    def test_trust_action_is_explicit_and_refreshable(self):
+        keyboard = _build_interactive_keyboard("@5", ui_name="CursorWorkspaceTrust")
+        buttons = [button for row in keyboard.inline_keyboard for button in row]
+
+        assert [button.text for button in buttons] == [
+            "✅ Trust this workspace",
+            "🔄",
+        ]
+        assert buttons[0].callback_data == f"{CB_ASK_ENTER}@5"
+        assert buttons[1].callback_data == f"{CB_ASK_REFRESH}@5"

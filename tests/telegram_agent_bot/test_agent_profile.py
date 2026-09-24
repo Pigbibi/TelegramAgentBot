@@ -27,14 +27,14 @@ def test_claude_code_alias_and_low_effort_are_normalized():
 
     assert profile.agent_type == "claude"
     assert profile.reasoning_effort == "low"
-    assert profile.display_name == "Claude Code"
+    assert profile.display_name == "Claude Code API"
 
 
-def test_claude_official_profile_is_distinct_from_deepseek_mode():
+def test_claude_official_profile_is_distinct_from_api_mode():
     profile = AgentProfile(agent_type="claude-official", model="sonnet")
 
     assert profile.agent_type == "claudeofficial"
-    assert profile.display_name == "Claude Code (Official)"
+    assert profile.display_name == "Claude Code Official Subscription"
 
 
 @pytest.mark.parametrize(
@@ -82,6 +82,10 @@ def test_cursor_picker_omits_unsupported_reasoning_and_fast_controls():
     ]
     assert len(picker_keyboard.inline_keyboard[0]) == 2
     assert len(picker_keyboard.inline_keyboard[1]) == 2
+    assert [button.text for button in picker_keyboard.inline_keyboard[1]] == [
+        "🟣 Claude Code API",
+        "🟣 Claude Code Official Subscription",
+    ]
 
 
 def test_fast_is_no_longer_a_reasoning_effort():

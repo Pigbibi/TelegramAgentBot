@@ -130,8 +130,8 @@ def effort_display_label(effort: str) -> str:
 
 def agent_display_name(agent_type: str) -> str:
     return {
-        AGENT_CLAUDE: "Claude Code",
-        AGENT_CLAUDE_OFFICIAL: "Claude Code (Official)",
+        AGENT_CLAUDE: "Claude Code API",
+        AGENT_CLAUDE_OFFICIAL: "Claude Code Official Subscription",
         AGENT_CURSOR: "Cursor Agent",
     }.get(normalize_agent_type(agent_type), "Codex")
 

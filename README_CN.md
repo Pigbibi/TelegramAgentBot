@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-通过 Telegram 控制正在运行的 Codex CLI、Claude Code（DeepSeek 或官方订阅）和 Cursor Agent 会话。每个话题对应一个 tmux 窗口，远程消息、回合中的原生输入和本机终端共享同一会话。
+通过 Telegram 控制正在运行的 Codex CLI、Claude Code API 模式、Claude Code 官方订阅模式和 Cursor Agent 会话。每个话题对应一个 tmux 窗口，远程消息、回合中的原生输入和本机终端共享同一会话。
 
 机器人转发公开回复、进度和交互提示。重启机器人后话题绑定可以恢复；底层 tmux 会话独立于机器人进程存在。
 

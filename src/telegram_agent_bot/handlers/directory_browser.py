@@ -152,11 +152,11 @@ def build_agent_picker() -> tuple[str, InlineKeyboardMarkup]:
             ],
             [
                 InlineKeyboardButton(
-                    "🟣 Claude + DeepSeek",
+                    "🟣 Claude Code API",
                     callback_data=f"{CB_PROFILE_AGENT}{AGENT_CLAUDE}",
                 ),
                 InlineKeyboardButton(
-                    "🟣 Claude Official",
+                    "🟣 Claude Code Official Subscription",
                     callback_data=f"{CB_PROFILE_AGENT}{AGENT_CLAUDE_OFFICIAL}",
                 ),
             ],

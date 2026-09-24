@@ -1,10 +1,11 @@
-"""Interactive UI handling for Codex prompts.
+"""Interactive UI handling for agent prompts.
 
-Handles interactive terminal UIs displayed by Codex:
+Handles interactive terminal UIs displayed by supported agents:
   - AskUserQuestion: Multi-choice question prompts
   - ExitPlanMode: Plan mode exit confirmation
   - Permission Prompt: Tool permission requests
   - RestoreCheckpoint: Checkpoint restoration selection
+  - CursorWorkspaceTrust: explicit Cursor workspace trust
 
 Provides:
   - Keyboard navigation (up/down/left/right/enter/esc)
@@ -111,6 +112,21 @@ def _build_interactive_keyboard(
             ]
         )
 
+    if ui_name == "CursorWorkspaceTrust":
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "✅ Trust this workspace",
+                        callback_data=f"{CB_ASK_ENTER}{window_id}"[:64],
+                    ),
+                    InlineKeyboardButton(
+                        "🔄", callback_data=f"{CB_ASK_REFRESH}{window_id}"[:64]
+                    ),
+                ]
+            ]
+        )
+
     vertical_only = ui_name == "RestoreCheckpoint"
 
     rows: list[list[InlineKeyboardButton]] = []
@@ -173,9 +189,8 @@ async def handle_interactive_ui(
 ) -> bool:
     """Capture terminal and send interactive UI content to user.
 
-    Handles AskUserQuestion, ExitPlanMode, Permission Prompt, and
-    RestoreCheckpoint UIs. Returns True if UI was detected and sent,
-    False otherwise.
+    Handles supported interactive prompt UIs. Returns True if a UI was detected
+    and sent, False otherwise.
     """
     ikey = (user_id, thread_id or 0)
     chat_id = session_manager.resolve_chat_id(user_id, thread_id)

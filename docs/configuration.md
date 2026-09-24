@@ -56,9 +56,10 @@ chmod 600 ~/.telegram-agent-bot/.env
 | `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` | `$TELEGRAM_AGENT_BOT_DIR/claude.env` | Optional owner-only environment file for Claude Code providers |
 
 Each new topic can choose an agent independently. `TELEGRAM_AGENT_BOT_AGENT_TYPE`
-sets the initial default. `claude` is the provider-configured mode and may load
-`TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE`; `claudeofficial` deliberately skips that
-file so the official Claude Code login and model defaults remain authoritative.
+sets the initial default. `claude` is Claude Code API mode and may load
+`TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` for a provider such as DeepSeek.
+`claudeofficial` is Claude Code's official subscription mode and deliberately
+skips that file so its official login and model defaults remain authoritative.
 
 Automatic model discovery keeps the configured default available if discovery
 fails. Set an explicit comma-separated list when a gateway uses custom aliases

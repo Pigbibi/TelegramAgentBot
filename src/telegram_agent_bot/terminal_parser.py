@@ -1,4 +1,4 @@
-"""Terminal output parser — detects Codex UI elements in pane text.
+"""Terminal output parser — detects supported agent UI elements in pane text.
 
 Parses captured tmux pane content to detect:
   - Interactive UIs (AskUserQuestion, ExitPlanMode, Permission Prompt,
@@ -6,8 +6,8 @@ Parses captured tmux pane content to detect:
     delimiters.
   - Status line (spinner characters + working text) by scanning from bottom up.
 
-All Codex text patterns live here. To support a new UI type or
-a changed Codex version, edit UI_PATTERNS / STATUS_SPINNERS.
+Agent-specific text patterns live here. To support a new UI type or a changed
+CLI version, edit UI_PATTERNS / STATUS_SPINNERS.
 
 Key functions: is_interactive_ui(), extract_interactive_content(),
 is_codex_input_ready(), parse_status_line(), parse_status_update(),
@@ -98,6 +98,21 @@ UI_PATTERNS: list[UIPattern] = [
             ),
         ),
         bottom=(re.compile(r"^\s*Press enter to continue", re.IGNORECASE),),
+        min_gap=2,
+    ),
+    UIPattern(
+        # Cursor Agent requires an explicit trust decision for a new workspace.
+        name="CursorWorkspaceTrust",
+        top=(
+            re.compile(r"^\s*│\s*⚠ Workspace Trust Required\s*│?\s*$"),
+        ),
+        bottom=(
+            re.compile(
+                r"^\s*│\s*Use arrow keys to navigate, Enter to select, "
+                r"or press the key shown\s*│?\s*$",
+                re.IGNORECASE,
+            ),
+        ),
         min_gap=2,
     ),
     UIPattern(
@@ -268,6 +283,7 @@ def is_interactive_ui(pane_text: str) -> bool:
 STATUS_SPINNERS = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
 _PROGRESS_BULLETS = ("•", "◦")
 _PROMPT_PREFIXES = ("›", "❯")
+_CURSOR_IDLE_PROMPT = "→ Plan, search, build anything"
 _MAX_PROGRESS_LINES = 8
 _MAX_PROGRESS_CHARS = 1000
 _COMPLETION_STATUS_RE = re.compile(
@@ -327,8 +343,15 @@ def parse_status_line(pane_text: str) -> str | None:
 
 
 def is_codex_input_ready(pane_text: str) -> bool:
-    """Return True when the visible Codex TUI is ready for a new prompt."""
-    return codex_input_text(pane_text) is not None
+    """Return True when a supported agent TUI is ready for a new prompt."""
+    if codex_input_text(pane_text) is not None:
+        return True
+
+    if not pane_text or parse_status_update(pane_text) or is_interactive_ui(pane_text):
+        return False
+
+    tail = [line.strip() for line in pane_text.splitlines()[-12:]]
+    return _CURSOR_IDLE_PROMPT in tail
 
 
 def _is_prompt_line(stripped: str) -> bool:

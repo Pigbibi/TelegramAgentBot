@@ -2,7 +2,7 @@
 
 [简体中文](README_CN.md)
 
-Control live Codex CLI, Claude Code (DeepSeek or official subscription), and Cursor Agent sessions from Telegram. Each topic connects to a tmux window, so remote messages, native active-turn input, and local terminal access share one session.
+Control live Codex CLI, Claude Code API, Claude Code Official Subscription, and Cursor Agent sessions from Telegram. Each topic connects to a tmux window, so remote messages, native active-turn input, and local terminal access share one session.
 
 The bot forwards public replies, progress and interactive prompts. Session bindings survive bot restarts; the underlying tmux session remains independent of the bot process.
 

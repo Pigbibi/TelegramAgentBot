@@ -141,8 +141,8 @@ class Config:
             self.agent_type = AGENT_CODEX
         self.agent_type_display = {
             AGENT_CODEX: "Codex",
-            AGENT_CLAUDE: "Claude Code",
-            AGENT_CLAUDE_OFFICIAL: "Claude Code (Official)",
+            AGENT_CLAUDE: "Claude Code API",
+            AGENT_CLAUDE_OFFICIAL: "Claude Code Official Subscription",
             AGENT_CURSOR: "Cursor Agent",
         }[self.agent_type]
 

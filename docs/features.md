@@ -7,7 +7,7 @@ output delivery.
 ## Session control
 
 - Create a session in a project selected from Telegram.
-- Choose Codex, Claude Code + DeepSeek, Claude Code Official, or Cursor Agent for each new topic.
+- Choose Codex, Claude Code API, Claude Code Official Subscription, or Cursor Agent for each new topic.
 - Select a discovered or configured model and reasoning level.
 - Toggle Fast mode independently from the reasoning level.
 - Resume a tracked session in the selected directory.

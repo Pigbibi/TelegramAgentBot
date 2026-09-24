@@ -190,6 +190,20 @@ class TestParseStatusUpdate:
     def test_codex_input_not_ready_without_prompt(self):
         assert not is_codex_input_ready("output only\nno prompt")
 
+    def test_cursor_agent_idle_home_is_input_ready(self):
+        pane = (
+            "Cursor Agent\n"
+            "v2026.09.02-c22c1a3\n"
+            "Tip: Use /plan to iterate on an implementation plan before code changes.\n"
+            "\n"
+            "→ Plan, search, build anything\n"
+            "\n"
+            "Auto\n"
+            "~/Projects\n"
+        )
+
+        assert is_codex_input_ready(pane)
+
 
 class TestCodexInterruptionDetection:
     def test_detects_interruption_in_current_turn(self):
@@ -510,6 +524,31 @@ class TestExtractInteractiveContent:
 
         assert result is not None
         assert result.name == "DirectoryTrust"
+        assert is_interactive_ui(pane) is True
+        assert codex_input_text(pane) is None
+        assert is_codex_input_ready(pane) is False
+
+    def test_cursor_workspace_trust_prompt_is_interactive_not_input_ready(self):
+        pane = (
+            "╭──────────────────────────────────────────────────────────────╮\n"
+            "│ ⚠ Workspace Trust Required                                  │\n"
+            "│                                                              │\n"
+            "│ Cursor Agent can execute code and access files here.        │\n"
+            "│                                                              │\n"
+            "│ Do you trust the contents of this directory?                │\n"
+            "│                                                              │\n"
+            "│ ▶ [a] Trust this workspace                                   │\n"
+            "│   [q] Quit                                                   │\n"
+            "│                                                              │\n"
+            "│ Use arrow keys to navigate, Enter to select, or press the key shown     │\n"
+            "╰──────────────────────────────────────────────────────────────╯\n"
+        )
+
+        result = extract_interactive_content(pane)
+
+        assert result is not None
+        assert result.name == "CursorWorkspaceTrust"
+        assert "Trust this workspace" in result.content
         assert is_interactive_ui(pane) is True
         assert codex_input_text(pane) is None
         assert is_codex_input_ready(pane) is False
