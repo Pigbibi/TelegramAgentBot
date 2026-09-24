@@ -8,6 +8,7 @@ from telegram_agent_bot.terminal_parser import (
     extract_auth_error_message,
     extract_bash_output,
     extract_interactive_content,
+    is_agent_cli_startup_error,
     is_codex_input_ready,
     is_interactive_ui,
     parse_public_progress_block,
@@ -288,6 +289,29 @@ class TestAuthErrorDetection:
         )
 
         assert extract_auth_error_message(pane) is None
+
+
+class TestAgentCliStartupError:
+    def test_detects_usage_error_from_failed_cli_launch(self):
+        pane = (
+            "error: the argument '--sandbox <SANDBOX_MODE>' cannot be used multiple times\n"
+            "\nUsage: codex [OPTIONS] [PROMPT]\nubuntu@host:~/Projects$\n"
+        )
+
+        assert is_agent_cli_startup_error(pane)
+
+    def test_detects_missing_agent_command(self):
+        assert is_agent_cli_startup_error(
+            "bash: agent: command not found\nubuntu@host:~$\n"
+        )
+
+    def test_ignores_agent_output_that_mentions_an_error(self):
+        pane = (
+            "The build returned error: invalid option\n"
+            "Usage: cli [OPTIONS]\nContinue reading code.\n"
+        )
+
+        assert not is_agent_cli_startup_error(pane)
 
 
 # ── extract_interactive_content ──────────────────────────────────────────

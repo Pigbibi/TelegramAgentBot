@@ -65,7 +65,9 @@ async def test_capture_local_target_verifies_window_and_uses_backend(monkeypatch
     monkeypatch.setattr(
         agent_io.tmux_manager,
         "find_window_by_id",
-        AsyncMock(return_value=SimpleNamespace(window_id="@2")),
+        AsyncMock(
+            return_value=SimpleNamespace(window_id="@2", pane_current_command="bash")
+        ),
     )
     monkeypatch.setattr(
         agent_io.session_manager,
@@ -83,6 +85,7 @@ async def test_capture_local_target_verifies_window_and_uses_backend(monkeypatch
     assert result is not None
     assert result.text == "local pane"
     assert result.missing is False
+    assert result.pane_command == "bash"
     backend.capture.assert_awaited_once_with(
         AgentTarget("local", "local", session_id="sid-2", window_id="@2"),
         with_ansi=True,

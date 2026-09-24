@@ -61,11 +61,21 @@ _WAITING_BACKGROUND_RE = re.compile(
     r"^[•◦]\s*Waiting for background terminal\b", re.IGNORECASE
 )
 _HOOK_TRUST_BYPASS_FLAG = "--dangerously-bypass-hook-trust"
-_PERMISSION_BYPASS_FLAGS = (
-    "--dangerously-bypass-approvals-and-sandbox",
-    "--dangerously-skip-permissions",
-    "--force",
-)
+_AGENT_PERMISSION_OPTIONS = {
+    AGENT_CODEX: (
+        ("-s", "--sandbox", "-a", "--ask-for-approval"),
+        ("--dangerously-bypass-approvals-and-sandbox",),
+    ),
+    AGENT_CLAUDE: (
+        ("--permission-mode",),
+        ("--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"),
+    ),
+    AGENT_CLAUDE_OFFICIAL: (
+        ("--permission-mode",),
+        ("--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"),
+    ),
+    AGENT_CURSOR: ((), ("-f", "--force", "--yolo")),
+}
 _SUBMIT_SETTLE_CHECKS = 8
 _SUBMIT_SETTLE_INTERVAL_SECONDS = 0.5
 _SOCKET_PATH_LOCK = threading.Lock()
@@ -147,24 +157,32 @@ def _first_command_executable(parts: list[str]) -> str:
     return ""
 
 
-def _strip_codex_permission_options(command: str) -> str:
-    """Remove configured Codex permission flags before applying a topic profile."""
+def _strip_agent_permission_options(command: str, agent_type: str) -> str:
+    """Remove configured permission flags before applying a topic profile."""
+    value_options, boolean_options = _AGENT_PERMISSION_OPTIONS.get(agent_type, ((), ()))
     parts = shlex.split(command)
     cleaned: list[str] = []
     index = 0
+    changed = False
     while index < len(parts):
         part = parts[index]
-        if part in {"-s", "--sandbox", "-a", "--ask-for-approval"}:
+        if part in value_options:
+            changed = True
             index += 1
             if index < len(parts) and not parts[index].startswith("-"):
                 index += 1
             continue
-        if part.startswith(("--sandbox=", "--ask-for-approval=")):
+        if part.startswith(tuple(f"{option}=" for option in value_options)):
+            changed = True
+            index += 1
+            continue
+        if part in boolean_options:
+            changed = True
             index += 1
             continue
         cleaned.append(part)
         index += 1
-    return shlex.join(cleaned)
+    return shlex.join(cleaned) if changed else command
 
 
 def _agent_command_for_launch(
@@ -185,8 +203,7 @@ def _agent_command_for_launch(
         AGENT_CURSOR: config.cursor_command,
     }.get(profile.agent_type, codex_command)
     cmd = command_override or configured_command
-    if profile.permission_mode == PERMISSION_ASK and profile.agent_type == AGENT_CODEX:
-        cmd = _strip_codex_permission_options(cmd)
+    cmd = _strip_agent_permission_options(cmd, profile.agent_type)
     if profile.model:
         cmd = f"{cmd} --model {shlex.quote(profile.model)}"
     if (
@@ -198,10 +215,6 @@ def _agent_command_for_launch(
         if profile.agent_type == AGENT_CODEX:
             cmd = f'{cmd} -c model_reasoning_effort="{profile.reasoning_effort}"'
     if profile.permission_mode == PERMISSION_ASK:
-        for flag in _PERMISSION_BYPASS_FLAGS:
-            cmd = re.sub(rf"(?<!\S){re.escape(flag)}(?=\s|$)", "", cmd)
-        if profile.agent_type == AGENT_CURSOR:
-            cmd = re.sub(r"(?<!\S)-f(?=\s|$)", "", cmd)
         cmd = cmd.strip()
 
     if profile.permission_mode == PERMISSION_FULL:

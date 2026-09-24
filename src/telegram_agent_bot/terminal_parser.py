@@ -317,6 +317,15 @@ _AUTH_ERROR_MARKERS = (
     "provide your own api key",
     "login timed out",
 )
+_AGENT_CLI_ERROR_RE = re.compile(
+    r"^\s*(?:error:|fatal error:|unknown option|invalid option)",
+    re.IGNORECASE,
+)
+_AGENT_CLI_USAGE_RE = re.compile(r"^\s*usage:\s+\S", re.IGNORECASE)
+_AGENT_COMMAND_NOT_FOUND_RE = re.compile(
+    r"(?:command not found|no such file or directory)", re.IGNORECASE
+)
+_SHELL_PROMPT_RE = re.compile(r"(?:\$|#|%|>)\s*$")
 
 
 def parse_status_line(pane_text: str) -> str | None:
@@ -436,6 +445,19 @@ def extract_auth_error_message(pane_text: str) -> str | None:
     if not any(marker in normalized for marker in _AUTH_ERROR_MARKERS):
         return None
     return segment
+
+
+def is_agent_cli_startup_error(pane_text: str) -> bool:
+    """Recognize a CLI launch error screen instead of treating it as busy work."""
+    if not pane_text:
+        return False
+    lines = [line.strip() for line in pane_text.splitlines()[-30:]]
+    if not any(_SHELL_PROMPT_RE.search(line) for line in lines[-5:]):
+        return False
+    return any(_AGENT_COMMAND_NOT_FOUND_RE.search(line) for line in lines) or (
+        any(_AGENT_CLI_ERROR_RE.search(line) for line in lines)
+        and any(_AGENT_CLI_USAGE_RE.search(line) for line in lines)
+    )
 
 
 def codex_input_text(pane_text: str) -> str | None:
