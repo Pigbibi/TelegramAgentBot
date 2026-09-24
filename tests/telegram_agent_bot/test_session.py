@@ -516,6 +516,47 @@ class TestTranscriptConfirmation:
             after_offset=baseline,
         )
 
+    def test_resume_ready_requires_new_thread_settings_event(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = tmp_path / "sid-1.jsonl"
+        ready = {"type": "event_msg", "payload": {"type": "thread_settings_applied"}}
+        transcript.write_text(json.dumps(ready) + "\n", encoding="utf-8")
+        baseline = transcript.stat().st_size
+
+        assert not SessionManager._transcript_tail_contains_resume_ready(
+            transcript, after_offset=baseline
+        )
+        with transcript.open("a", encoding="utf-8") as output:
+            output.write(json.dumps(ready) + "\n")
+        assert SessionManager._transcript_tail_contains_resume_ready(
+            transcript, after_offset=baseline
+        )
+
+    @pytest.mark.asyncio
+    async def test_wait_for_resume_ready_uses_the_saved_transcript(
+        self, mgr: SessionManager, monkeypatch, tmp_path: Path
+    ) -> None:
+        transcript = tmp_path / "sid-1.jsonl"
+        transcript.write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            mgr, "_find_session_file", lambda *_args, **_kwargs: transcript
+        )
+
+        assert not await mgr.wait_for_transcript_resume_ready(
+            "sid-1", "/tmp/repo", after_offset=0, timeout=0.02, interval=0.01
+        )
+        transcript.write_text(
+            json.dumps(
+                {"type": "event_msg", "payload": {"type": "thread_settings_applied"}}
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        assert await mgr.wait_for_transcript_resume_ready(
+            "sid-1", "/tmp/repo", after_offset=0, timeout=0.1, interval=0.01
+        )
+
     def test_cursor_user_record_started_before_confirmation_cursor(
         self, tmp_path: Path
     ) -> None:

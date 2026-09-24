@@ -1394,6 +1394,9 @@ async def test_recovery_detects_active_writer_without_rebinding(monkeypatch):
         account_name="",
     )
     session_manager = MagicMock()
+    session_manager.transcript_confirmation_baseline = AsyncMock(
+        return_value=("sid-1", 100)
+    )
     session_manager.window_states = {"@8": old_state}
     session_manager.user_window_offsets = {}
     session_manager.user_window_offset_sessions = {}
@@ -1444,6 +1447,9 @@ async def test_recovery_skips_window_id_reserved_by_another_topic(monkeypatch):
     )
     new_state = SimpleNamespace(session_id="", account_name="")
     session_manager = MagicMock()
+    session_manager.transcript_confirmation_baseline = AsyncMock(
+        return_value=("sid-1", 100)
+    )
     session_manager.window_states = {
         "@8": old_state,
         "@9": SimpleNamespace(session_id="other-session", cwd="/tmp/other"),
@@ -1495,7 +1501,14 @@ async def test_recovery_skips_window_id_reserved_by_another_topic(monkeypatch):
     assert create_window.await_count == 2
     kill_window.assert_awaited_once_with("@9")
     session_manager.prepare_window_launch.assert_called_once_with(
-        "@10", cwd="/tmp/repo", window_name="Repo", account_name=""
+        "@10",
+        cwd="/tmp/repo",
+        window_name="Repo",
+        account_name="",
+        agent_type="codex",
+        model="",
+        reasoning_effort="",
+        fast_mode=False,
     )
     session_manager.bind_thread.assert_called_once_with(
         12345, 42, "@10", window_name="Repo"
@@ -1515,6 +1528,9 @@ async def test_recovery_accepts_original_window_id_after_tmux_server_restart(
         account_name="primary",
     )
     session_manager = MagicMock()
+    session_manager.transcript_confirmation_baseline = AsyncMock(
+        return_value=("sid-1", 100)
+    )
     session_manager.window_states = {"@8": old_state}
     session_manager.user_window_offsets = {12345: {"@8": 17}}
     session_manager.user_window_offset_sessions = {12345: {"@8": "sid-1"}}
@@ -1571,6 +1587,9 @@ async def test_recovery_failure_after_original_id_reuse_keeps_saved_state(monkey
         account_name="",
     )
     session_manager = MagicMock()
+    session_manager.transcript_confirmation_baseline = AsyncMock(
+        return_value=("sid-1", 100)
+    )
     session_manager.window_states = {"@8": old_state}
     session_manager.user_window_offsets = {}
     session_manager.user_window_offset_sessions = {}
@@ -1608,16 +1627,26 @@ async def test_recovery_failure_after_original_id_reuse_keeps_saved_state(monkey
     session_manager._save_state.assert_called_once()
 
 
+@pytest.mark.parametrize("agent_type", ["codex", "claude", "claudeofficial", "cursor"])
 @pytest.mark.asyncio
-async def test_recovery_keeps_hook_session_identity_after_validation(monkeypatch):
+async def test_recovery_keeps_hook_session_identity_after_validation(
+    monkeypatch, agent_type
+):
     old_state = SimpleNamespace(
         session_id="sid-1",
         cwd="/tmp/repo",
         window_name="Repo",
         account_name="",
+        agent_type=agent_type,
+        model="selected-model",
+        reasoning_effort="high",
+        fast_mode=True,
     )
     new_state = SimpleNamespace(session_id="resumed-session", account_name="")
     session_manager = MagicMock()
+    session_manager.transcript_confirmation_baseline = AsyncMock(
+        return_value=("sid-1", 100)
+    )
     session_manager.window_states = {"@8": old_state}
     session_manager.user_window_offsets = {}
     session_manager.user_window_offset_sessions = {}
@@ -1660,7 +1689,24 @@ async def test_recovery_keeps_hook_session_identity_after_validation(monkeypatch
         "@9", timeout=15.0
     )
     session_manager.prepare_window_launch.assert_called_once_with(
-        "@9", cwd="/tmp/repo", window_name="Repo", account_name=""
+        "@9",
+        cwd="/tmp/repo",
+        window_name="Repo",
+        account_name="",
+        agent_type=agent_type,
+        model="selected-model",
+        reasoning_effort="high",
+        fast_mode=True,
+    )
+    bot_module._create_agent_local_window.assert_awaited_once_with(
+        cwd="/tmp/repo",
+        window_name="Repo",
+        resume_session_id="sid-1",
+        account_name="",
+        agent_type=agent_type,
+        model="selected-model",
+        reasoning_effort="high",
+        fast_mode=True,
     )
     session_manager.register_session_to_window.assert_not_called()
     session_manager.bind_thread.assert_called_once_with(
@@ -1670,6 +1716,59 @@ async def test_recovery_keeps_hook_session_identity_after_validation(monkeypatch
     session_manager.remove_window_state.assert_called_once_with("@8")
     send_or_queue.assert_awaited_once()
     assert send_or_queue.await_args.args[1:] == (12345, 42, "@9", "pending prompt")
+
+
+@pytest.mark.asyncio
+async def test_recovery_does_not_forward_before_resumed_transcript_is_ready(
+    monkeypatch,
+):
+    old_state = SimpleNamespace(
+        session_id="sid-1", cwd="/tmp/repo", window_name="Repo", account_name=""
+    )
+    manager = MagicMock()
+    manager.window_states = {"@8": old_state}
+    manager.user_window_offsets = {}
+    manager.user_window_offset_sessions = {}
+    manager.iter_thread_bindings.return_value = [(12345, 42, "@8")]
+    manager.transcript_confirmation_baseline = AsyncMock(return_value=("sid-1", 100))
+    manager.wait_for_session_map_entry = AsyncMock(return_value=False)
+    manager.wait_for_transcript_resume_ready = AsyncMock(return_value=False)
+    manager.remove_session_map_entry = AsyncMock()
+    send_or_queue = AsyncMock()
+    kill_window = AsyncMock(return_value=True)
+    monkeypatch.setattr(bot_module, "session_manager", manager)
+    monkeypatch.setattr(
+        bot_module,
+        "_create_agent_local_window",
+        AsyncMock(return_value=(True, "created", "Repo", "@9", None)),
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_wait_for_recovered_agent_process",
+        AsyncMock(return_value=(True, "")),
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_recovered_agent_process_status",
+        AsyncMock(return_value=(True, "")),
+    )
+    monkeypatch.setattr(bot_module, "_send_or_queue_agent_input", send_or_queue)
+    monkeypatch.setattr(bot_module.tmux_manager, "kill_window", kill_window)
+
+    ok, message = await bot_module._recover_missing_bound_window(
+        bot=MagicMock(),
+        user_id=12345,
+        thread_id=42,
+        old_window_id="@8",
+        text="pending prompt",
+    )
+
+    assert ok is False
+    assert "not sent" in message
+    send_or_queue.assert_not_awaited()
+    manager.bind_thread.assert_not_called()
+    kill_window.assert_awaited_once_with("@9")
+    assert manager.window_states["@8"] is old_state
 
 
 @pytest.mark.asyncio

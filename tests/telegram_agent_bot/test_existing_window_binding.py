@@ -1036,6 +1036,10 @@ class TestExistingWindowBinding:
             mock_sm.user_window_offset_sessions = {}
             mock_sm.iter_thread_bindings.return_value = [(12345, 42, "@2")]
             mock_sm.wait_for_session_map_entry = AsyncMock(return_value=False)
+            mock_sm.transcript_confirmation_baseline = AsyncMock(
+                return_value=("session-1", 1024)
+            )
+            mock_sm.wait_for_transcript_resume_ready = AsyncMock(return_value=True)
             mock_sm.get_window_state.return_value = new_state
             mock_sm.remove_session_map_entry = AsyncMock()
             mock_tmux.find_window_by_id = AsyncMock(return_value=None)
@@ -1069,6 +1073,7 @@ class TestExistingWindowBinding:
             window_name="Projects-2",
             resume_session_id="session-1",
             account_name="",
+            agent_type="codex",
             permission_mode="ask",
         )
         mock_sm.bind_thread_target.assert_called_once_with(
@@ -1083,6 +1088,9 @@ class TestExistingWindowBinding:
             "/tmp/project",
             window_name="Projects-2",
             persist_session_map=True,
+        )
+        mock_sm.wait_for_transcript_resume_ready.assert_awaited_once_with(
+            "session-1", "/tmp/project", account_name="", after_offset=1024
         )
         mock_sm.remove_session_map_entry.assert_awaited_once_with("@2")
         mock_sm.remove_window_state.assert_called_once_with("@2")

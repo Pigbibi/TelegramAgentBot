@@ -5912,6 +5912,15 @@ async def _recover_missing_bound_window(
 
     resume_session_id = state.session_id
     selected_path = state.cwd
+    agent_type = normalize_agent_type(
+        getattr(state, "agent_type", ""), config.agent_type
+    )
+    resume_offset: int | None = None
+    if agent_type == AGENT_CODEX:
+        (
+            _session_id,
+            resume_offset,
+        ) = await session_manager.transcript_confirmation_baseline(old_window_id)
     requested_window_name = state.window_name or session_manager.get_display_name(
         old_window_id
     )
@@ -5950,6 +5959,10 @@ async def _recover_missing_bound_window(
             window_name=requested_window_name,
             resume_session_id=resume_session_id,
             account_name=account_name or "",
+            agent_type=agent_type,
+            model=getattr(state, "model", ""),
+            reasoning_effort=getattr(state, "reasoning_effort", ""),
+            fast_mode=getattr(state, "fast_mode", False),
         )
         if not success:
             return False, message
@@ -6009,6 +6022,10 @@ async def _recover_missing_bound_window(
         cwd=str(selected_path),
         window_name=created_wname,
         account_name=account_name or "",
+        agent_type=agent_type,
+        model=getattr(state, "model", ""),
+        reasoning_effort=getattr(state, "reasoning_effort", ""),
+        fast_mode=getattr(state, "fast_mode", False),
     )
     hook_ok = await session_manager.wait_for_session_map_entry(
         created_wid,
@@ -6020,6 +6037,21 @@ async def _recover_missing_bound_window(
         return False, health_message
 
     if not hook_ok:
+        if (
+            agent_type == AGENT_CODEX
+            and not await session_manager.wait_for_transcript_resume_ready(
+                resume_session_id,
+                str(selected_path),
+                account_name=account_name or "",
+                after_offset=resume_offset,
+            )
+        ):
+            await discard_failed_window()
+            return (
+                False,
+                "the resumed Codex session did not finish restoring. Your message "
+                "was not sent; try again or create a new session.",
+            )
         logger.info(
             "Recovered missing window %s as %s without a hook entry; "
             "falling back to resumed session_id=%s",
