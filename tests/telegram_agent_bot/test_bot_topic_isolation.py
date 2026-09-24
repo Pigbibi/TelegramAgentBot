@@ -9,12 +9,17 @@ from telegram_agent_bot.backends.base import AgentTarget, CreateSessionResult
 from telegram_agent_bot.handlers.callback_data import (
     CB_ASK_TRUST,
     CB_DIR_CONFIRM,
+    CB_DIR_PAGE,
+    CB_DIR_SELECT,
+    CB_DIR_UP,
     CB_PROFILE_AGENT,
     CB_PROFILE_CONFIRM,
     CB_PROFILE_EFFORT,
+    CB_SESSION_NEW,
     CB_SESSION_SELECT,
 )
 from telegram_agent_bot.handlers.directory_browser import (
+    BROWSE_DIRS_KEY,
     BROWSE_PATH_KEY,
     PROFILE_AGENT_KEY,
     PROFILE_EFFORT_KEY,
@@ -144,6 +149,84 @@ async def test_profile_rejects_effort_not_supported_by_selected_model():
 
 
 class TestSessionPickerIsolation:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "callback_data",
+        [
+            f"{CB_DIR_SELECT}0",
+            CB_DIR_UP,
+            f"{CB_DIR_PAGE}0",
+            CB_DIR_CONFIRM,
+            CB_PROFILE_CONFIRM,
+            CB_SESSION_NEW,
+        ],
+    )
+    async def test_expired_project_selection_never_uses_service_cwd(
+        self, callback_data
+    ):
+        update, query = _make_callback_update(callback_data)
+        context = _make_context()
+        context.user_data = {
+            BROWSE_DIRS_KEY: ["project"],
+            "_pending_thread_id": 42,
+            "_pending_thread_text": "hello",
+        }
+
+        with (
+            patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_agent_bot.bot._get_thread_id", return_value=42),
+            patch(
+                "telegram_agent_bot.bot._create_and_bind_window",
+                new_callable=AsyncMock,
+            ) as create,
+            patch("telegram_agent_bot.bot.safe_edit", new_callable=AsyncMock),
+        ):
+            from telegram_agent_bot.bot import callback_handler
+
+            await callback_handler(update, context)
+
+        query.answer.assert_awaited_once_with(
+            "Project selection expired", show_alert=True
+        )
+        create.assert_not_awaited()
+        assert "_pending_thread_text" not in context.user_data
+
+    @pytest.mark.asyncio
+    async def test_expired_session_selection_never_uses_service_cwd(self):
+        update, query = _make_callback_update(f"{CB_SESSION_SELECT}0")
+        context = _make_context()
+        context.user_data = {
+            SESSIONS_KEY: [
+                CodexSession(
+                    session_id="session-a",
+                    summary="Existing chat",
+                    message_count=1,
+                    file_path="/tmp/project/session-a.jsonl",
+                )
+            ],
+            "_pending_thread_id": 42,
+        }
+
+        with (
+            patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_agent_bot.bot._get_thread_id", return_value=42),
+            patch("telegram_agent_bot.bot.session_manager") as sessions,
+            patch(
+                "telegram_agent_bot.bot._create_and_bind_window",
+                new_callable=AsyncMock,
+            ) as create,
+            patch("telegram_agent_bot.bot.safe_edit", new_callable=AsyncMock),
+        ):
+            sessions.has_bound_thread_for_session.return_value = False
+            from telegram_agent_bot.bot import callback_handler
+
+            await callback_handler(update, context)
+
+        query.answer.assert_awaited_once_with(
+            "Project selection expired", show_alert=True
+        )
+        create.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_dir_confirm_shows_agent_picker_before_session_lookup(self):
         """Directory confirmation now selects an agent before scanning sessions."""

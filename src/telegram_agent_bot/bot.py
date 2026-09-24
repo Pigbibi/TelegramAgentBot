@@ -1190,6 +1190,23 @@ def _clear_creation_state(user_data: dict | None) -> None:
             user_data.pop(key, None)
 
 
+def _creation_path(user_data: dict | None, key: str) -> str | None:
+    """Return an explicit project selection, never the service's cwd."""
+    path = user_data.get(key) if user_data else None
+    return path if isinstance(path, str) and path.strip() else None
+
+
+async def _reject_expired_project_selection(
+    query: Any, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    _clear_creation_state(context.user_data)
+    await query.answer("Project selection expired", show_alert=True)
+    await safe_edit(
+        query,
+        "⚠️ Project selection expired. Send your message again to choose a project.",
+    )
+
+
 async def _continue_creation_with_profile(
     query: Any,
     context: ContextTypes.DEFAULT_TYPE,
@@ -1197,11 +1214,10 @@ async def _continue_creation_with_profile(
 ) -> None:
     """Find a resumable session or create a new window for the chosen profile."""
     user_data = context.user_data
-    selected_path = (
-        user_data.get("_selected_path", str(Path.cwd()))
-        if user_data
-        else str(Path.cwd())
-    )
+    selected_path = _creation_path(user_data, "_selected_path")
+    if selected_path is None:
+        await _reject_expired_project_selection(query, context)
+        return
     backend_id = user_data.get("_selected_backend_id", "") if user_data else ""
     node_id = user_data.get("_selected_node_id", "") if user_data else ""
     pending_thread_id = user_data.get("_pending_thread_id") if user_data else None
@@ -7578,12 +7594,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         subdir_name = cached_dirs[idx]
 
-        default_path = str(Path.cwd())
-        current_path = (
-            context.user_data.get(BROWSE_PATH_KEY, default_path)
-            if context.user_data
-            else default_path
-        )
+        current_path = _creation_path(context.user_data, BROWSE_PATH_KEY)
+        if current_path is None:
+            await _reject_expired_project_selection(query, context)
+            return
         backend_id, node_id = _browse_backend_context(context.user_data)
         if backend_id:
             root_label, root_path = _browse_root_context(context.user_data)
@@ -7635,12 +7649,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if pending_tid is not None and _get_thread_id(update) != pending_tid:
             await query.answer("Stale browser (topic mismatch)", show_alert=True)
             return
-        default_path = str(Path.cwd())
-        current_path = (
-            context.user_data.get(BROWSE_PATH_KEY, default_path)
-            if context.user_data
-            else default_path
-        )
+        current_path = _creation_path(context.user_data, BROWSE_PATH_KEY)
+        if current_path is None:
+            await _reject_expired_project_selection(query, context)
+            return
         backend_id, node_id = _browse_backend_context(context.user_data)
         if backend_id:
             root_label, root_path = _browse_root_context(context.user_data)
@@ -7693,12 +7705,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except ValueError:
             await query.answer("Invalid data")
             return
-        default_path = str(Path.cwd())
-        current_path = (
-            context.user_data.get(BROWSE_PATH_KEY, default_path)
-            if context.user_data
-            else default_path
-        )
+        current_path = _creation_path(context.user_data, BROWSE_PATH_KEY)
+        if current_path is None:
+            await _reject_expired_project_selection(query, context)
+            return
         backend_id, node_id = _browse_backend_context(context.user_data)
         if backend_id:
             root_label, root_path = _browse_root_context(context.user_data)
@@ -7736,15 +7746,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.answer()
 
     elif data == CB_DIR_CONFIRM:
-        default_path = str(Path.cwd())
-        selected_path = (
-            context.user_data.get(BROWSE_PATH_KEY, default_path)
-            if context.user_data
-            else default_path
-        )
-        backend_id, node_id = _browse_backend_context(context.user_data)
-        if not backend_id:
-            selected_path = _clamp_to_selected_root(selected_path, context.user_data)
         # Check if this was initiated from a thread bind flow
         pending_thread_id: int | None = (
             context.user_data.get("_pending_thread_id") if context.user_data else None
@@ -7760,6 +7761,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 _clear_pending_thread_input(context.user_data)
             await query.answer("Stale browser (topic mismatch)", show_alert=True)
             return
+
+        selected_path = _creation_path(context.user_data, BROWSE_PATH_KEY)
+        if selected_path is None:
+            await _reject_expired_project_selection(query, context)
+            return
+        backend_id, node_id = _browse_backend_context(context.user_data)
+        if not backend_id:
+            selected_path = _clamp_to_selected_root(selected_path, context.user_data)
 
         if context.user_data is not None:
             context.user_data["_pending_thread_id"] = pending_thread_id
@@ -7834,11 +7843,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("Session already active", show_alert=True)
             return
 
-        selected_path = (
-            context.user_data.get("_selected_path", str(Path.cwd()))
-            if context.user_data
-            else str(Path.cwd())
-        )
+        selected_path = _creation_path(context.user_data, "_selected_path")
+        if selected_path is None:
+            await _reject_expired_project_selection(query, context)
+            return
         selected_node_id = (
             context.user_data.get("_selected_node_id", "") if context.user_data else ""
         )
@@ -7877,11 +7885,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if pending_tid is not None and _get_thread_id(update) != pending_tid:
             await query.answer("Stale picker (topic mismatch)", show_alert=True)
             return
-        selected_path = (
-            context.user_data.get("_selected_path", str(Path.cwd()))
-            if context.user_data
-            else str(Path.cwd())
-        )
+        selected_path = _creation_path(context.user_data, "_selected_path")
+        if selected_path is None:
+            await _reject_expired_project_selection(query, context)
+            return
         selected_node_id = (
             context.user_data.get("_selected_node_id", "") if context.user_data else ""
         )
