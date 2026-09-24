@@ -19,6 +19,11 @@ TelegramAgentBot stores bindings and monitor offsets under
 `$TELEGRAM_AGENT_BOT_DIR`. Restarting the bot does not stop the tmux windows it
 manages.
 
+An idle window can be paused after the configured timeout. Its topic keeps the
+session identity and starts the same CLI when the next message arrives. If the
+resume cannot be verified, the bot keeps the saved binding and reports that the
+new message was not sent.
+
 ## Input
 
 The bot accepts:
@@ -51,6 +56,11 @@ text in Telegram callback data. Sessions without native routing support retain
 the bounded durable FIFO. Slash commands sent while Claude Code is responding
 use Claude Code's own command queue. Queue size, expiry, startup timeout, and
 maximum active turns are configurable.
+
+After a prompt reaches tmux, the bot checks the agent transcript for that input.
+An unconfirmed prompt is never replayed automatically, since the agent may
+have received it even when its transcript is delayed. Check the agent before
+resending it yourself.
 
 ## Output
 

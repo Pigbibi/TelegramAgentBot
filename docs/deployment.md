@@ -130,15 +130,21 @@ possible; otherwise unbind the affected topic and explicitly resume or create
 the intended session. This prevents a stale topic from sending input to a new
 conversation with the same project name.
 
-After the first startup on this version, `runtime.sqlite3` is the authoritative
-store for topic routes, route generations, and transcript offsets. `state.json`
-remains a compatibility mirror for window metadata and UI settings. Back up and
-restore both files together; do not edit only one while the service is running.
+`runtime.sqlite3` stores topic routes, route generations, and transcript offsets.
+`state.json` stores window metadata and UI settings. Back up and restore both
+files together; do not edit either while the service is running.
 
 If an input reaches tmux but is absent from the agent transcript after five
 minutes, AgentBot retires that uncertain record without replaying it. This
 unblocks later input while avoiding a duplicate prompt; resend the earlier
 message only if the agent did not receive it.
+
+An idle session may be paused to free VPS memory. The next topic message starts
+its agent CLI again with the saved session settings. The original topic stays
+bound if startup fails, so it can be retried without creating a new session.
+If AgentBot reports that the message was **not sent**, retry after checking the
+CLI in tmux. If it reports **submitted but unconfirmed**, check the agent
+transcript before sending the text again.
 
 Source installations may enable idle-only updates in `.env`:
 
@@ -192,6 +198,11 @@ Check the journal and confirm:
 3. Confirm the agent CLI starts normally as the service user.
 4. Confirm the selected project path is below an allowed project root.
 5. Check the service log for startup timeout or tmux socket errors.
+
+For a paused topic that fails to resume, run `telegram-agent-bot doctor --json`
+and inspect the managed tmux window. A missing window with a valid topic binding
+can be resumed by sending a new message after the CLI issue is fixed. Do not
+bind a different session to the topic by matching its display name alone.
 
 For a private socket:
 

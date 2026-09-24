@@ -1,17 +1,17 @@
 # TelegramAgentBot documentation
 
-Start with the main [README](../README.md) for installation and the first
-Telegram session. Use the guides below for configuration and optional
-components.
+Start with the [README](../README.md) for installation and your first Telegram
+session. The guides below cover everyday use, service operation, and optional
+integrations.
 
 ## User guides
 
-- [Features](features.md) — supported workflows, message types, session
-  behavior, and operator controls
+- [Features](features.md) — topics, input, output, session resume, and operator
+  controls
 - [Configuration](configuration.md) — environment variables, agent selection,
   queue limits, health alerts, and authentication
-- [Deployment](deployment.md) — Linux and macOS services, logs, upgrades, and
-  troubleshooting
+- [Deployment](deployment.md) — Linux and macOS services, upgrades, backups,
+  and troubleshooting
 
 ## Optional components
 

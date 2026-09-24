@@ -1,6 +1,9 @@
 """Tests for SessionManager pure dict operations."""
 
 import json
+import fcntl
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -12,6 +15,7 @@ from telegram_agent_bot import session as session_module
 from telegram_agent_bot.backends.base import AgentTarget
 from telegram_agent_bot.durable_state import DurableRuntimeStore
 from telegram_agent_bot.session import SessionManager
+from telegram_agent_bot.utils import atomic_write_json as real_atomic_write_json
 
 
 @pytest.fixture
@@ -369,6 +373,58 @@ class TestSendToWindow:
 
 
 class TestSessionMapWait:
+    def test_manager_and_hook_writes_preserve_both_entries(
+        self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        map_file = tmp_path / "session_map.json"
+        map_file.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(config, "session_map_file", map_file)
+        monkeypatch.setattr(config, "tmux_session_name", "telegram-agent-bot")
+        mgr.get_window_state("@8").agent_type = "codex"
+        manager_ready = threading.Event()
+        release_manager = threading.Event()
+        errors: list[BaseException] = []
+
+        def pause_manager_write(path, data):
+            manager_ready.set()
+            assert release_manager.wait(2)
+            real_atomic_write_json(path, data)
+
+        monkeypatch.setattr(session_module, "atomic_write_json", pause_manager_write)
+
+        def manager_write():
+            try:
+                mgr._save_session_map_entry("@8", "sid-8", "/tmp/repo")
+            except BaseException as exc:
+                errors.append(exc)
+
+        def hook_write():
+            try:
+                lock_path = map_file.with_suffix(".lock")
+                with lock_path.open("w") as lock_file:
+                    fcntl.flock(lock_file, fcntl.LOCK_EX)
+                    data = json.loads(map_file.read_text())
+                    data["telegram-agent-bot:@99"] = {"session_id": "sid-99"}
+                    real_atomic_write_json(map_file, data)
+                    fcntl.flock(lock_file, fcntl.LOCK_UN)
+            except BaseException as exc:
+                errors.append(exc)
+
+        first = threading.Thread(target=manager_write)
+        second = threading.Thread(target=hook_write)
+        first.start()
+        assert manager_ready.wait(2)
+        second.start()
+        time.sleep(0.05)
+        release_manager.set()
+        first.join(2)
+        second.join(2)
+        assert not first.is_alive() and not second.is_alive() and not errors
+        assert set(json.loads(map_file.read_text())) == {
+            "telegram-agent-bot:@8",
+            "telegram-agent-bot:@99",
+        }
+
     @pytest.mark.asyncio
     async def test_wait_for_session_map_entry_requires_loaded_window_state(
         self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

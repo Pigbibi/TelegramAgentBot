@@ -33,6 +33,7 @@ Key functions: create_bot(), handle_new_message().
 """
 
 import asyncio
+import copy
 import contextlib
 import io
 import json
@@ -5911,6 +5912,7 @@ async def _recover_missing_bound_window(
         return False, "missing window has no resumable session state"
 
     resume_session_id = state.session_id
+    saved_state = copy.copy(state)
     selected_path = state.cwd
     agent_type = normalize_agent_type(
         getattr(state, "agent_type", ""), config.agent_type
@@ -5937,6 +5939,15 @@ async def _recover_missing_bound_window(
     }
     persisted_window_ids = set(session_manager.window_states)
     persisted_bindings = list(session_manager.iter_thread_bindings())
+
+    # The old hook entry belongs to the missing window. Remove it before a new
+    # process can reuse the same tmux ID, so only a fresh hook can satisfy the
+    # startup wait. Do not remove it after creation: that could erase the new hook.
+    if not await session_manager.remove_session_map_entry(old_window_id):
+        return (
+            False,
+            "could not clear the previous session mapping; message was not sent",
+        )
 
     # A real host reboot starts tmux's global @N allocator from the beginning.
     # Reusing this topic's own ID is valid, while IDs reserved by other saved
@@ -6004,7 +6015,9 @@ async def _recover_missing_bound_window(
         if reused_original_id:
             # The newly created process reused the missing window's saved ID.
             # Keep that recovery source intact if resume validation fails.
-            session_manager.window_states[old_window_id] = state
+            await session_manager.remove_session_map_entry(old_window_id)
+            session_manager.window_states[old_window_id] = saved_state
+            session_manager._set_local_target_session(old_window_id, resume_session_id)
             session_manager._save_state()
             return
         await session_manager.remove_session_map_entry(created_wid)
@@ -6100,7 +6113,6 @@ async def _recover_missing_bound_window(
         if old_offsets or old_offset_sessions:
             session_manager._save_state()
 
-        await session_manager.remove_session_map_entry(old_window_id)
         session_manager.remove_window_state(old_window_id)
     forget_missing_bound_window(user_id, thread_id, old_window_id)
 

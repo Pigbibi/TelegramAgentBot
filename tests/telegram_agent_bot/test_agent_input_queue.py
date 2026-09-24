@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections import deque
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock
@@ -13,6 +14,8 @@ from telegram_agent_bot.durable_state import (
     DurableRuntimeStore,
 )
 from telegram_agent_bot.turn_admission import turn_admission
+from telegram_agent_bot.session import SessionManager, WindowState
+from telegram_agent_bot.config import config
 
 
 @pytest.fixture(autouse=True)
@@ -1430,7 +1433,7 @@ async def test_recovery_detects_active_writer_without_rebinding(monkeypatch):
     assert ok is False
     assert "still active" in message
     kill_window.assert_awaited_once_with("@9")
-    remove_map.assert_awaited_once_with("@9")
+    assert [call.args[0] for call in remove_map.await_args_list] == ["@8", "@9"]
     session_manager.remove_window_state.assert_called_once_with("@9")
     session_manager.prepare_window_launch.assert_not_called()
     session_manager.bind_thread.assert_not_called()
@@ -1572,7 +1575,7 @@ async def test_recovery_accepts_original_window_id_after_tmux_server_restart(
     session_manager.bind_thread.assert_called_once_with(
         12345, 42, "@8", window_name="Repo"
     )
-    session_manager.remove_session_map_entry.assert_not_awaited()
+    session_manager.remove_session_map_entry.assert_awaited_once_with("@8")
     session_manager.remove_window_state.assert_not_called()
     assert session_manager.user_window_offsets == {12345: {"@8": 17}}
     assert session_manager.user_window_offset_sessions == {12345: {"@8": "sid-1"}}
@@ -1621,10 +1624,140 @@ async def test_recovery_failure_after_original_id_reuse_keeps_saved_state(monkey
     assert ok is False
     assert message == "resume failed"
     kill_window.assert_awaited_once_with("@8")
-    assert session_manager.window_states["@8"] is old_state
-    session_manager.remove_session_map_entry.assert_not_awaited()
+    assert session_manager.window_states["@8"].session_id == old_state.session_id
+    assert session_manager.window_states["@8"].cwd == old_state.cwd
+    assert [
+        call.args[0]
+        for call in session_manager.remove_session_map_entry.await_args_list
+    ] == ["@8", "@8"]
     session_manager.remove_window_state.assert_not_called()
     session_manager._save_state.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_recovery_restores_original_state_after_reused_id_fails(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
+    monkeypatch.setattr(SessionManager, "_save_state", lambda self: None)
+    manager = SessionManager()
+    manager.window_states["@8"] = WindowState(
+        session_id="sid-1",
+        cwd=str(tmp_path),
+        window_name="Repo",
+        agent_type="codex",
+        hibernated_at=123.0,
+    )
+    manager.bind_thread(12345, 42, "@8")
+    manager.transcript_confirmation_baseline = AsyncMock(return_value=("sid-1", 100))
+    manager.wait_for_session_map_entry = AsyncMock(return_value=False)
+    manager.remove_session_map_entry = AsyncMock()
+    monkeypatch.setattr(bot_module, "session_manager", manager)
+    monkeypatch.setattr(
+        bot_module,
+        "_create_agent_local_window",
+        AsyncMock(return_value=(True, "created", "Repo", "@8", None)),
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_wait_for_recovered_agent_process",
+        AsyncMock(return_value=(True, "")),
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_recovered_agent_process_status",
+        AsyncMock(return_value=(False, "resume crashed")),
+    )
+    monkeypatch.setattr(
+        bot_module.tmux_manager, "kill_window", AsyncMock(return_value=True)
+    )
+
+    ok, message = await bot_module._recover_missing_bound_window(
+        bot=MagicMock(), user_id=12345, thread_id=42, old_window_id="@8", text="hello"
+    )
+
+    assert (ok, message) == (False, "resume crashed")
+    assert manager.window_states["@8"].session_id == "sid-1"
+    assert manager.window_states["@8"].hibernated_at == 123.0
+    assert manager.get_target_for_thread(12345, 42).session_id == "sid-1"
+
+
+@pytest.mark.asyncio
+async def test_recovery_restores_state_changed_while_waiting_for_process(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
+    monkeypatch.setattr(SessionManager, "_save_state", lambda self: None)
+    manager = SessionManager()
+    manager.window_states["@8"] = WindowState(
+        session_id="sid-1",
+        cwd=str(tmp_path),
+        window_name="Repo",
+        agent_type="codex",
+        hibernated_at=123.0,
+    )
+    manager.bind_thread(12345, 42, "@8")
+    manager.transcript_confirmation_baseline = AsyncMock(return_value=("sid-1", 100))
+    manager.remove_session_map_entry = AsyncMock()
+    monkeypatch.setattr(bot_module, "session_manager", manager)
+    monkeypatch.setattr(
+        bot_module,
+        "_create_agent_local_window",
+        AsyncMock(return_value=(True, "created", "Repo", "@8", None)),
+    )
+
+    async def process_exits_after_monitor_update(_window_id):
+        manager.window_states["@8"].session_id = "new-hook-sid"
+        manager._set_local_target_session("@8", "new-hook-sid")
+        return False, "resume exited"
+
+    monkeypatch.setattr(
+        bot_module,
+        "_wait_for_recovered_agent_process",
+        process_exits_after_monitor_update,
+    )
+    monkeypatch.setattr(
+        bot_module.tmux_manager, "kill_window", AsyncMock(return_value=True)
+    )
+
+    ok, message = await bot_module._recover_missing_bound_window(
+        bot=MagicMock(), user_id=12345, thread_id=42, old_window_id="@8", text="hello"
+    )
+
+    assert (ok, message) == (False, "resume exited")
+    assert manager.window_states["@8"].session_id == "sid-1"
+    assert manager.window_states["@8"].hibernated_at == 123.0
+    assert manager.get_target_for_thread(12345, 42).session_id == "sid-1"
+
+
+@pytest.mark.asyncio
+async def test_recovery_removes_old_hook_map_before_creating_window(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
+    monkeypatch.setattr(SessionManager, "_save_state", lambda self: None)
+    map_file = tmp_path / "session_map.json"
+    map_file.write_text(
+        '{"telegram-agent-bot:@8":{"session_id":"sid-1","cwd":"/tmp/repo"}}'
+    )
+    monkeypatch.setattr(config, "session_map_file", map_file)
+    monkeypatch.setattr(config, "tmux_session_name", "telegram-agent-bot")
+    manager = SessionManager()
+    manager.window_states["@8"] = WindowState(
+        session_id="sid-1", cwd="/tmp/repo", window_name="Repo", agent_type="cursor"
+    )
+    manager.bind_thread(12345, 42, "@8")
+    monkeypatch.setattr(bot_module, "session_manager", manager)
+
+    async def create_window(**_kwargs):
+        assert "telegram-agent-bot:@8" not in json.loads(map_file.read_text())
+        return False, "synthetic stop", "Repo", "", None
+
+    monkeypatch.setattr(bot_module, "_create_agent_local_window", create_window)
+    ok, message = await bot_module._recover_missing_bound_window(
+        bot=MagicMock(), user_id=12345, thread_id=42, old_window_id="@8", text="hello"
+    )
+    assert (ok, message) == (False, "synthetic stop")
 
 
 @pytest.mark.parametrize("agent_type", ["codex", "claude", "claudeofficial", "cursor"])

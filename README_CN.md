@@ -2,20 +2,22 @@
 
 [English](README.md)
 
-通过 Telegram 控制正在运行的 Codex CLI、Claude Code API 模式、Claude Code 官方订阅模式和 Cursor Agent 会话。每个话题对应一个 tmux 窗口，远程消息、回合中的原生输入和本机终端共享同一会话。
+TelegramAgentBot 将 Telegram 群组话题连接到 tmux 中运行的智能体会话。你可以在 Telegram 里选择项目、新建或恢复会话、发送消息和文件、回答交互问题，并查看智能体的公开输出。同一个会话也能在服务器终端中继续使用。
 
-机器人转发公开回复、进度和交互提示。重启机器人后话题绑定可以恢复；底层 tmux 会话独立于机器人进程存在。
+支持 **Codex**、**Claude Code**（第三方 API 或官方登录）和 **Cursor Agent**。只要服务用户安装并认证了相应 CLI，同一部署就能提供这些选项。
 
 ## 运行要求
 
-- Python 3.12+、[uv](https://docs.astral.sh/uv/) 和 tmux。
-- 服务用户已安装并认证 Codex CLI、Claude Code 或 Cursor Agent CLI。
-- 已开启 threaded mode 的 Telegram bot，以及受限的 `ALLOWED_USERS` 列表。
-- 配套服务脚本支持 Linux/systemd 和 macOS/launchd。
+- Python 3.12+、[uv](https://docs.astral.sh/uv/) 和 tmux
+- 至少一个已安装并由服务用户完成认证的智能体 CLI
+- 已开启 Topics 的 Telegram 超级群组及其中的 Bot
+- 用于 `ALLOWED_USERS` 的 Telegram 数字用户 ID
 
-## 快速开始
+仓库提供 Linux systemd 和 macOS launchd 服务配置。Bot 能操作真实终端，只应允许有权使用这些项目和 CLI 凭据的人访问。
 
-Linux 或 VPS：
+## 安装
+
+Linux：
 
 ```bash
 git clone https://github.com/Pigbibi/TelegramAgentBot.git \
@@ -24,91 +26,78 @@ cd ~/.telegram-agent-bot/app/TelegramAgentBot
 ./scripts/bootstrap-linux.sh
 ```
 
-macOS 克隆后运行 `./scripts/bootstrap-macos.sh`。安装脚本配置依赖、hook 和服务定义，并保留已有配置文件。
+macOS 克隆仓库后运行 `./scripts/bootstrap-macos.sh`。安装脚本会安装依赖和会话 hook，并创建服务定义；已有配置文件会保留。
 
-参考[配置模板](.env.example)，编辑 `~/.telegram-agent-bot/.env`：
+参考 [`.env.example`](.env.example) 编辑 `~/.telegram-agent-bot/.env`，至少设置：
 
-| 配置 | 用途 |
+| 变量 | 值 |
 | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | BotFather 提供的机器人凭据 |
-| `ALLOWED_USERS` | 允许操作的 Telegram 数字用户 ID |
-| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex`、`claude`、`claudeofficial` 或 `cursor` |
-| `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | 机器人展示的项目目录 |
-| `TELEGRAM_AGENT_BOT_TMUX_SOCKET_NAME` | 独立 tmux socket 名称 |
+| `TELEGRAM_BOT_TOKEN` | BotFather 提供的 Token |
+| `ALLOWED_USERS` | 可信操作人的数字用户 ID，多个用逗号分隔 |
+| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | 默认 CLI：`codex`、`claude`、`claudeofficial` 或 `cursor` |
+| `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | 项目选择器显示的目录 |
 
-用同一系统用户完成 agent CLI 认证，再启动 Linux 服务：
+启动 Linux 服务：
 
 ```bash
 systemctl --user daemon-reload
 systemctl --user enable --now io.github.telegramagentbot.service
 ```
 
-macOS 启动、Linux 退出登录后常驻、日志和升级方法见[部署说明](docs/deployment.md)。服务源码应与 agent 任务会管理的目录分开存放。
+macOS 启动、Linux 退出登录后常驻、升级和日志见[部署说明](docs/deployment.md)。服务源码应放在智能体不会编辑的目录中。
 
-Claude 有两个明确隔离的模式：
+## 选择智能体
 
-- `claude` 会加载仅限文件所有者读取的 `claude.env`，可连接 DeepSeek 兼容端点。
-- `claudeofficial` 使用同一个 `claude` CLI，但不会加载该环境文件，使用 Claude
-  Code 自己的订阅/API 登录和默认模型。
+| 智能体 | 登录与配置 | 运行中输入 |
+| --- | --- | --- |
+| Codex | 认证 `codex` CLI | 可引导当前回合，或使用 CLI 原生队列安排下一回合 |
+| Claude Code API（`claude`） | 在仅文件所有者可读的 `claude.env` 中配置兼容服务 | 可引导当前回合；后续输入保存在 AgentBot 持久队列中 |
+| Claude Code 官方模式（`claudeofficial`） | 使用 `claude` CLI 自身的登录，不加载 `claude.env` | 可引导当前回合；后续输入保存在 AgentBot 持久队列中 |
+| Cursor Agent（`cursor`） | 用服务用户运行 `agent login` | 可引导当前回合，或使用 CLI 原生队列安排下一回合 |
 
-创建 Telegram 话题时可以逐个选择模式。界面只展示当前 CLI 支持的模型和操作：
-Codex、Cursor 支持当前回合引导及 Tab 排队；Claude 的普通下一轮输入由 AgentBot
-持久队列承接。
+创建话题会话时，可以选择智能体及该 CLI 支持的模型设置。Cursor 凭据保存在 Cursor CLI 中；Codex 和 Claude Code 可以使用 AgentBot 的账户快照。命令、模型、权限和项目根目录见[配置说明](docs/configuration.md)。
 
-## 使用会话
+## 使用话题
 
-1. 在 Telegram 话题内发送消息。
-2. 选择项目，以及已有会话或新建会话。
-3. 选择 agent，以及该运行时实际支持的模型和设置。
-4. 在同一话题中继续发送文字、语音、图片或文件。
+1. 在 Telegram 超级群组中发送消息，然后选择项目及新会话或已有会话。
+2. 选择智能体和可用设置。
+3. 在同一话题中继续发送文字、语音、图片或文件。首条消息中的附件会保留到会话准备好再发送。
 
-| 命令 | 操作 |
+常用命令：
+
+| 命令 | 用途 |
 | --- | --- |
 | `/steer <内容>` | 引导当前回合 |
 | `/queue <内容>` | 排队发送后续输入 |
-| `/interrupt [内容]` | 中断，可附带替换指令 |
-| `/esc` | 发送 Escape 并丢弃未发送输入 |
+| `/interrupt [内容]` | 中断，可附带替换输入 |
 | `/history` | 查看话题历史 |
-| `/health` | 查看主机和机器人健康状态 |
+| `/health` | 查看 Bot 和主机健康状态 |
 | `/unbind` | 解除话题绑定，保留终端 |
 | `/kill` | 停止绑定窗口并解除绑定 |
 
-每个 bot 状态目录使用一个 Telegram 聊天。不同聊天中的话题 ID 可能重复，机器人会拒绝冲突的跨聊天绑定。完整命令、认证与队列行为见[功能说明](docs/features.md)。
+Bot 重启后会保留话题绑定和待发送输入。空闲 tmux 窗口可能暂停，下一条消息到来时再恢复。如果输入已送到 CLI，却没有得到 transcript 确认，AgentBot **不会自动重发**：先检查智能体会话，确认它没有收到后再手动发送。完整命令和消息行为见[功能说明](docs/features.md)。
 
-### 在 Telegram 群组中共享
+## 安全运行
 
-一个部署可以服务多个操作人。将 Bot 加入已开启 Topics 的 Telegram 超级群，
-并把每位操作人的 Telegram 数字用户 ID 加入 `ALLOWED_USERS`。白名单用户在同一
-群组话题中共享会话绑定和持久输入队列；私聊仍按用户隔离。该部署使用同一个
-服务用户、文件权限、CLI 登录凭据和项目目录，因此只应加入可信操作人。若希望
-使用独立凭据或项目目录，应使用独立 Bot Token 和独立部署（通常可从仓库 fork
-后部署）。
+- 仅让服务用户读取 `.env`、账户文件和 `$TELEGRAM_AGENT_BOT_DIR`。
+- 操作人需要独立项目目录或 CLI 凭据时，使用不同的 Bot Token 和独立部署。
+- 通过 SSH 或私有网络访问 tmux 与可选后端 socket。
+- 升级或重启前检查正在运行的任务和待发送输入。
 
-## 运维与安全
-
-机器人可以操作真实终端。请限制允许用户，保护 `.env` 和状态目录，并检查 agent 权限设置。tmux 和可选后端 socket 应通过 SSH 或私有网络访问。
-
-无需重启会话即可检查路由：
+无需改动会话即可检查路由：
 
 ```bash
 telegram-agent-bot doctor --json
 ```
 
-升级或重启前检查活动任务和待发送输入。健康检查通过不等于 agent 任务已经完成。
+`doctor` 通过只说明路由状态正常，不代表智能体任务已完成。日志和恢复步骤见[部署说明](docs/deployment.md#troubleshooting)。
 
-## 文档
+## 文档与开发
 
-- [配置](docs/configuration.md) · [部署与升级](docs/deployment.md)
-- [功能与命令](docs/features.md) · [文档索引](docs/README.md)
+- [文档索引](docs/README.md) · [功能](docs/features.md) · [配置](docs/configuration.md) · [部署](docs/deployment.md)
 - [后端插件](docs/agent_backend_plugins.md) · [Socket 后端](plugins/socket_backend/README.md)
-- [GitHub Issue 桥接](docs/github_codex_bridge.md) · [VPS 清理](docs/vps_cleanup.md)
+- [GitHub Issue 桥接](docs/github_codex_bridge.md) · [VPS 清理定时器](docs/vps_cleanup.md)
 
-开发时先运行 `uv sync --dev`，再执行[贡献指南](CONTRIBUTING.md)中的检查。内置字体保留 `src/telegram_agent_bot/fonts/` 下的各自许可证。
+开发时运行 `uv sync --extra dev`，再阅读[贡献指南](CONTRIBUTING.md)。使用帮助和漏洞报告见[支持](SUPPORT.md)及[安全说明](SECURITY.md)。
 
-## 支持与贡献
-
-[问题与支持](SUPPORT.md) · [贡献指南](CONTRIBUTING.md) · [安全问题](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md)
-
-## 许可证
-
-[MIT](LICENSE)。
+项目使用 [MIT 许可证](LICENSE)。内置字体保留 `src/telegram_agent_bot/fonts/` 中各自的许可证。
