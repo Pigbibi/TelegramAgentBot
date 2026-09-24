@@ -262,6 +262,7 @@ from .terminal_parser import (
     extract_auth_error_message,
     extract_bash_output,
     extract_interactive_content,
+    is_agent_cli_startup_error,
     is_codex_input_ready,
     is_interactive_ui,
     parse_status_update,
@@ -3350,6 +3351,20 @@ async def _send_native_agent_input(
         return True, f"Guidance sent to the current {display_name} turn (Enter)."
 
 
+def _agent_cli_startup_failure(capture: Any) -> str | None:
+    """Return a safe notice when a local shell shows a rejected CLI launch."""
+    if (
+        capture is not None
+        and is_shell_pane_command(getattr(capture, "pane_command", ""))
+        and is_agent_cli_startup_error(getattr(capture, "text", "") or "")
+    ):
+        return (
+            "The agent CLI failed to start. This message was not sent; fix the "
+            "launch command and resend it."
+        )
+    return None
+
+
 async def _send_or_queue_agent_input(
     bot: Bot,
     user_id: int,
@@ -3406,10 +3421,13 @@ async def _send_or_queue_agent_input(
         except BaseException:
             _ensure_agent_input_drain_task(bot, key)
             raise
+        startup_failure = _agent_cli_startup_failure(capture)
         if capture is None:
             result = False, "No session bound", False
         elif capture.missing:
             result = False, "Window not found (may have been closed)", False
+        elif startup_failure:
+            result = False, startup_failure, False
         else:
             pane_text = capture.text or ""
             auth_error = extract_auth_error_message(pane_text)
@@ -3904,6 +3922,16 @@ async def _drain_agent_input_queue(
                 queue.clear()
                 _clear_persisted_agent_input_target(key)
                 turn_admission.forget(window_id)
+                return
+
+            startup_failure = _agent_cli_startup_failure(capture)
+            if startup_failure:
+                await _notify_queued_input_failure(
+                    bot, user_id, thread_id, startup_failure
+                )
+                queue.clear()
+                _clear_persisted_agent_input_target(key)
+                turn_admission.set_pending(window_id, pending=False)
                 return
 
             pane_text = capture.text or ""

@@ -27,6 +27,7 @@ class CaptureResult:
     target: AgentTarget
     text: str | None
     missing: bool = False
+    pane_command: str = ""
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,7 @@ async def capture_agent_output(
     if target is None:
         return None
 
+    pane_command = ""
     if target.backend_id == "local":
         local_window_id = target.window_id or window_id
         if not local_window_id:
@@ -169,6 +171,7 @@ async def capture_agent_output(
         window = await tmux_manager.find_window_by_id(local_window_id)
         if not window:
             return CaptureResult(target=target, text=None, missing=True)
+        pane_command = (window.pane_current_command or "").strip()
         target = LocalTmuxBackend.target_from_window(
             window.window_id,
             session_id=target.session_id,
@@ -176,7 +179,7 @@ async def capture_agent_output(
 
     backend = backend_for_target(target)
     text = await backend.capture(target, with_ansi=with_ansi)
-    return CaptureResult(target=target, text=text)
+    return CaptureResult(target=target, text=text, pane_command=pane_command)
 
 
 async def send_agent_control(

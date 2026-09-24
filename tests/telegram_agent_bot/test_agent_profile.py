@@ -201,9 +201,10 @@ def test_ask_mode_removes_provider_bypass_flags_from_configured_commands():
         patch.object(
             config,
             "claude_command",
-            "/usr/bin/claude --dangerously-skip-permissions",
+            "/usr/bin/claude --dangerously-skip-permissions "
+            "--permission-mode bypassPermissions",
         ),
-        patch.object(config, "cursor_command", "/usr/bin/agent -f"),
+        patch.object(config, "cursor_command", "/usr/bin/agent --yolo"),
     ):
         claude = _agent_command_for_launch(
             AgentProfile(agent_type="claude", permission_mode="ask")
@@ -214,6 +215,33 @@ def test_ask_mode_removes_provider_bypass_flags_from_configured_commands():
     assert "--dangerously-skip-permissions" not in claude
     assert claude.endswith("--permission-mode default")
     assert cursor == "/usr/bin/agent"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/usr/bin/claude --permission-mode bypassPermissions",
+        "/usr/bin/claude --permission-mode=bypassPermissions",
+    ],
+)
+def test_claude_ask_mode_replaces_configured_permission_mode(command):
+    with patch.object(config, "claude_command", command):
+        launch = _agent_command_for_launch(
+            AgentProfile(agent_type="claude", permission_mode="ask")
+        )
+
+    assert launch.count("--permission-mode") == 1
+    assert launch.endswith("--permission-mode default")
+
+
+@pytest.mark.parametrize("flag", ["-f", "--force", "--yolo"])
+def test_cursor_ask_mode_removes_all_full_access_aliases(flag):
+    with patch.object(config, "cursor_command", f"/usr/bin/agent {flag}"):
+        launch = _agent_command_for_launch(
+            AgentProfile(agent_type="cursor", permission_mode="ask")
+        )
+
+    assert launch == "/usr/bin/agent"
 
 
 def test_full_permissions_are_visible_and_explicit_in_profile_picker():

@@ -495,6 +495,43 @@ async def test_send_or_queue_agent_input_uses_bot_side_queue_when_busy(
 
 
 @pytest.mark.asyncio
+async def test_send_or_queue_agent_input_rejects_cli_startup_error(monkeypatch):
+    capture = SimpleNamespace(
+        text=(
+            "error: the argument '--sandbox' cannot be used multiple times\n"
+            "Usage: codex [OPTIONS] [PROMPT]\nubuntu@host:~/Projects$\n"
+        ),
+        missing=False,
+        pane_command="bash",
+    )
+    send_message = AsyncMock()
+    ensured: list[tuple[int, int, str]] = []
+    key = (12345, 42, "@1")
+
+    monkeypatch.setattr(
+        bot_module, "capture_agent_output", AsyncMock(return_value=capture)
+    )
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+    monkeypatch.setattr(
+        bot_module,
+        "_ensure_agent_input_drain_task",
+        lambda _bot, item: ensured.append(item),
+    )
+
+    ok, message, queued = await bot_module._send_or_queue_agent_input(
+        MagicMock(), 12345, 42, "@1", "pending prompt"
+    )
+
+    assert not ok
+    assert not queued
+    assert "failed to start" in message.lower()
+    assert key not in bot_module._agent_input_queues
+    assert bot_module._runtime_store.list_pending_agent_inputs() == []
+    assert ensured == []
+    send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_send_or_queue_agent_input_interrupts_and_queues_during_interactive_ui(
     monkeypatch,
 ):
@@ -936,6 +973,35 @@ async def test_drain_agent_input_queue_waits_until_ready(monkeypatch):
         transcript_after_offset=None,
     )
     assert key not in bot_module._agent_input_queues
+
+
+@pytest.mark.asyncio
+async def test_drain_agent_input_queue_drops_cli_startup_error(monkeypatch):
+    key = (12345, 42, "@1")
+    bot_module._agent_input_queues[key] = deque(
+        [bot_module._QueuedAgentInput(text="queued prompt")]
+    )
+    capture = SimpleNamespace(
+        text=(
+            "error: unknown option\nUsage: agent [OPTIONS]\nubuntu@host:~/Projects$\n"
+        ),
+        missing=False,
+        pane_command="bash",
+    )
+    notify = AsyncMock()
+    send_message = AsyncMock()
+    monkeypatch.setattr(
+        bot_module, "capture_agent_output", AsyncMock(return_value=capture)
+    )
+    monkeypatch.setattr(bot_module, "_notify_queued_input_failure", notify)
+    monkeypatch.setattr(bot_module, "_send_message_to_agent", send_message)
+
+    await bot_module._drain_agent_input_queue(MagicMock(), key)
+
+    assert key not in bot_module._agent_input_queues
+    notify.assert_awaited_once()
+    assert "failed to start" in notify.await_args.args[3].lower()
+    send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
