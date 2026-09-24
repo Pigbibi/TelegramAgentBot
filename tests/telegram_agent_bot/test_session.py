@@ -516,6 +516,49 @@ class TestTranscriptConfirmation:
             after_offset=baseline,
         )
 
+    def test_cursor_user_record_started_before_confirmation_cursor(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = tmp_path / "cursor-session.jsonl"
+        event = json.dumps(
+            {
+                "role": "user",
+                "message": {
+                    "content": [{"type": "text", "text": "continue this task"}]
+                },
+            }
+        )
+        prefix, suffix = event.split("continue this task")
+        transcript.write_text(prefix, encoding="utf-8")
+        baseline = transcript.stat().st_size
+        with transcript.open("a", encoding="utf-8") as output:
+            output.write("continue this task" + suffix + "\n")
+
+        assert SessionManager._transcript_tail_contains_user_text(
+            transcript, "continue this task", after_offset=baseline
+        )
+
+    def test_cursor_user_text_already_written_before_cursor_is_not_confirmed(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = tmp_path / "cursor-session.jsonl"
+        event = json.dumps(
+            {
+                "role": "user",
+                "message": {
+                    "content": [{"type": "text", "text": "repeat this prompt"}]
+                },
+            }
+        )
+        transcript.write_text(event[:-2], encoding="utf-8")
+        baseline = transcript.stat().st_size
+        with transcript.open("a", encoding="utf-8") as output:
+            output.write(event[-2:] + "\n")
+
+        assert not SessionManager._transcript_tail_contains_user_text(
+            transcript, "repeat this prompt", after_offset=baseline
+        )
+
     @pytest.mark.asyncio
     async def test_wait_for_transcript_rejects_rebound_session(
         self, mgr: SessionManager, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

@@ -267,7 +267,7 @@ async def update_status_message(
     )
 
     # Normal status line check. If the queue is busy, still allow active timer
-    # updates so the topic does not look idle.
+    # updates and clear stale timers when the agent has become idle.
     if skip_status:
         if is_active_working_status(status_text):
             await enqueue_status_update(
@@ -276,6 +276,10 @@ async def update_status_message(
                 window_id,
                 status_text,
                 thread_id=thread_id,
+            )
+        elif pane_is_idle:
+            await enqueue_status_update(
+                bot, user_id, window_id, None, thread_id=thread_id
             )
         return
 

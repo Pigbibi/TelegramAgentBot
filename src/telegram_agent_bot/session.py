@@ -1237,19 +1237,32 @@ class SessionManager:
                     return False
                 start = max(0, size - max_bytes)
                 if after_offset is not None:
-                    start = max(start, after_offset)
+                    # Cursor may have started a JSONL user record while the
+                    # pre-submit size was captured. Include that partial line,
+                    # but never accept matching text written before the cursor.
+                    start = max(start, after_offset - 8192)
                 f.seek(start)
                 raw = f.read()
         except OSError:
             return False
 
-        try:
-            tail = raw.decode("utf-8", errors="replace")
-        except UnicodeDecodeError:
-            return False
-
-        for line in tail.splitlines():
-            line = line.strip()
+        line_start = start
+        for encoded_line in raw.splitlines(keepends=True):
+            line_end = line_start + len(encoded_line)
+            if after_offset is not None and line_end <= after_offset:
+                line_start = line_end
+                continue
+            if after_offset is not None and line_start < after_offset:
+                suffix = encoded_line[after_offset - line_start :]
+                encoded_text = (
+                    json.dumps(expected_text, ensure_ascii=False)[1:-1].encode(),
+                    json.dumps(expected_text, ensure_ascii=True)[1:-1].encode(),
+                )
+                if not any(value in suffix for value in encoded_text):
+                    line_start = line_end
+                    continue
+            line_start = line_end
+            line = encoded_line.decode("utf-8", errors="replace").strip()
             if not line:
                 continue
             try:

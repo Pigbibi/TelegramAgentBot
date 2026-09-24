@@ -25,6 +25,18 @@ def test_synthetic_working_clears_on_empty_idle_prompt_before_first_output():
     assert (1, 42, "@5") not in working_status._synthetic_working_starts
 
 
+def test_synthetic_working_clears_on_cursor_idle_prompt():
+    pane = (
+        "Agent finished the task.\n"
+        "→ Plan, search, build anything\n"
+        "    Run Everything (shift+tab)\n"
+    )
+    working_status._synthetic_working_starts[(1, 42, "@5")] = 100.0
+
+    assert working_status.status_text_for_pane(1, 42, "@5", pane, now=110.0) is None
+    assert (1, 42, "@5") not in working_status._synthetic_working_starts
+
+
 def test_synthetic_working_preserves_prompt_text_before_first_output():
     pane = (
         "› Find and fix a bug in @filename\n"

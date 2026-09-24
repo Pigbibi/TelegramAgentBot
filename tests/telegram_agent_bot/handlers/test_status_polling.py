@@ -359,6 +359,47 @@ class TestStatusPollerSettingsDetection:
             )
 
     @pytest.mark.asyncio
+    async def test_idle_cursor_clears_working_status_when_queue_is_busy(
+        self, mock_bot: AsyncMock
+    ):
+        window_id = "@5"
+        pane = (
+            "Agent finished the task.\n"
+            "→ Plan, search, build anything\n"
+            "    Run Everything (shift+tab)\n"
+        )
+        status_polling._synthetic_working_starts[(1, 42, window_id)] = 100.0
+
+        with (
+            patch(
+                "telegram_agent_bot.handlers.status_polling.capture_agent_output",
+                new_callable=AsyncMock,
+            ) as mock_capture,
+            patch(
+                "telegram_agent_bot.handlers.status_polling.enqueue_status_update",
+                new_callable=AsyncMock,
+            ) as mock_enqueue_status,
+            patch(
+                "telegram_agent_bot.handlers.status_polling.time.monotonic",
+                return_value=110.0,
+            ),
+        ):
+            mock_capture.return_value = capture_result(window_id, pane)
+
+            await update_status_message(
+                mock_bot,
+                user_id=1,
+                window_id=window_id,
+                thread_id=42,
+                skip_status=True,
+            )
+
+            mock_enqueue_status.assert_awaited_once_with(
+                mock_bot, 1, window_id, None, thread_id=42
+            )
+            assert (1, 42, window_id) not in status_polling._synthetic_working_starts
+
+    @pytest.mark.asyncio
     async def test_mark_window_working_sends_immediate_synthetic_status(
         self, mock_bot: AsyncMock, monkeypatch: pytest.MonkeyPatch
     ):
