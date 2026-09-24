@@ -177,6 +177,25 @@ def test_codex_ask_mode_overrides_vps_full_access_config():
     assert launch.endswith("--sandbox workspace-write --ask-for-approval on-request")
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/usr/bin/codex --search -s danger-full-access -a never",
+        "/usr/bin/codex --search --sandbox=danger-full-access --ask-for-approval=never",
+    ],
+)
+def test_codex_ask_mode_replaces_configured_sandbox_and_approval_options(command):
+    profile = AgentProfile(agent_type="codex", permission_mode="ask")
+    with patch.object(config, "codex_cli_command", command):
+        launch = _agent_command_for_launch(profile)
+
+    assert launch == (
+        '/usr/bin/codex --search -c model_reasoning_effort="medium" '
+        "--sandbox workspace-write "
+        "--ask-for-approval on-request"
+    )
+
+
 def test_ask_mode_removes_provider_bypass_flags_from_configured_commands():
     with (
         patch.object(

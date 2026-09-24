@@ -177,7 +177,7 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
             [
                 (
                     "export CODEX_HOME=/tmp/telegram-agent-bot-account-home; "
-                    "/usr/local/bin/codex --search -s danger-full-access --sandbox "
+                    "/usr/local/bin/codex --search --sandbox "
                     "workspace-write --ask-for-approval on-request resume sid-123",
                     True,
                 )
@@ -224,7 +224,7 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
             pane.commands,
             [
                 (
-                    "/usr/local/bin/codex --search -s danger-full-access --sandbox "
+                    "/usr/local/bin/codex --search --sandbox "
                     "workspace-write --ask-for-approval on-request resume "
                     "019d52c8-d90d-7f72-9062-45cf0f71f97e",
                     True,
