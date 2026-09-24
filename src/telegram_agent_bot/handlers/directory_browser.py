@@ -244,17 +244,20 @@ def build_profile_picker(
                 )
             ]
         )
-    buttons.append(
-        [
-            InlineKeyboardButton(
-                f"🔐 Permissions: {profile.permission_label}",
-                callback_data=(
-                    f"{CB_PROFILE_PERMISSION}"
-                    f"{'ask' if profile.permission_mode == 'full' else 'full'}"
-                ),
-            )
-        ]
-    )
+    if not (
+        profile.agent_type == AGENT_CURSOR and config.cursor_permission_mode == "full"
+    ):
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"🔐 Permissions: {profile.permission_label}",
+                    callback_data=(
+                        f"{CB_PROFILE_PERMISSION}"
+                        f"{'ask' if profile.permission_mode == 'full' else 'full'}"
+                    ),
+                )
+            ]
+        )
     buttons.append(
         [InlineKeyboardButton("✅ Create session", callback_data=CB_PROFILE_CONFIRM)]
     )

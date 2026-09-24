@@ -83,6 +83,11 @@ def _parse_project_roots(raw: str, fallback: Path) -> list[ProjectRoot]:
     return roots or [ProjectRoot(label="Default", path=fallback)]
 
 
+def _permission_mode_env(name: str) -> str:
+    value = os.getenv(name, "ask").strip().lower()
+    return value if value in {"ask", "full"} else "ask"
+
+
 class Config:
     """Application configuration loaded from environment variables."""
 
@@ -194,6 +199,12 @@ class Config:
             self.codex_model = ""
         self.claude_command = os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_COMMAND", "claude")
         self.cursor_command = os.getenv("TELEGRAM_AGENT_BOT_CURSOR_COMMAND", "agent")
+        self.claude_default_permission_mode = _permission_mode_env(
+            "TELEGRAM_AGENT_BOT_CLAUDE_DEFAULT_PERMISSION_MODE"
+        )
+        self.cursor_permission_mode = _permission_mode_env(
+            "TELEGRAM_AGENT_BOT_CURSOR_PERMISSION_MODE"
+        )
         self.claude_model = os.getenv(
             "TELEGRAM_AGENT_BOT_CLAUDE_MODEL", "deepseek-v4-flash"
         ).strip()

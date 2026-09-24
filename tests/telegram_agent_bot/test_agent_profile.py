@@ -10,7 +10,7 @@ from telegram_agent_bot.agent_profile import (
     AgentProfile,
     agent_capabilities,
 )
-from telegram_agent_bot.config import config
+from telegram_agent_bot.config import _permission_mode_env, config
 from telegram_agent_bot.handlers.directory_browser import (
     build_agent_picker,
     build_profile_picker,
@@ -204,6 +204,53 @@ def test_full_permissions_are_visible_and_explicit_in_profile_picker():
     assert "Full access skips agent approval prompts" in text
     assert "VPS account limits still apply" in text
     assert keyboard.inline_keyboard[-3][0].text == "🔐 Permissions: Full access"
+
+
+@pytest.mark.parametrize("agent_type", [AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL])
+def test_claude_permission_default_is_full_but_ask_remains_selectable(agent_type):
+    from telegram_agent_bot.bot import _profile_from_context
+    from telegram_agent_bot.handlers.directory_browser import PROFILE_AGENT_KEY
+
+    with patch.object(config, "claude_default_permission_mode", "full"):
+        profile = _profile_from_context({PROFILE_AGENT_KEY: agent_type})
+        text, keyboard = build_profile_picker(profile, [])
+
+    assert profile.permission_mode == "full"
+    assert "Permissions: `Full access`" in text
+    assert any(
+        button.text == "🔐 Permissions: Full access"
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
+    assert "--dangerously-skip-permissions" in _agent_command_for_launch(profile)
+
+
+def test_cursor_server_full_mode_cannot_show_ask_first():
+    from telegram_agent_bot.bot import _profile_from_context
+    from telegram_agent_bot.handlers.directory_browser import (
+        PROFILE_AGENT_KEY,
+        PROFILE_PERMISSION_MODE_KEY,
+    )
+
+    with patch.object(config, "cursor_permission_mode", "full"):
+        profile = _profile_from_context(
+            {PROFILE_AGENT_KEY: AGENT_CURSOR, PROFILE_PERMISSION_MODE_KEY: "ask"}
+        )
+        text, keyboard = build_profile_picker(profile, [])
+
+    assert profile.permission_mode == "full"
+    assert "Permissions: `Full access`" in text
+    assert all(
+        "Permissions:" not in button.text
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
+    assert _agent_command_for_launch(profile).endswith("--force")
+
+
+def test_invalid_permission_env_value_keeps_ask_default():
+    with patch.dict("os.environ", {"PERMISSION_MODE_TEST": "unexpected"}):
+        assert _permission_mode_env("PERMISSION_MODE_TEST") == "ask"
 
 
 def test_codex_profile_uses_model_supported_reasoning_efforts():
