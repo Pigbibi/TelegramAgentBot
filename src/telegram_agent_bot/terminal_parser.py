@@ -282,6 +282,11 @@ STATUS_SPINNERS = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
 _PROGRESS_BULLETS = ("•", "◦")
 _PROMPT_PREFIXES = ("›", "❯")
 _CURSOR_IDLE_PROMPT = "→ Plan, search, build anything"
+_CURSOR_FOLLOWUP_PROMPT_RE = re.compile(r"^→ .+\bfollow-up$", re.IGNORECASE)
+_CURSOR_BUSY_PROMPT_RE = re.compile(
+    r"^→ .*\b(?:esc|escape) to interrupt\b.*$",
+    re.IGNORECASE,
+)
 _MAX_PROGRESS_LINES = 8
 _MAX_PROGRESS_CHARS = 1000
 _COMPLETION_STATUS_RE = re.compile(
@@ -349,7 +354,11 @@ def is_codex_input_ready(pane_text: str) -> bool:
         return False
 
     tail = [line.strip() for line in pane_text.splitlines()[-12:]]
-    return _CURSOR_IDLE_PROMPT in tail
+    if any(_CURSOR_BUSY_PROMPT_RE.fullmatch(line) for line in tail):
+        return False
+    return _CURSOR_IDLE_PROMPT in tail or any(
+        _CURSOR_FOLLOWUP_PROMPT_RE.fullmatch(line) for line in tail
+    )
 
 
 def _is_prompt_line(stripped: str) -> bool:

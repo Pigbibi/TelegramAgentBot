@@ -204,6 +204,20 @@ class TestParseStatusUpdate:
 
         assert is_codex_input_ready(pane)
 
+    def test_cursor_resumed_chat_followup_prompt_is_input_ready(self):
+        pane = "Previous answer rendered\n→ Ask a follow-up\n  Auto · ~/Projects\n"
+
+        assert is_codex_input_ready(pane)
+
+    def test_cursor_working_status_overrides_followup_prompt(self):
+        pane = (
+            "→ Working for 3m 08s (Esc to interrupt, ? for help)\n"
+            "→ Ask a follow-up\n"
+            "  Auto · ~/Projects\n"
+        )
+
+        assert not is_codex_input_ready(pane)
+
 
 class TestCodexInterruptionDetection:
     def test_detects_interruption_in_current_turn(self):
