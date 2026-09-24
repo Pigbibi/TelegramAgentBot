@@ -14,6 +14,112 @@ from telegram_agent_bot.handlers.delivery_errors import PermanentDeliveryError
 from telegram_agent_bot.session_monitor import NewMessage, SessionInfo, SessionMonitor
 
 
+def test_cursor_transcript_matches_only_the_active_workspace(tmp_path):
+    root = tmp_path / ".cursor" / "projects"
+    session_id = "11111111-1111-4111-8111-111111111111"
+    transcript = (
+        root
+        / "home-user-Projects"
+        / "agent-transcripts"
+        / session_id
+        / f"{session_id}.jsonl"
+    )
+    active_cwds = {"/home/user/Projects", "/home/user/Other"}
+
+    assert SessionMonitor._is_cursor_transcript(transcript, root=root)
+    assert (
+        SessionMonitor._cursor_transcript_cwd(
+            transcript,
+            active_cwds,
+            root=root,
+        )
+        == "/home/user/Projects"
+    )
+    assert (
+        SessionMonitor._cursor_transcript_cwd(
+            transcript,
+            {"/home/user/Other"},
+            root=root,
+        )
+        == ""
+    )
+
+
+def test_cursor_transcripts_remain_bindable_with_account_homes(tmp_path, monkeypatch):
+    root = tmp_path / ".cursor" / "projects"
+    transcript = (
+        root
+        / "home-user-Projects"
+        / "agent-transcripts"
+        / "11111111-1111-4111-8111-111111111111"
+        / "11111111-1111-4111-8111-111111111111.jsonl"
+    )
+    monkeypatch.setattr(
+        "telegram_agent_bot.session_monitor._CURSOR_PROJECTS_ROOT",
+        root,
+    )
+    monkeypatch.setattr(
+        "telegram_agent_bot.session_monitor.list_account_homes",
+        lambda: [tmp_path / "accounts" / "default"],
+    )
+
+    assert SessionMonitor._can_auto_bind_transcript(transcript)
+
+
+@pytest.mark.asyncio
+async def test_scan_projects_discovers_cursor_transcripts_by_live_workspace(
+    tmp_path,
+    monkeypatch,
+):
+    root = tmp_path / ".cursor" / "projects"
+    session_id = "11111111-1111-4111-8111-111111111111"
+    transcript = (
+        root
+        / "home-user-Projects"
+        / "agent-transcripts"
+        / session_id
+        / f"{session_id}.jsonl"
+    )
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(
+        '{"role":"assistant","message":{"content":[]}}\n',
+        encoding="utf-8",
+    )
+    monitor = SessionMonitor(
+        projects_path=tmp_path / "codex-projects",
+        state_file=tmp_path / "monitor_state.json",
+    )
+    monkeypatch.setattr(
+        "telegram_agent_bot.session_monitor._CURSOR_PROJECTS_ROOT",
+        root,
+    )
+    monkeypatch.setattr(
+        "telegram_agent_bot.session_monitor._iter_transcript_roots",
+        lambda: [root],
+    )
+    monkeypatch.setattr(
+        monitor,
+        "_get_active_cwds",
+        AsyncMock(return_value={"/home/user/Projects"}),
+    )
+    monkeypatch.setattr(
+        monitor,
+        "_get_active_cursor_cwds",
+        AsyncMock(return_value={"/home/user/Projects"}),
+    )
+    monkeypatch.setattr(monitor, "_normalize_path", lambda cwd: cwd)
+
+    sessions = await monitor.scan_projects()
+
+    assert sessions == [
+        SessionInfo(
+            session_id=session_id,
+            file_path=transcript,
+            cwd="/home/user/Projects",
+        )
+    ]
+
+
 def test_delivery_backlog_only_counts_bound_sessions(tmp_path, monkeypatch):
     monitor = SessionMonitor(
         projects_path=tmp_path / "projects",
@@ -246,7 +352,7 @@ class TestSessionMonitorDispatch:
 
         assert [session.session_id for session in first] == ["session-a"]
         assert [session.session_id for session in second] == ["session-a"]
-        monitor._iter_session_files.assert_called_once_with()
+        monitor._iter_session_files.assert_called_once_with(set())
         read_cwd.assert_called_once_with(transcript)
 
     def test_commit_deferred_state_updates_can_commit_subset(self, tmp_path):

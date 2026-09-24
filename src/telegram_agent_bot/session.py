@@ -102,6 +102,15 @@ def _iter_transcript_roots(preferred_account_name: str = "") -> list[Path]:
     return roots
 
 
+def _cursor_projects_root() -> Path:
+    return Path.home() / ".cursor" / "projects"
+
+
+def _cursor_transcript_dir(cwd: str, *, root: Path | None = None) -> Path:
+    project_slug = Path(cwd).as_posix().lstrip("/").replace("/", "-")
+    return (root or _cursor_projects_root()) / project_slug / "agent-transcripts"
+
+
 def _canonical_session_id(session_id: str) -> str:
     """Normalize bare UUID and rollout-prefixed ids to one comparable form."""
     if not session_id:
@@ -1618,6 +1627,7 @@ class SessionManager:
                 config.codex_projects_path.expanduser().resolve(),
                 (Path.home() / ".codex").resolve(),
                 (Path.home() / ".claude" / "projects").resolve(),
+                _cursor_projects_root().resolve(),
             )
             return any(resolved.is_relative_to(root) for root in roots)
         except OSError:
@@ -1790,6 +1800,17 @@ class SessionManager:
     ) -> Path | None:
         if not session_id or not cwd:
             return None
+        cursor_root = _cursor_transcript_dir(cwd)
+        cursor_candidate = cursor_root / session_id / f"{session_id}.jsonl"
+        if cursor_candidate.exists():
+            return cursor_candidate
+        try:
+            cursor_matches = list(cursor_root.rglob(f"{session_id}.jsonl"))
+        except OSError:
+            cursor_matches = []
+        if cursor_matches:
+            return cursor_matches[0]
+
         for root in _iter_transcript_roots(account_name):
             candidate = self._build_session_file_path(session_id, cwd, root=root)
             if candidate and candidate.exists():

@@ -1,11 +1,11 @@
-"""JSONL transcript parser for Codex session files.
+"""JSONL transcript parser for Codex and Cursor Agent session files.
 
 Parses Codex session JSONL files and extracts structured messages.
 Handles: text, thinking, tool_use, tool_result, local_command, and user messages.
 Tool pairing: tool_use blocks in assistant messages are matched with
 tool_result blocks in subsequent user messages via tool_use_id.
 
-Shared by both session.py (history) and session_monitor.py (real-time).
+Shared by session.py (history) and session_monitor.py (real-time).
 
 Key classes: TranscriptParser (static methods), ParsedEntry, ParsedMessage, PendingToolInfo.
 """
@@ -63,12 +63,13 @@ class PendingToolInfo:
 
 
 class TranscriptParser:
-    """Parser for Codex JSONL session files.
+    """Parser for Codex and Cursor Agent JSONL session files.
 
     Expected JSONL entry structure:
     - type: "user" | "assistant" | "summary" | "file-history-snapshot" | ...
     - message.content: list of blocks (text, tool_use, tool_result, thinking)
-    - sessionId, cwd, timestamp, uuid: metadata fields
+    - sessionId, cwd, timestamp, uuid: Codex metadata fields
+    - role/message: Cursor Agent message records
 
     Tool pairing model: tool_use blocks appear in assistant messages,
     matching tool_result blocks appear in the next user message (keyed by tool_use_id).
@@ -332,6 +333,17 @@ class TranscriptParser:
         timestamp = data.get("timestamp")
 
         if entry_type in ("assistant", "user"):
+            return data
+
+        # Cursor Agent stores JSONL records with role/message fields instead
+        # of Codex's top-level type field. Normalize the shared message shape.
+        role = data.get("role")
+        if (
+            entry_type is None
+            and role in ("assistant", "user")
+            and isinstance(data.get("message"), dict)
+        ):
+            data["type"] = role
             return data
 
         if entry_type == "response_item":

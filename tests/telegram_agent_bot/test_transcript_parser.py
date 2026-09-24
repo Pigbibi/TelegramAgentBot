@@ -31,6 +31,23 @@ class TestParseLine:
     def test_parse_line(self, line: str, expected: dict | None):
         assert TranscriptParser.parse_line(line) == expected
 
+    def test_cursor_role_message_entry_is_normalized(self):
+        line = json.dumps(
+            {
+                "role": "assistant",
+                "message": {"content": [{"type": "text", "text": "Cursor reply"}]},
+            }
+        )
+
+        parsed = TranscriptParser.parse_line(line)
+
+        assert parsed is not None
+        assert parsed["type"] == "assistant"
+        entries, _ = TranscriptParser.parse_entries([parsed])
+        assert [(entry.role, entry.text) for entry in entries] == [
+            ("assistant", "Cursor reply")
+        ]
+
     def test_event_msg_error_is_normalized_as_assistant_text(self):
         event = {
             "type": "event_msg",

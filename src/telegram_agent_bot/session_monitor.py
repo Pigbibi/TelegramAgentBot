@@ -1,6 +1,6 @@
-"""Session monitoring service — recursive Codex transcript mode.
+"""Session monitoring service for agent transcript files.
 
-Scans the Codex transcript root recursively, auto-binds newly discovered
+Scans supported transcript roots recursively, auto-binds newly discovered
 sessions to matching tmux windows by cwd, and emits parsed messages to the bot.
 """
 
@@ -15,11 +15,18 @@ from typing import Any, Awaitable, Callable
 
 import aiofiles
 
+from .agent_profile import AGENT_CURSOR, normalize_agent_type
 from .account_manager import list_account_homes
 from .config import config
 from .handlers.delivery_errors import PermanentDeliveryError
 from .monitor_state import MonitorState, TrackedSession
-from .session import _is_shell_pane_command, _iter_transcript_roots, _session_ids_match
+from .session import (
+    _cursor_projects_root,
+    _cursor_transcript_dir,
+    _is_shell_pane_command,
+    _iter_transcript_roots,
+    _session_ids_match,
+)
 from .tmux_manager import tmux_manager
 from .transcript_parser import PendingToolInfo, TranscriptParser
 from .utils import is_subagent_transcript, read_cwd_from_jsonl
@@ -32,6 +39,7 @@ _DISPATCH_GROUP_MAX_MESSAGES = 8
 _DISPATCH_RETRY_INITIAL_SECONDS = 15.0
 _DISPATCH_RETRY_MAX_SECONDS = 300.0
 _SESSION_DISCOVERY_INTERVAL_SECONDS = 5.0
+_CURSOR_PROJECTS_ROOT = _cursor_projects_root()
 
 
 @dataclass
@@ -83,6 +91,7 @@ class SessionMonitor:
         self._file_mtimes: dict[str, float] = {}
         self._file_cwds: dict[str, str] = {}
         self._session_file_cache: list[Path] | None = None
+        self._session_file_cache_cwds: frozenset[str] | None = None
         self._session_file_cache_refresh_after = 0.0
         self._deferred_state_updates: dict[str, TrackedSession] = {}
         self._dispatch_failure_counts: dict[str, int] = {}
@@ -135,11 +144,26 @@ class SessionMonitor:
                 continue
         return False
 
+    @staticmethod
+    def _is_cursor_transcript(
+        file_path: Path,
+        *,
+        root: Path | None = None,
+    ) -> bool:
+        projects_root = root or _CURSOR_PROJECTS_ROOT
+        try:
+            relative = file_path.resolve().relative_to(projects_root.resolve())
+        except (OSError, ValueError):
+            return False
+        return len(relative.parts) == 4 and relative.parts[1] == "agent-transcripts"
+
     @classmethod
     def _can_auto_bind_transcript(cls, file_path: Path) -> bool:
         """Avoid auto-binding unrelated local Codex history when accounts exist."""
         if is_subagent_transcript(file_path):
             return False
+        if cls._is_cursor_transcript(file_path):
+            return True
         account_homes = list_account_homes()
         if not account_homes:
             return True
@@ -169,12 +193,61 @@ class SessionMonitor:
             cwds.add(self._normalize_path(window.cwd))
         return cwds
 
-    def _iter_session_files(self) -> list[Path]:
-        """Recursively find candidate transcript files under the Codex root."""
+    async def _get_active_cursor_cwds(self) -> set[str]:
+        """Return working directories owned by live Cursor Agent panes."""
+        from .session import session_manager
+
+        cwds: set[str] = set()
+        for window in await tmux_manager.list_windows():
+            window_id = getattr(window, "window_id", "")
+            if not window_id:
+                continue
+            state = session_manager.get_window_state(window_id)
+            agent_type = normalize_agent_type(
+                getattr(state, "agent_type", "") or config.agent_type
+            )
+            if agent_type == AGENT_CURSOR:
+                cwds.add(str(window.cwd))
+        return cwds
+
+    @staticmethod
+    def _cursor_transcript_cwd(
+        file_path: Path,
+        active_cwds: set[str],
+        *,
+        root: Path | None = None,
+    ) -> str:
+        """Match Cursor's workspace-slug transcript path to a live cwd."""
+        projects_root = root or _CURSOR_PROJECTS_ROOT
+        try:
+            parts = file_path.resolve().relative_to(projects_root.resolve()).parts
+        except (OSError, ValueError):
+            return ""
+        if (
+            len(parts) != 4
+            or parts[1] != "agent-transcripts"
+            or parts[-2] != file_path.stem
+        ):
+            return ""
+
+        matches = [
+            cwd
+            for cwd in active_cwds
+            if Path(cwd).as_posix().lstrip("/").replace("/", "-") == parts[0]
+        ]
+        return matches[0] if len(matches) == 1 else ""
+
+    def _iter_session_files(self, active_cursor_cwds: set[str]) -> list[Path]:
+        """Recursively find candidate transcript files under supported roots."""
         files: list[Path] = []
         seen: set[str] = set()
+        roots = _iter_transcript_roots()
+        roots.extend(
+            _cursor_transcript_dir(cwd, root=_CURSOR_PROJECTS_ROOT)
+            for cwd in active_cursor_cwds
+        )
 
-        for base_path in _iter_transcript_roots():
+        for base_path in roots:
             base_path = base_path.expanduser()
             if not base_path.exists():
                 continue
@@ -192,16 +265,18 @@ class SessionMonitor:
                 files.append(jsonl_file)
         return files
 
-    def _get_session_files(self) -> list[Path]:
+    def _get_session_files(self, active_cursor_cwds: set[str]) -> list[Path]:
         """Reuse transcript discovery results between bounded refreshes."""
         now = time.monotonic()
         if (
             self._session_file_cache is not None
+            and self._session_file_cache_cwds == frozenset(active_cursor_cwds)
             and now < self._session_file_cache_refresh_after
         ):
             return self._session_file_cache
 
-        self._session_file_cache = self._iter_session_files()
+        self._session_file_cache = self._iter_session_files(active_cursor_cwds)
+        self._session_file_cache_cwds = frozenset(active_cursor_cwds)
         self._session_file_cache_refresh_after = (
             now + _SESSION_DISCOVERY_INTERVAL_SECONDS
         )
@@ -247,17 +322,27 @@ class SessionMonitor:
         return "You've hit your usage limit."
 
     async def scan_projects(self) -> list[SessionInfo]:
-        """Scan Codex transcripts whose cwd still matches a live tmux window."""
+        """Scan transcripts whose cwd matches a live tmux window."""
         active_cwds = await self._get_active_cwds()
+        active_cursor_cwds = await self._get_active_cursor_cwds()
         sessions: list[SessionInfo] = []
         present_paths: set[str] = set()
 
-        for jsonl_file in self._get_session_files():
+        for jsonl_file in self._get_session_files(active_cursor_cwds):
             file_key = str(jsonl_file)
             present_paths.add(file_key)
             file_cwd = self._file_cwds.get(file_key, "")
             if not file_cwd:
-                raw_cwd = await asyncio.to_thread(read_cwd_from_jsonl, jsonl_file)
+                if self._is_cursor_transcript(jsonl_file):
+                    raw_cwd = self._cursor_transcript_cwd(
+                        jsonl_file,
+                        active_cursor_cwds,
+                    )
+                else:
+                    raw_cwd = await asyncio.to_thread(
+                        read_cwd_from_jsonl,
+                        jsonl_file,
+                    )
                 if raw_cwd:
                     # A Codex session's cwd is immutable metadata. Caching it avoids
                     # reopening every historical transcript or resolving its cwd on
