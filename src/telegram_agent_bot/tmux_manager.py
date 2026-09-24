@@ -147,6 +147,26 @@ def _first_command_executable(parts: list[str]) -> str:
     return ""
 
 
+def _strip_codex_permission_options(command: str) -> str:
+    """Remove configured Codex permission flags before applying a topic profile."""
+    parts = shlex.split(command)
+    cleaned: list[str] = []
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if part in {"-s", "--sandbox", "-a", "--ask-for-approval"}:
+            index += 1
+            if index < len(parts) and not parts[index].startswith("-"):
+                index += 1
+            continue
+        if part.startswith(("--sandbox=", "--ask-for-approval=")):
+            index += 1
+            continue
+        cleaned.append(part)
+        index += 1
+    return shlex.join(cleaned)
+
+
 def _agent_command_for_launch(
     profile: AgentProfile | None = None,
     *,
@@ -165,6 +185,8 @@ def _agent_command_for_launch(
         AGENT_CURSOR: config.cursor_command,
     }.get(profile.agent_type, codex_command)
     cmd = command_override or configured_command
+    if profile.permission_mode == PERMISSION_ASK and profile.agent_type == AGENT_CODEX:
+        cmd = _strip_codex_permission_options(cmd)
     if profile.model:
         cmd = f"{cmd} --model {shlex.quote(profile.model)}"
     if (
