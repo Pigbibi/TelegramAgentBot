@@ -1,10 +1,10 @@
 # Configuration
 
-Topic routing is keyed by user and topic ID, not by group. An existing topic
-route cannot be reassigned by sending a message or callback from another group
-with the same topic ID; that update is rejected before command or media handling.
-Keep each user's topic IDs unique across groups. This guard preserves existing
-SQLite state and queued output. Use a separate bot state directory for another chat.
+Use one bot state directory for one Telegram chat. Telegram can reuse topic IDs
+in different groups, while AgentBot keeps one route per operator and topic ID.
+Run a separate deployment with its own state directory and bot token for another
+group. Operators sharing a topic in one supergroup share its agent session and
+pending input.
 
 TelegramAgentBot reads environment variables from the current directory's
 `.env` first, then from `$TELEGRAM_AGENT_BOT_DIR/.env`. The application directory
