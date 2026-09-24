@@ -209,6 +209,7 @@ class TestSessionPickerIsolation:
             model="deepseek-v4-pro",
             reasoning_effort="low",
             fast_mode=False,
+            permission_mode="ask",
         )
 
     @pytest.mark.asyncio

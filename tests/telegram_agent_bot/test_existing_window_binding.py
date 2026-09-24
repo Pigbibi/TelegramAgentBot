@@ -1069,6 +1069,7 @@ class TestExistingWindowBinding:
             window_name="Projects-2",
             resume_session_id="session-1",
             account_name="",
+            permission_mode="ask",
         )
         mock_sm.bind_thread_target.assert_called_once_with(
             12345,
