@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -176,6 +177,81 @@ def test_clean_tmp_keeps_bot_locks_and_removes_old_artifacts(tmp_path: Path) -> 
     assert lock_dir.exists()
     assert tmux_dir.exists()
     assert not old_artifact.exists()
+
+
+def _write_bound_route(home: Path, session_id: str) -> None:
+    runtime_dir = home / ".telegram-agent-bot"
+    runtime_dir.mkdir(exist_ok=True)
+    with sqlite3.connect(runtime_dir / "runtime.sqlite3") as connection:
+        connection.execute(
+            """
+            CREATE TABLE conversation_routes (
+                user_id INTEGER NOT NULL,
+                thread_id INTEGER NOT NULL,
+                backend_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                window_id TEXT NOT NULL DEFAULT '',
+                session_id TEXT NOT NULL DEFAULT '',
+                generation INTEGER NOT NULL,
+                PRIMARY KEY (user_id, thread_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO conversation_routes
+                (user_id, thread_id, backend_id, node_id, window_id, session_id, generation)
+            VALUES (1, 2, 'local', 'local', '@7', ?, 1)
+            """,
+            (session_id,),
+        )
+
+
+def test_clean_common_caches_preserves_transcripts_bound_to_topics(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = _config(tmp_path)
+    session_root = config.home / ".codex" / "sessions"
+    session_root.mkdir(parents=True)
+    session_id = "00000000-0000-0000-0000-000000000001"
+    bound = session_root / f"rollout-2026-01-01T00-00-00-{session_id}.jsonl"
+    unbound = session_root / "old-unbound-session.jsonl"
+    for transcript in (bound, unbound):
+        transcript.write_text("old transcript")
+        old = time.time() - 45 * 24 * 60 * 60
+        os.utime(transcript, (old, old))
+    _write_bound_route(config.home, session_id)
+    monkeypatch.setenv(
+        "TELEGRAM_AGENT_BOT_DIR", str(config.home / ".telegram-agent-bot")
+    )
+
+    stats = cleanup.CleanupStats()
+    cleanup.clean_common_caches(config, stats)
+
+    assert bound.exists()
+    assert not unbound.exists()
+    assert any("topic-bound Codex transcript" in item for item in stats.skipped_paths)
+
+
+def test_clean_common_caches_skips_transcript_pruning_without_route_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = _config(tmp_path)
+    session_root = config.home / ".codex" / "sessions"
+    session_root.mkdir(parents=True)
+    transcript = session_root / "old-session.jsonl"
+    transcript.write_text("old transcript")
+    old = time.time() - 45 * 24 * 60 * 60
+    os.utime(transcript, (old, old))
+    monkeypatch.setenv(
+        "TELEGRAM_AGENT_BOT_DIR", str(config.home / ".telegram-agent-bot")
+    )
+
+    stats = cleanup.CleanupStats()
+    cleanup.clean_common_caches(config, stats)
+
+    assert transcript.exists()
+    assert any("route state unavailable" in item for item in stats.skipped_paths)
 
 
 def test_clean_system_caches_clears_root_npm_cache(monkeypatch) -> None:

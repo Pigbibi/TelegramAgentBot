@@ -10,7 +10,9 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import os
+import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -25,6 +27,10 @@ DEFAULT_TMP_RETENTION_DAYS = 2
 DEFAULT_CODEX_SESSION_RETENTION_DAYS = 30
 DEFAULT_RUNNER_DIAG_RETENTION_DAYS = 7
 LOCK_PATH = Path("/tmp/telegram-agent-vps-cleanup.lock")
+_SESSION_ID_SUFFIX_RE = re.compile(
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
+    re.IGNORECASE,
+)
 
 TMP_EXCLUDE_PATTERNS = (
     ".ICE-unix",
@@ -340,13 +346,53 @@ def clean_common_caches(config: CleanupConfig, stats: CleanupStats) -> None:
         remove_path(target, config, stats)
     clean_uv_cache(config, stats)
     clear_directory_contents(config.home / ".codex" / ".tmp", config, stats)
-    clean_old_files(
-        config.home / ".codex" / "sessions",
-        config.codex_session_retention_days,
-        config,
-        stats,
-        remove_empty_dirs=True,
+    session_ids = _bound_codex_session_ids(config.home)
+    if session_ids is None:
+        stats.record_skip(
+            "Codex transcript cleanup skipped: topic route state unavailable"
+        )
+    else:
+        clean_old_files(
+            config.home / ".codex" / "sessions",
+            config.codex_session_retention_days,
+            config,
+            stats,
+            remove_empty_dirs=True,
+            protected_session_ids=session_ids,
+        )
+
+
+def _bound_codex_session_ids(home: Path) -> set[str] | None:
+    """Read session IDs still referenced by durable topic routes.
+
+    Returning None means route state could not be trusted, so callers should
+    skip transcript deletion rather than risk breaking a resumable topic.
+    """
+    runtime_dir = Path(
+        os.getenv("TELEGRAM_AGENT_BOT_DIR", str(home / ".telegram-agent-bot"))
     )
+    database = runtime_dir / "runtime.sqlite3"
+    if not database.is_file():
+        return None
+
+    db = None
+    try:
+        db = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=5)
+        rows = db.execute("SELECT session_id FROM conversation_routes").fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        if db is not None:
+            db.close()
+
+    session_ids: set[str] = set()
+    for (session_id,) in rows:
+        value = str(session_id or "").strip()
+        if not value:
+            return None
+        match = _SESSION_ID_SUFFIX_RE.search(value)
+        session_ids.add(match.group(1).lower() if match else value)
+    return session_ids
 
 
 def clean_old_files(
@@ -356,6 +402,7 @@ def clean_old_files(
     stats: CleanupStats,
     *,
     remove_empty_dirs: bool = False,
+    protected_session_ids: set[str] | None = None,
 ) -> None:
     root = _resolve(root)
     if not root.exists():
@@ -376,6 +423,15 @@ def clean_old_files(
         for name in files:
             file_path = current_path / name
             try:
+                if (
+                    protected_session_ids is not None
+                    and file_path.suffix.lower() == ".jsonl"
+                ):
+                    match = _SESSION_ID_SUFFIX_RE.search(file_path.stem)
+                    session_key = match.group(1).lower() if match else file_path.stem
+                    if session_key in protected_session_ids:
+                        stats.record_skip(f"topic-bound Codex transcript: {file_path}")
+                        continue
                 if file_path.stat().st_mtime < cutoff:
                     remove_path(file_path, config, stats)
             except OSError as exc:
