@@ -72,7 +72,9 @@ def test_cursor_picker_omits_unsupported_reasoning_and_fast_controls():
 
     assert "Reasoning:" not in text
     assert "Fast mode:" not in text
+    assert "Permissions: `Ask first`" in text
     assert [button.text for row in keyboard.inline_keyboard for button in row] == [
+        "🔐 Permissions: Ask first",
         "✅ Create session",
         "Cancel",
     ]
@@ -118,15 +120,15 @@ def test_fast_mode_is_separate_from_reasoning_and_buttons_fit_two_columns():
     assert "Reasoning: `Deep`" in text
     assert "Fast mode: `On`" in text
     assert keyboard.inline_keyboard[-2][0].text == "✅ Create session"
-    assert [button.text for button in keyboard.inline_keyboard[-5]] == [
+    assert [button.text for button in keyboard.inline_keyboard[-6]] == [
         "Low",
         "Standard",
     ]
-    assert [button.text for button in keyboard.inline_keyboard[-4]] == [
+    assert [button.text for button in keyboard.inline_keyboard[-5]] == [
         "✅ Deep",
         "Max",
     ]
-    assert keyboard.inline_keyboard[-3][0].text == "⚡ Fast: On"
+    assert keyboard.inline_keyboard[-4][0].text == "⚡ Fast: On"
 
 
 def test_codex_profile_exposes_fast_mode_toggle():
@@ -140,7 +142,68 @@ def test_codex_profile_exposes_fast_mode_toggle():
     text, keyboard = build_profile_picker(profile, ["gpt-5.4-mini"])
 
     assert "Fast mode: `Off`" in text
-    assert keyboard.inline_keyboard[-3][0].text == "⚡ Fast: Off"
+    assert keyboard.inline_keyboard[-4][0].text == "⚡ Fast: Off"
+
+
+@pytest.mark.parametrize(
+    ("agent_type", "command", "expected"),
+    [
+        ("codex", "/usr/bin/codex", "--dangerously-bypass-approvals-and-sandbox"),
+        ("claude", "/usr/bin/claude", "--dangerously-skip-permissions"),
+        ("claudeofficial", "/usr/bin/claude", "--dangerously-skip-permissions"),
+        ("cursor", "/usr/bin/agent", "--force"),
+    ],
+)
+def test_full_permission_mode_uses_provider_flag(agent_type, command, expected):
+    profile = AgentProfile(agent_type=agent_type, permission_mode="full")
+    with (
+        patch.object(config, "codex_cli_command", command),
+        patch.object(config, "claude_command", command),
+        patch.object(config, "cursor_command", command),
+    ):
+        launch = _agent_command_for_launch(profile)
+    assert launch.endswith(expected)
+
+
+def test_codex_ask_mode_overrides_vps_full_access_config():
+    profile = AgentProfile(agent_type="codex", permission_mode="ask")
+    with patch.object(
+        config,
+        "codex_cli_command",
+        "/usr/bin/codex --dangerously-bypass-approvals-and-sandbox",
+    ):
+        launch = _agent_command_for_launch(profile)
+    assert "--dangerously-bypass-approvals-and-sandbox" not in launch
+    assert launch.endswith("--sandbox workspace-write --ask-for-approval on-request")
+
+
+def test_ask_mode_removes_provider_bypass_flags_from_configured_commands():
+    with (
+        patch.object(
+            config,
+            "claude_command",
+            "/usr/bin/claude --dangerously-skip-permissions",
+        ),
+        patch.object(config, "cursor_command", "/usr/bin/agent -f"),
+    ):
+        claude = _agent_command_for_launch(
+            AgentProfile(agent_type="claude", permission_mode="ask")
+        )
+        cursor = _agent_command_for_launch(
+            AgentProfile(agent_type="cursor", permission_mode="ask")
+        )
+    assert "--dangerously-skip-permissions" not in claude
+    assert claude.endswith("--permission-mode default")
+    assert cursor == "/usr/bin/agent"
+
+
+def test_full_permissions_are_visible_and_explicit_in_profile_picker():
+    profile = AgentProfile(agent_type="claude", permission_mode="full")
+    text, keyboard = build_profile_picker(profile, [])
+    assert "Permissions: `Full access`" in text
+    assert "Full access skips agent approval prompts" in text
+    assert "VPS account limits still apply" in text
+    assert keyboard.inline_keyboard[-3][0].text == "🔐 Permissions: Full access"
 
 
 def test_codex_profile_uses_model_supported_reasoning_efforts():
@@ -187,7 +250,8 @@ def test_claude_launch_uses_effort_flag_and_env_file(tmp_path):
 
     assert command == (
         f"set -a; . {env_file}; set +a; "
-        "/usr/bin/claude --model deepseek-v4-pro --effort low"
+        "/usr/bin/claude --model deepseek-v4-pro --effort low "
+        "--permission-mode default"
     )
 
 
@@ -202,7 +266,9 @@ def test_claude_official_launch_does_not_source_deepseek_env(tmp_path):
     ):
         command = _agent_command_for_launch(profile)
 
-    assert command == "/usr/bin/claude --model sonnet --effort medium"
+    assert command == (
+        "/usr/bin/claude --model sonnet --effort medium --permission-mode default"
+    )
 
 
 def test_cursor_launch_uses_model_without_unsupported_reasoning_flag():
@@ -229,7 +295,8 @@ def test_codex_uses_config_override_for_reasoning_effort():
         command = _agent_command_for_launch(profile)
 
     assert command == (
-        '/usr/bin/codex --model gpt-5.3-codex -c model_reasoning_effort="low"'
+        '/usr/bin/codex --model gpt-5.3-codex -c model_reasoning_effort="low" '
+        "--sandbox workspace-write --ask-for-approval on-request"
     )
 
 
@@ -244,7 +311,8 @@ def test_codex_launch_preserves_catalog_reasoning_effort(effort):
     with patch.object(config, "codex_cli_command", "/usr/bin/codex"):
         command = _agent_command_for_launch(profile)
 
-    assert command.endswith(f'-c model_reasoning_effort="{effort}"')
+    assert f'-c model_reasoning_effort="{effort}"' in command
+    assert command.endswith("--sandbox workspace-write --ask-for-approval on-request")
 
 
 def test_model_effort_resolution_falls_back_when_selection_is_unsupported():

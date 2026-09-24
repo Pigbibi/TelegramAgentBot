@@ -177,7 +177,8 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
             [
                 (
                     "export CODEX_HOME=/tmp/telegram-agent-bot-account-home; "
-                    "/usr/local/bin/codex --search -s danger-full-access resume sid-123",
+                    "/usr/local/bin/codex --search -s danger-full-access --sandbox "
+                    "workspace-write --ask-for-approval on-request resume sid-123",
                     True,
                 )
             ],
@@ -223,7 +224,8 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
             pane.commands,
             [
                 (
-                    "/usr/local/bin/codex --search -s danger-full-access resume "
+                    "/usr/local/bin/codex --search -s danger-full-access --sandbox "
+                    "workspace-write --ask-for-approval on-request resume "
                     "019d52c8-d90d-7f72-9062-45cf0f71f97e",
                     True,
                 )
@@ -268,7 +270,8 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
             pane.commands,
             [
                 (
-                    "IS_SANDBOX=1 /usr/local/bin/codex --search "
+                    "IS_SANDBOX=1 /usr/local/bin/codex --search --sandbox "
+                    "workspace-write --ask-for-approval on-request "
                     "--dangerously-bypass-hook-trust",
                     True,
                 )
@@ -321,7 +324,8 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
             [
                 (
                     "export HOME=/tmp/telegram-agent-bot-claude-home; "
-                    "/usr/bin/claude --model deepseek-v4-pro --resume "
+                    "/usr/bin/claude --model deepseek-v4-pro --permission-mode default "
+                    "--resume "
                     "550e8400-e29b-41d4-a716-446655440000",
                     True,
                 )

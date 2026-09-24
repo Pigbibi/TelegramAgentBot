@@ -354,7 +354,7 @@ class TestExtractInteractiveContent:
             "  → Run (once)\n"
             "    Run always (a)\n"
             "    No (esc)\n"
-            "  & Enter to run (shift+tab) (esc to go back)\n"
+            "  & Enter to run (shift+tab) (esc to exit)\n"
         )
 
         result = extract_interactive_content(pane)

@@ -42,6 +42,7 @@ class CreateSessionRequest:
     model: str = ""
     reasoning_effort: str = ""
     fast_mode: bool = False
+    permission_mode: str = "ask"
 
 
 @dataclass(frozen=True)

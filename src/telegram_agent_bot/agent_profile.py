@@ -18,6 +18,8 @@ EFFORT_MAX = "max"
 EFFORT_ULTRA = "ultra"
 EFFORT_MINIMAL = "minimal"
 EFFORT_NONE = "none"
+PERMISSION_ASK = "ask"
+PERMISSION_FULL = "full"
 SUPPORTED_EFFORTS = (
     EFFORT_NONE,
     EFFORT_MINIMAL,
@@ -153,6 +155,7 @@ class AgentProfile:
     model: str = ""
     reasoning_effort: str = EFFORT_STANDARD
     fast_mode: bool = False
+    permission_mode: str = PERMISSION_ASK
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "agent_type", normalize_agent_type(self.agent_type))
@@ -163,6 +166,14 @@ class AgentProfile:
                 normalize_effort(self.reasoning_effort),
             )
         object.__setattr__(self, "fast_mode", bool(self.fast_mode))
+        permission_mode = str(self.permission_mode).strip().lower()
+        object.__setattr__(
+            self,
+            "permission_mode",
+            permission_mode
+            if permission_mode in {PERMISSION_ASK, PERMISSION_FULL}
+            else PERMISSION_ASK,
+        )
 
     @property
     def display_name(self) -> str:
@@ -175,3 +186,7 @@ class AgentProfile:
     @property
     def fast_label(self) -> str:
         return "On" if self.fast_mode else "Off"
+
+    @property
+    def permission_label(self) -> str:
+        return "Full access" if self.permission_mode == PERMISSION_FULL else "Ask first"

@@ -97,6 +97,7 @@ class LocalTmuxBackend:
                 request.model,
                 request.reasoning_effort,
                 request.fast_mode,
+                request.permission_mode != "ask",
             )
         ):
             success, message, window_name, window_id = await tmux_manager.create_window(
@@ -115,6 +116,7 @@ class LocalTmuxBackend:
                 model=request.model or None,
                 reasoning_effort=request.reasoning_effort or None,
                 fast_mode=request.fast_mode,
+                permission_mode=request.permission_mode,
             )
         target = self.target_from_window(window_id) if success and window_id else None
         return CreateSessionResult(

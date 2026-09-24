@@ -60,6 +60,7 @@ CB_PROFILE_AGENT = "ap:agent:"  # ap:agent:codex|claude
 CB_PROFILE_MODEL = "ap:model:"  # ap:model:<index>
 CB_PROFILE_EFFORT = "ap:effort:"  # ap:effort:<level>
 CB_PROFILE_FAST = "ap:fast:"  # ap:fast:on|off
+CB_PROFILE_PERMISSION = "ap:permission:"  # ap:permission:ask|full
 CB_PROFILE_CONFIRM = "ap:confirm"
 CB_PROFILE_CANCEL = "ap:cancel"
 

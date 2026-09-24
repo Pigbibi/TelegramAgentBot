@@ -146,6 +146,7 @@ from .handlers.callback_data import (
     CB_PROFILE_EFFORT,
     CB_PROFILE_FAST,
     CB_PROFILE_MODEL,
+    CB_PROFILE_PERMISSION,
     CB_OUTPUT_MODE,
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
@@ -184,6 +185,7 @@ from .handlers.directory_browser import (
     PROFILE_FAST_MODE_KEY,
     PROFILE_MODEL_KEY,
     PROFILE_MODELS_KEY,
+    PROFILE_PERMISSION_MODE_KEY,
     build_backend_root_picker,
     build_directory_browser,
     build_directory_browser_from_listing,
@@ -1102,6 +1104,9 @@ def _profile_from_context(user_data: dict | None) -> AgentProfile:
     )
     model = user_data.get(PROFILE_MODEL_KEY, "") if user_data else ""
     fast_mode = user_data.get(PROFILE_FAST_MODE_KEY, False) if user_data else False
+    permission_mode = (
+        user_data.get(PROFILE_PERMISSION_MODE_KEY, "ask") if user_data else "ask"
+    )
     return AgentProfile(
         agent_type=normalized,
         model=model if isinstance(model, str) else "",
@@ -1111,6 +1116,9 @@ def _profile_from_context(user_data: dict | None) -> AgentProfile:
             requested_effort if isinstance(requested_effort, str) else default_effort,
         ),
         fast_mode=bool(fast_mode),
+        permission_mode=(
+            permission_mode if isinstance(permission_mode, str) else "ask"
+        ),
     )
 
 
@@ -1225,6 +1233,7 @@ async def _continue_creation_with_profile(
         "model": profile.model,
         "reasoning_effort": profile.reasoning_effort,
         "fast_mode": profile.fast_mode,
+        "permission_mode": profile.permission_mode,
     }
     if node_id:
         create_kwargs["node_id"] = node_id
@@ -4183,6 +4192,7 @@ async def _create_agent_local_window(
     model: str = "",
     reasoning_effort: str = "",
     fast_mode: bool = False,
+    permission_mode: str = "ask",
 ) -> tuple[bool, str, str, str, AgentTarget | None]:
     success, message, display_name, window_id, target = await _create_agent_target(
         cwd=cwd,
@@ -4193,6 +4203,7 @@ async def _create_agent_local_window(
         model=model,
         reasoning_effort=reasoning_effort,
         fast_mode=fast_mode,
+        permission_mode=permission_mode,
     )
     if success and not window_id:
         return (
@@ -4216,6 +4227,7 @@ async def _create_agent_target(
     model: str = "",
     reasoning_effort: str = "",
     fast_mode: bool = False,
+    permission_mode: str = "ask",
 ) -> tuple[bool, str, str, str, AgentTarget | None]:
     create_kwargs: dict[str, Any] = {
         "cwd": cwd,
@@ -4231,6 +4243,7 @@ async def _create_agent_target(
         create_kwargs["reasoning_effort"] = reasoning_effort
     if fast_mode:
         create_kwargs["fast_mode"] = True
+    create_kwargs["permission_mode"] = permission_mode
     if node_id:
         create_kwargs["node_id"] = node_id
     result = await create_agent_session(**create_kwargs)
@@ -6497,6 +6510,7 @@ async def _create_and_bind_window(
     model: str = "",
     reasoning_effort: str = "",
     fast_mode: bool = False,
+    permission_mode: str = "ask",
     node_id: str = "",
     answer_callback: bool = True,
 ) -> None:
@@ -6522,6 +6536,7 @@ async def _create_and_bind_window(
             else ""
         ),
         fast_mode=fast_mode,
+        permission_mode=permission_mode,
     )
     # Account snapshots are agent-specific. Do not apply a Codex snapshot to a
     # Claude topic (or vice versa) when both agents are enabled per topic.
@@ -6545,6 +6560,7 @@ async def _create_and_bind_window(
         model=profile.model,
         reasoning_effort=profile.reasoning_effort,
         fast_mode=profile.fast_mode,
+        permission_mode=profile.permission_mode,
     )
     if success:
         if launch_account:
@@ -7354,6 +7370,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[PROFILE_AGENT_KEY] = agent_type
             context.user_data[PROFILE_MODEL_KEY] = model
             context.user_data[PROFILE_FAST_MODE_KEY] = False
+            context.user_data[PROFILE_PERMISSION_MODE_KEY] = "ask"
             context.user_data[PROFILE_EFFORT_KEY] = _resolve_profile_effort(
                 agent_type,
                 model,
@@ -7435,6 +7452,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[PROFILE_FAST_MODE_KEY] = fast_mode
         await _show_agent_profile_settings(query, context)
         await query.answer("Fast mode updated")
+
+    elif data.startswith(CB_PROFILE_PERMISSION):
+        pending_tid = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
+        if pending_tid is not None and _get_thread_id(update) != pending_tid:
+            await query.answer("Stale picker (topic mismatch)", show_alert=True)
+            return
+        permission_mode = data[len(CB_PROFILE_PERMISSION) :]
+        if permission_mode not in {"ask", "full"}:
+            await query.answer("Invalid permission mode", show_alert=True)
+            return
+        if context.user_data is not None:
+            context.user_data[PROFILE_PERMISSION_MODE_KEY] = permission_mode
+        await _show_agent_profile_settings(query, context)
+        await query.answer("Permission mode updated")
 
     elif data == CB_PROFILE_CONFIRM:
         pending_tid = (
@@ -7771,6 +7804,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "model": profile.model,
             "reasoning_effort": profile.reasoning_effort,
             "fast_mode": profile.fast_mode,
+            "permission_mode": profile.permission_mode,
         }
         if selected_node_id:
             create_kwargs["node_id"] = selected_node_id
@@ -7841,6 +7875,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data.pop(PROFILE_MODEL_KEY, None)
             context.user_data.pop(PROFILE_EFFORT_KEY, None)
             context.user_data.pop(PROFILE_FAST_MODE_KEY, None)
+            context.user_data.pop(PROFILE_PERMISSION_MODE_KEY, None)
             context.user_data.pop(PROFILE_MODELS_KEY, None)
         await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")

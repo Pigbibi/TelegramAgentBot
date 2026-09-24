@@ -55,6 +55,7 @@ from .callback_data import (
     CB_PROFILE_EFFORT,
     CB_PROFILE_FAST,
     CB_PROFILE_MODEL,
+    CB_PROFILE_PERMISSION,
     CB_WIN_BIND,
     CB_WIN_CANCEL,
     CB_WIN_NEW,
@@ -85,6 +86,7 @@ PROFILE_AGENT_KEY = "profile_agent"
 PROFILE_MODEL_KEY = "profile_model"
 PROFILE_EFFORT_KEY = "profile_effort"
 PROFILE_FAST_MODE_KEY = "profile_fast_mode"
+PROFILE_PERMISSION_MODE_KEY = "profile_permission_mode"
 PROFILE_MODELS_KEY = "profile_models"
 
 
@@ -132,6 +134,7 @@ def clear_profile_picker_state(user_data: dict | None) -> None:
             PROFILE_MODEL_KEY,
             PROFILE_EFFORT_KEY,
             PROFILE_FAST_MODE_KEY,
+            PROFILE_PERMISSION_MODE_KEY,
             PROFILE_MODELS_KEY,
         ):
             user_data.pop(key, None)
@@ -185,6 +188,11 @@ def build_profile_picker(
                 f"Fast mode: `{profile.fast_label}`",
             ]
         )
+    lines.append(f"Permissions: `{profile.permission_label}`")
+    if profile.permission_mode == "full":
+        lines.append(
+            "⚠️ Full access skips agent approval prompts; VPS account limits still apply."
+        )
     lines.append("\nChoose model and settings, then create:")
     buttons: list[list[InlineKeyboardButton]] = []
     for index, model in enumerate(models):
@@ -236,6 +244,17 @@ def build_profile_picker(
                 )
             ]
         )
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                f"🔐 Permissions: {profile.permission_label}",
+                callback_data=(
+                    f"{CB_PROFILE_PERMISSION}"
+                    f"{'ask' if profile.permission_mode == 'full' else 'full'}"
+                ),
+            )
+        ]
+    )
     buttons.append(
         [InlineKeyboardButton("✅ Create session", callback_data=CB_PROFILE_CONFIRM)]
     )

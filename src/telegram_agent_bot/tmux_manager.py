@@ -33,6 +33,8 @@ from .agent_profile import (
     AGENT_CODEX,
     AGENT_CURSOR,
     AgentProfile,
+    PERMISSION_ASK,
+    PERMISSION_FULL,
     agent_capabilities,
     normalize_agent_type,
 )
@@ -59,6 +61,11 @@ _WAITING_BACKGROUND_RE = re.compile(
     r"^[•◦]\s*Waiting for background terminal\b", re.IGNORECASE
 )
 _HOOK_TRUST_BYPASS_FLAG = "--dangerously-bypass-hook-trust"
+_PERMISSION_BYPASS_FLAGS = (
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--dangerously-skip-permissions",
+    "--force",
+)
 _SUBMIT_SETTLE_CHECKS = 8
 _SUBMIT_SETTLE_INTERVAL_SECONDS = 0.5
 _SOCKET_PATH_LOCK = threading.Lock()
@@ -168,6 +175,34 @@ def _agent_command_for_launch(
     elif profile.reasoning_effort:
         if profile.agent_type == AGENT_CODEX:
             cmd = f'{cmd} -c model_reasoning_effort="{profile.reasoning_effort}"'
+    if profile.permission_mode == PERMISSION_ASK:
+        for flag in _PERMISSION_BYPASS_FLAGS:
+            cmd = re.sub(rf"(?<!\S){re.escape(flag)}(?=\s|$)", "", cmd)
+        if profile.agent_type == AGENT_CURSOR:
+            cmd = re.sub(r"(?<!\S)-f(?=\s|$)", "", cmd)
+        cmd = cmd.strip()
+
+    if profile.permission_mode == PERMISSION_FULL:
+        if profile.agent_type == AGENT_CODEX:
+            if "--dangerously-bypass-approvals-and-sandbox" not in cmd.split():
+                cmd = f"{cmd} --dangerously-bypass-approvals-and-sandbox"
+        elif profile.agent_type in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
+            if "--dangerously-skip-permissions" not in cmd.split():
+                cmd = f"{cmd} --dangerously-skip-permissions"
+        elif profile.agent_type == AGENT_CURSOR:
+            if "--force" not in cmd.split():
+                cmd = f"{cmd} --force"
+    elif (
+        profile.permission_mode == PERMISSION_ASK and profile.agent_type == AGENT_CODEX
+    ):
+        # Explicitly override a VPS-wide full-access Codex config for sessions
+        # where the Telegram user keeps the safer per-session default.
+        cmd = f"{cmd} --sandbox workspace-write --ask-for-approval on-request"
+    elif profile.permission_mode == PERMISSION_ASK and profile.agent_type in {
+        AGENT_CLAUDE,
+        AGENT_CLAUDE_OFFICIAL,
+    }:
+        cmd = f"{cmd} --permission-mode default"
     if agent_capabilities(profile.agent_type).loads_claude_env:
         env_file = getattr(config, "claude_env_file", None)
         if isinstance(env_file, Path) and env_file.is_file():
@@ -941,6 +976,7 @@ class TmuxManager:
         model: str | None = None,
         reasoning_effort: str | None = None,
         fast_mode: bool = False,
+        permission_mode: str = PERMISSION_ASK,
     ) -> tuple[bool, str, str, str]:
         """Create a new tmux window and optionally start Codex.
 
@@ -958,6 +994,7 @@ class TmuxManager:
             model=(model or "").strip(),
             reasoning_effort=reasoning_effort or "",
             fast_mode=fast_mode,
+            permission_mode=permission_mode,
         )
         command_override = (
             config.codex_command
