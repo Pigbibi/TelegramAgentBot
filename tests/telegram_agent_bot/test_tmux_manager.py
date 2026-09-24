@@ -332,6 +332,45 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_create_window_uses_cursor_resume_flag_and_model(self) -> None:
+        pane = _DummyPane()
+        window = _DummyWindow(pane)
+        session = _DummySession(window)
+        manager = tmux_manager_module.TmuxManager(
+            session_name="telegram-agent-bot-test"
+        )
+
+        with tempfile.TemporaryDirectory(
+            prefix="telegram-agent-bot-workdir-"
+        ) as tmpdir:
+            with (
+                patch.object(
+                    manager, "find_window_by_name", AsyncMock(return_value=None)
+                ),
+                patch.object(manager, "get_or_create_session", return_value=session),
+                patch.object(tmux_manager_module.config, "cursor_command", "agent"),
+            ):
+                ok, _msg, _window_name, window_id = await manager.create_window(
+                    tmpdir,
+                    window_name="Projects",
+                    resume_session_id="cursor-chat-id",
+                    agent_type="cursor",
+                    model="auto",
+                )
+
+        self.assertTrue(ok)
+        self.assertEqual(window_id, "@9")
+        self.assertEqual(
+            pane.commands,
+            [
+                (
+                    "export TELEGRAM_AGENT_BOT_AGENT_TYPE=cursor; "
+                    "agent --model auto --resume cursor-chat-id",
+                    True,
+                )
+            ],
+        )
+
 
 class _SendKeysDummyPane:
     def __init__(self) -> None:

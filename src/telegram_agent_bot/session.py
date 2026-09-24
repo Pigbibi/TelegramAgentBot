@@ -1275,6 +1275,72 @@ class SessionManager:
                 return True
         return False
 
+    @staticmethod
+    def _transcript_tail_contains_resume_ready(
+        file_path: Path, *, after_offset: int
+    ) -> bool:
+        """Check for Codex's post-resume settings event after the saved cursor."""
+        try:
+            with file_path.open("rb") as transcript:
+                transcript.seek(0, 2)
+                size = transcript.tell()
+                if size <= after_offset:
+                    return False
+                start = max(0, after_offset - 8192, size - 262_144)
+                transcript.seek(start)
+                raw = transcript.read()
+        except OSError:
+            return False
+
+        line_start = start
+        for encoded_line in raw.splitlines(keepends=True):
+            line_end = line_start + len(encoded_line)
+            if line_end <= after_offset:
+                line_start = line_end
+                continue
+            line_start = line_end
+            try:
+                data = json.loads(encoded_line)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            payload = data.get("payload")
+            if (
+                data.get("type") == "event_msg"
+                and isinstance(payload, dict)
+                and payload.get("type") == "thread_settings_applied"
+            ):
+                return True
+        return False
+
+    async def wait_for_transcript_resume_ready(
+        self,
+        session_id: str,
+        cwd: str,
+        *,
+        account_name: str = "",
+        after_offset: int | None,
+        timeout: float = 30.0,
+        interval: float = 0.5,
+    ) -> bool:
+        """Wait for a resumed Codex TUI to finish restoring before sending text."""
+        if after_offset is None:
+            return False
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            file_path = self._find_session_file(
+                session_id, cwd, account_name=account_name
+            )
+            if file_path and await asyncio.to_thread(
+                self._transcript_tail_contains_resume_ready,
+                file_path,
+                after_offset=after_offset,
+            ):
+                return True
+            await asyncio.sleep(interval)
+        return False
+
     async def wait_for_transcript_user_message(
         self,
         window_id: str,
