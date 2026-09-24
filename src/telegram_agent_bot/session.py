@@ -1256,7 +1256,8 @@ class SessionManager:
                 data = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            user_text = _extract_user_text(data)
+            normalized = TranscriptParser.parse_line(line)
+            user_text = _extract_user_text(normalized or data)
             if user_text and cls._user_text_matches(user_text, expected_text):
                 return True
         return False

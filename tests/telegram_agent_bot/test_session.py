@@ -470,6 +470,26 @@ class TestTranscriptConfirmation:
             "hello from telegram",
         )
 
+    def test_transcript_tail_confirms_cursor_user_message(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "cursor-session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "role": "user",
+                    "message": {
+                        "content": [{"type": "text", "text": "hello from telegram"}]
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        assert SessionManager._transcript_tail_contains_user_text(
+            transcript,
+            "hello from telegram",
+        )
+
     def test_transcript_confirmation_ignores_matching_text_before_cursor(
         self, tmp_path: Path
     ) -> None:
