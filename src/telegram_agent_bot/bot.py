@@ -1104,9 +1104,14 @@ def _profile_from_context(user_data: dict | None) -> AgentProfile:
     )
     model = user_data.get(PROFILE_MODEL_KEY, "") if user_data else ""
     fast_mode = user_data.get(PROFILE_FAST_MODE_KEY, False) if user_data else False
+    default_permission = _default_profile_permission(normalized)
     permission_mode = (
-        user_data.get(PROFILE_PERMISSION_MODE_KEY, "ask") if user_data else "ask"
+        user_data.get(PROFILE_PERMISSION_MODE_KEY, default_permission)
+        if user_data
+        else default_permission
     )
+    if normalized == AGENT_CURSOR and config.cursor_permission_mode == "full":
+        permission_mode = "full"
     return AgentProfile(
         agent_type=normalized,
         model=model if isinstance(model, str) else "",
@@ -1120,6 +1125,14 @@ def _profile_from_context(user_data: dict | None) -> AgentProfile:
             permission_mode if isinstance(permission_mode, str) else "ask"
         ),
     )
+
+
+def _default_profile_permission(agent_type: str) -> str:
+    if agent_type in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
+        return config.claude_default_permission_mode
+    if agent_type == AGENT_CURSOR:
+        return config.cursor_permission_mode
+    return "ask"
 
 
 async def _show_agent_profile_picker(
@@ -7370,7 +7383,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[PROFILE_AGENT_KEY] = agent_type
             context.user_data[PROFILE_MODEL_KEY] = model
             context.user_data[PROFILE_FAST_MODE_KEY] = False
-            context.user_data[PROFILE_PERMISSION_MODE_KEY] = "ask"
+            context.user_data[PROFILE_PERMISSION_MODE_KEY] = (
+                _default_profile_permission(agent_type)
+            )
             context.user_data[PROFILE_EFFORT_KEY] = _resolve_profile_effort(
                 agent_type,
                 model,
@@ -7463,6 +7478,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         permission_mode = data[len(CB_PROFILE_PERMISSION) :]
         if permission_mode not in {"ask", "full"}:
             await query.answer("Invalid permission mode", show_alert=True)
+            return
+        if (
+            context.user_data is not None
+            and context.user_data.get(PROFILE_AGENT_KEY) == AGENT_CURSOR
+            and config.cursor_permission_mode == "full"
+            and permission_mode == "ask"
+        ):
+            await query.answer("Cursor uses VPS-wide full access", show_alert=True)
             return
         if context.user_data is not None:
             context.user_data[PROFILE_PERMISSION_MODE_KEY] = permission_mode

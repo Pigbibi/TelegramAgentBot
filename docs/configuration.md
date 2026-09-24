@@ -46,6 +46,8 @@ chmod 600 ~/.telegram-agent-bot/.env
 | `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex` | Default agent: `codex`, `claude`, `claudeofficial`, or `cursor` |
 | `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | `codex` | Command used to start Codex |
 | `TELEGRAM_AGENT_BOT_CLAUDE_COMMAND` | `claude` | Command used to start Claude Code |
+| `TELEGRAM_AGENT_BOT_CLAUDE_DEFAULT_PERMISSION_MODE` | `ask` | Default permission choice for new Claude Code API and official-subscription topics; `full` adds `--dangerously-skip-permissions` |
+| `TELEGRAM_AGENT_BOT_CURSOR_PERMISSION_MODE` | `ask` | Cursor permission choice for new topics; `full` locks the picker to Full access and adds `--force` |
 | `TELEGRAM_AGENT_BOT_CODEX_MODEL` | `gpt-5.4-mini` | Default Codex model for new topics; `auto` follows the account's current Codex default |
 | `TELEGRAM_AGENT_BOT_CLAUDE_MODEL` | `deepseek-v4-flash` | Default Claude Code model shown for new topics |
 | `TELEGRAM_AGENT_BOT_CODEX_MODELS` | automatic | Comma-separated model picker override |
@@ -60,6 +62,11 @@ sets the initial default. `claude` is Claude Code API mode and may load
 `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` for a provider such as DeepSeek.
 `claudeofficial` is Claude Code's official subscription mode and deliberately
 skips that file so its official login and model defaults remain authoritative.
+Permission settings affect new sessions only. Existing tmux sessions keep their
+current mode. Use `TELEGRAM_AGENT_BOT_CURSOR_PERMISSION_MODE=full` when the VPS-wide
+Cursor CLI is set to unrestricted, so the Telegram picker matches its effective
+permissions. Claude Code still lets the user choose Ask first for a new topic;
+that choice explicitly overrides a full-access user-level CLI default.
 
 Automatic model discovery keeps the configured default available if discovery
 fails. Set an explicit comma-separated list when a gateway uses custom aliases
