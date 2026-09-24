@@ -365,6 +365,23 @@ class TestExtractInteractiveContent:
         assert "Run this command?" in result.content
         assert "Run (once)" in result.content
 
+    def test_cursor_allowlist_command_approval_prompt_is_interactive(self):
+        pane = (
+            " Run this command?\n"
+            " Not in allowlist: head\n"
+            "  → Run (once) (y)\n"
+            "    Add Shell(head) to allowlist? (tab)\n"
+            "    Run Everything (shift+tab)\n"
+            "    Skip & tell the agent what to do instead (esc or n)\n"
+        )
+
+        result = extract_interactive_content(pane)
+
+        assert result is not None
+        assert result.name == "CursorCommandApproval"
+        assert "Run Everything" in result.content
+        assert is_interactive_ui(pane)
+
     def test_codex_edit_approval_prompt(self):
         pane = (
             "  Would you like to make the following edits?\n"
