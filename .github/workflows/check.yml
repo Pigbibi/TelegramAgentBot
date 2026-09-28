@@ -27,3 +27,16 @@ jobs:
         run: uv run pyright src/telegram_agent_bot/
       - name: Test
         run: uv run pytest --tb=short -q
+  test-summary:
+    # Stable name for the required status check: the matrix above expands into
+    # "check (3.12)" / "check (3.13)", which change whenever the matrix changes.
+    needs: check
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every matrix job to pass
+        env:
+          CHECK_RESULT: ${{ needs.check.result }}
+        run: |
+          echo "check result: $CHECK_RESULT"
+          test "$CHECK_RESULT" = "success"
