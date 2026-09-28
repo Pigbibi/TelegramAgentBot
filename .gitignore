@@ -72,6 +72,7 @@ venv.bak/
 .uv/
 uv.lock
 .claude/
+AGENTS.md
 .ruff_cache/
 *.log
 
