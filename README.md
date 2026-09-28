@@ -1,6 +1,6 @@
 # TelegramAgentBot
 
-[简体中文](README_CN.md)
+[简体中文](README.zh-CN.md)
 
 TelegramAgentBot connects Telegram forum topics to agent sessions running in tmux. You can start a project, resume a session, send prompts and files, answer interactive questions, and follow the agent's public output from Telegram. The same session remains available in the terminal.
 
