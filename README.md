@@ -101,3 +101,5 @@ A successful doctor check describes routing state; it does not confirm that an a
 To work on the code, run `uv sync --extra dev` and follow [Contributing](CONTRIBUTING.md). For help or vulnerability reports, see [Support](SUPPORT.md) and [Security](SECURITY.md).
 
 Licensed under [MIT](LICENSE). Bundled fonts retain their licenses in `src/telegram_agent_bot/fonts/`.
+
+[Project scope and operating reference](docs/project-reference.md).
