@@ -15,6 +15,7 @@ from telegram_agent_bot.handlers.callback_data import (
     CB_PROFILE_AGENT,
     CB_PROFILE_CONFIRM,
     CB_PROFILE_EFFORT,
+    CB_PROFILE_MODEL,
     CB_SESSION_NEW,
     CB_SESSION_SELECT,
 )
@@ -149,6 +150,48 @@ async def test_profile_rejects_effort_not_supported_by_selected_model():
 
 
 class TestSessionPickerIsolation:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("thread_id", [11, 22])
+    async def test_profile_model_selection_respects_pending_topic(self, thread_id):
+        update, query = _make_callback_update(f"{CB_PROFILE_MODEL}1", thread_id)
+        update.message = None
+        context = _make_context()
+        context.user_data = {
+            "_pending_thread_id": 22,
+            PROFILE_AGENT_KEY: "codex",
+            PROFILE_MODEL_KEY: "original-model",
+            PROFILE_MODELS_KEY: ["original-model", "selected-model"],
+            PROFILE_EFFORT_KEY: "medium",
+        }
+        original_state = context.user_data.copy()
+
+        with (
+            patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
+            patch("telegram_agent_bot.bot.session_manager"),
+            patch(
+                "telegram_agent_bot.bot._resolve_profile_effort", return_value="high"
+            ),
+            patch(
+                "telegram_agent_bot.bot._show_agent_profile_settings",
+                new_callable=AsyncMock,
+            ) as show_settings,
+        ):
+            from telegram_agent_bot.bot import callback_handler
+
+            await callback_handler(update, context)
+
+        if thread_id == 22:
+            assert context.user_data[PROFILE_MODEL_KEY] == "selected-model"
+            assert context.user_data[PROFILE_EFFORT_KEY] == "high"
+            show_settings.assert_awaited_once_with(query, context)
+            query.answer.assert_awaited_once_with("Model selected")
+        else:
+            assert context.user_data == original_state
+            show_settings.assert_not_awaited()
+            query.answer.assert_awaited_once_with(
+                "Stale picker (topic mismatch)", show_alert=True
+            )
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "callback_data",
