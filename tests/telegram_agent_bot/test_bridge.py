@@ -218,51 +218,6 @@ def test_build_orchestrator_message_includes_monthly_contract() -> None:
     assert "@ops" in text
 
 
-def test_dispatch_to_tmux_uses_paste_buffer(monkeypatch) -> None:
-    calls: list[tuple[list[str], bytes | None]] = []
-
-    def fake_run(
-        argv, *, input=None, check=None, capture_output=None, text=None, timeout=None
-    ):
-        calls.append((list(argv), input if isinstance(input, bytes) else None))
-
-        class Result:
-            returncode = 0
-            stdout = ""
-
-        return Result()
-
-    monkeypatch.setattr("telegram_agent_bot.bridge.subprocess.run", fake_run)
-
-    dispatch_to_tmux("@1", "hello\nworld\n", socket_name="telegram-agent-bot")
-
-    assert calls[0][0][:4] == ["tmux", "-L", "telegram-agent-bot", "list-panes"]
-    assert calls[1][0][:4] == ["tmux", "-L", "telegram-agent-bot", "load-buffer"]
-    assert calls[2][0][:4] == ["tmux", "-L", "telegram-agent-bot", "paste-buffer"]
-    assert calls[3][0][:4] == ["tmux", "-L", "telegram-agent-bot", "send-keys"]
-    assert calls[3][0][-1] == "C-m"
-
-
-def test_dispatch_to_tmux_raises_when_target_missing(monkeypatch) -> None:
-    def fake_run(
-        argv, *, input=None, check=None, capture_output=None, text=None, timeout=None
-    ):
-        class Result:
-            stdout = ""
-            returncode = 1 if "list-panes" in argv else 0
-
-        return Result()
-
-    monkeypatch.setattr("telegram_agent_bot.bridge.subprocess.run", fake_run)
-
-    try:
-        dispatch_to_tmux("Ubuntu", "hello\n", socket_name="telegram-agent-bot")
-    except TmuxTargetNotFoundError as exc:
-        assert "Ubuntu" in str(exc)
-    else:
-        raise AssertionError("expected missing tmux target")
-
-
 def test_process_target_skips_duplicate_issue(monkeypatch, tmp_path: Path) -> None:
     target = BridgeTarget(name="alpha", repo="owner/repo", window="@1")
     cfg = BridgeConfig(targets=[target])
@@ -526,3 +481,17 @@ def test_process_orchestrator_fetches_full_issue_payload(monkeypatch) -> None:
     assert dispatched is True
     assert "owner/repo-a" in sent[0][1]
     assert "@ops" in sent[0][1]
+
+
+def test_retired_bridge_never_runs_tmux(monkeypatch):
+    from unittest.mock import Mock
+
+    run = Mock()
+    monkeypatch.setattr("telegram_agent_bot.bridge.subprocess.run", run)
+    try:
+        dispatch_to_tmux("Ubuntu", "untrusted issue")
+    except TmuxTargetNotFoundError as exc:
+        assert "retired" in str(exc)
+    else:
+        raise AssertionError("retired dispatch must refuse")
+    run.assert_not_called()
