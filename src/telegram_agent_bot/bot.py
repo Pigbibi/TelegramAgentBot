@@ -271,7 +271,7 @@ from .terminal_parser import (
 from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .transcribe import TranscriptionError, close_client as close_transcribe_client
-from .transcribe import transcribe_voice
+from .transcribe import transcribe_voice, validate_voice_duration
 from .turn_admission import turn_admission
 from .update_processor import TopicUpdateProcessor
 from .updater import (
@@ -5247,6 +5247,13 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not update.message or not update.message.voice:
         return
 
+    duration_seconds = getattr(update.message.voice, "duration", None)
+    try:
+        validate_voice_duration(duration_seconds)
+    except TranscriptionError as exc:
+        await safe_reply(update.message, f"⚠ {exc}")
+        return
+
     if (
         not config.transcription_openai_api_key
         and not config.transcription_google_api_key
@@ -5292,7 +5299,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Transcribe
     try:
-        text = await transcribe_voice(ogg_data)
+        text = await transcribe_voice(ogg_data, duration_seconds=duration_seconds)
     except TranscriptionError as e:
         await safe_reply(update.message, f"⚠ {e}")
         return

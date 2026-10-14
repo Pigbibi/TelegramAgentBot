@@ -546,6 +546,7 @@ async def test_voice_prompt_recreates_working_status_after_transcript_reply():
     context = _make_context()
 
     voice = MagicMock()
+    voice.duration = 2
     tg_file = MagicMock()
     tg_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"voice"))
     voice.get_file = AsyncMock(return_value=tg_file)
@@ -618,3 +619,25 @@ async def test_voice_prompt_recreates_working_status_after_transcript_reply():
     assert safe_reply.await_args.args[1].endswith('"transcribed text"')
     mark_window_working.assert_awaited_once_with(context.bot, 12345, "@1", 42)
     assert events == ["clear", "reply", "working"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("duration", [None, 121])
+async def test_voice_cap_rejects_before_download(duration):
+    from telegram_agent_bot.bot import voice_handler
+
+    update = MagicMock()
+    update.effective_user.id = 12345
+    update.message.voice.duration = duration
+    update.message.voice.get_file = AsyncMock()
+    with (
+        patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
+        patch("telegram_agent_bot.bot.safe_reply", new_callable=AsyncMock) as reply,
+        patch(
+            "telegram_agent_bot.bot.transcribe_voice", new_callable=AsyncMock
+        ) as transcribe,
+    ):
+        await voice_handler(update, MagicMock())
+    update.message.voice.get_file.assert_not_awaited()
+    transcribe.assert_not_awaited()
+    reply.assert_awaited_once()

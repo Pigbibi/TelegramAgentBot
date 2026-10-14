@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import math
 from collections.abc import Awaitable, Callable
 
 import httpx
@@ -99,13 +100,32 @@ _PROVIDERS: dict[str, Callable[[bytes], Awaitable[str]]] = {
 }
 
 
-async def transcribe_voice(ogg_data: bytes) -> str:
+def validate_voice_duration(duration_seconds: int | float | None) -> None:
+    """Reject unknown or excessive duration before download/provider failover."""
+    cap = config.transcription_max_duration_seconds
+    if (
+        type(cap) is not int
+        or cap <= 0
+        or not isinstance(duration_seconds, (int, float))
+        or isinstance(duration_seconds, bool)
+        or not math.isfinite(duration_seconds)
+        or not 0 < duration_seconds <= cap
+    ):
+        raise TranscriptionError(
+            "Voice duration is unknown or exceeds the transcription limit."
+        )
+
+
+async def transcribe_voice(
+    ogg_data: bytes, *, duration_seconds: int | float | None = None
+) -> str:
     """Transcribe OGG voice data to text.
 
     Tries each configured provider in order. On failure, logs and
     attempts the next provider. Raises TranscriptionError when all
     providers are exhausted.
     """
+    validate_voice_duration(duration_seconds)
     if not config.transcription_providers:
         raise TranscriptionError("No transcription providers configured")
 

@@ -51,7 +51,7 @@ See [Deployment](docs/deployment.md) for macOS startup, Linux lingering, upgrade
 | Agent | Login and configuration | Input while a turn is running |
 | --- | --- | --- |
 | Codex | Authenticate the `codex` CLI | Guide the turn or queue the next one in the CLI |
-| Claude Code API (`claude`) | Configure the owner-only `claude.env` for a compatible provider | Guide the turn; later input waits in AgentBot's durable queue |
+| Claude Code API (`claude`) | Configure the owner-only `claude.env` for the Anthropic API and [explicit budgets](docs/claude-api-limits.md) | Guide the turn; later input waits in AgentBot's durable queue |
 | Claude Code official (`claudeofficial`) | Use the `claude` CLI's own login, without `claude.env` | Guide the turn; later input waits in AgentBot's durable queue |
 | Cursor Agent (`cursor`) | Run `agent login` as the service user | Guide the turn or queue the next one in the CLI |
 
@@ -91,6 +91,10 @@ telegram-agent-bot doctor --json
 ```
 
 A successful doctor check describes routing state; it does not confirm that an agent task finished. For logs and recovery steps, see [Deployment](docs/deployment.md#troubleshooting).
+
+API-backed Claude sessions require explicit daily budget configuration and use a
+guarded print-session adapter. See [Claude API and voice limits](docs/claude-api-limits.md)
+for defaults, accounting failures, and provider/CLI limitations.
 
 ## Documentation and development
 
