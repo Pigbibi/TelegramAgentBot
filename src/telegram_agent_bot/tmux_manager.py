@@ -27,15 +27,12 @@ from pathlib import Path
 
 import libtmux
 
-from .account_manager import disable_codex_update_prompt, ensure_account_home
+from .account_manager import ensure_account_home
 from .agent_profile import (
     AGENT_CLAUDE,
     AGENT_CLAUDE_OFFICIAL,
-    AGENT_CODEX,
-    AGENT_CURSOR,
     AgentProfile,
     PERMISSION_ASK,
-    PERMISSION_FULL,
     agent_capabilities,
     normalize_agent_type,
 )
@@ -61,12 +58,7 @@ _ACTIVE_WORKING_RE = re.compile(
 _WAITING_BACKGROUND_RE = re.compile(
     r"^[•◦]\s*Waiting for background terminal\b", re.IGNORECASE
 )
-_HOOK_TRUST_BYPASS_FLAG = "--dangerously-bypass-hook-trust"
 _AGENT_PERMISSION_OPTIONS = {
-    AGENT_CODEX: (
-        ("-s", "--sandbox", "-a", "--ask-for-approval"),
-        ("--dangerously-bypass-approvals-and-sandbox",),
-    ),
     AGENT_CLAUDE: (
         ("--permission-mode",),
         ("--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"),
@@ -75,7 +67,6 @@ _AGENT_PERMISSION_OPTIONS = {
         ("--permission-mode",),
         ("--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"),
     ),
-    AGENT_CURSOR: ((), ("-f", "--force", "--yolo")),
 }
 _SUBMIT_SETTLE_CHECKS = 8
 _SUBMIT_SETTLE_INTERVAL_SECONDS = 0.5
@@ -192,53 +183,24 @@ def _agent_command_for_launch(
     command_override: str | None = None,
     export_agent_type: bool = False,
 ) -> str:
-    """Return the configured agent command with optional hook-trust bypass.
-
-    Supports Codex, Claude Code, and Cursor Agent CLIs.
-    """
+    """Launch only Claude with normal permission prompts and existing API caps."""
     profile = profile or AgentProfile(agent_type=config.agent_type)
-    codex_command = getattr(config, "codex_cli_command", config.codex_command)
-    configured_command = {
-        AGENT_CLAUDE: config.claude_command,
-        AGENT_CLAUDE_OFFICIAL: config.claude_command,
-        AGENT_CURSOR: config.cursor_command,
-    }.get(profile.agent_type, codex_command)
-    cmd = command_override or configured_command
-    cmd = _strip_agent_permission_options(cmd, profile.agent_type)
+    if profile.agent_type not in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
+        raise ValueError("Codex/Cursor CLI execution is retired")
+    if profile.permission_mode != PERMISSION_ASK:
+        raise ValueError("Approval bypass mode is retired")
+    cmd = _strip_agent_permission_options(
+        command_override or config.claude_command, profile.agent_type
+    )
+    parts = shlex.split(cmd)
+    if not parts or Path(parts[0]).name != "claude":
+        raise ValueError("Only the Claude executable is supported")
+    cmd = shlex.join(parts)
     if profile.model:
         cmd = f"{cmd} --model {shlex.quote(profile.model)}"
-    if (
-        profile.agent_type in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}
-        and profile.reasoning_effort
-    ):
+    if profile.reasoning_effort:
         cmd = f"{cmd} --effort {shlex.quote(profile.reasoning_effort)}"
-    elif profile.reasoning_effort:
-        if profile.agent_type == AGENT_CODEX:
-            cmd = f'{cmd} -c model_reasoning_effort="{profile.reasoning_effort}"'
-    if profile.permission_mode == PERMISSION_ASK:
-        cmd = cmd.strip()
-
-    if profile.permission_mode == PERMISSION_FULL:
-        if profile.agent_type == AGENT_CODEX:
-            if "--dangerously-bypass-approvals-and-sandbox" not in cmd.split():
-                cmd = f"{cmd} --dangerously-bypass-approvals-and-sandbox"
-        elif profile.agent_type in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
-            if "--dangerously-skip-permissions" not in cmd.split():
-                cmd = f"{cmd} --dangerously-skip-permissions"
-        elif profile.agent_type == AGENT_CURSOR:
-            if "--force" not in cmd.split():
-                cmd = f"{cmd} --force"
-    elif (
-        profile.permission_mode == PERMISSION_ASK and profile.agent_type == AGENT_CODEX
-    ):
-        # Explicitly override a VPS-wide full-access Codex config for sessions
-        # where the Telegram user keeps the safer per-session default.
-        cmd = f"{cmd} --sandbox workspace-write --ask-for-approval on-request"
-    elif profile.permission_mode == PERMISSION_ASK and profile.agent_type in {
-        AGENT_CLAUDE,
-        AGENT_CLAUDE_OFFICIAL,
-    }:
-        cmd = f"{cmd} --permission-mode default"
+    cmd = f"{cmd} --permission-mode default"
     if profile.agent_type == AGENT_CLAUDE:
         limits = []
         for name, default in (
@@ -271,21 +233,7 @@ def _agent_command_for_launch(
             cmd = f"set -a; . {shlex.quote(str(env_file))}; set +a; {cmd}"
     if export_agent_type:
         cmd = f"export TELEGRAM_AGENT_BOT_AGENT_TYPE={profile.agent_type}; {cmd}"
-    if not getattr(config, "codex_bypass_hook_trust", False):
-        return cmd
-    try:
-        parts = shlex.split(cmd)
-    except ValueError:
-        logger.warning("Unable to parse command for hook-trust flag injection")
-        return cmd
-    if _HOOK_TRUST_BYPASS_FLAG in parts:
-        return cmd
-    first_exe = _first_command_executable(parts)
-    # This flag is Codex-specific; Claude Code uses a different permission flag
-    # with broader semantics, so do not inject it for Claude mode.
-    if agent_capabilities(profile.agent_type).uses_claude_home or first_exe != "codex":
-        return cmd
-    return f"{cmd} {_HOOK_TRUST_BYPASS_FLAG}"
+    return cmd
 
 
 @dataclass
@@ -573,8 +521,20 @@ class TmuxManager:
                 return True
         return False
 
+    @staticmethod
+    def _window_accepts_input(window_id: str) -> bool:
+        from .session import session_manager
+
+        state = session_manager.window_states.get(window_id)
+        return state is not None and state.agent_type in {
+            AGENT_CLAUDE,
+            AGENT_CLAUDE_OFFICIAL,
+        }
+
     def _send_control_key_sync(self, window_id: str, key: str) -> bool:
         """Send one tmux control key to a window."""
+        if not self._window_accepts_input(window_id):
+            return False
         cmd = [*self._tmux_cli_prefix(), "send-keys", "-t", window_id, key]
         try:
             result = subprocess.run(
@@ -829,6 +789,8 @@ class TmuxManager:
         Returns:
             True if successful, False otherwise
         """
+        if not self._window_accepts_input(window_id):
+            return False
         if literal and enter:
             if submit_key not in {"Enter", "Tab"}:
                 raise ValueError(f"Unsupported submit key: {submit_key}")
@@ -1058,11 +1020,12 @@ class TmuxManager:
             fast_mode=fast_mode,
             permission_mode=permission_mode,
         )
-        command_override = (
-            config.codex_command
-            if agent_type is None and profile.agent_type != AGENT_CURSOR
-            else None
-        )
+        if (
+            profile.agent_type not in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}
+            or profile.permission_mode != PERMISSION_ASK
+        ):
+            return False, "Selected CLI or approval bypass is retired", "", ""
+        command_override = None
 
         # Validate directory first
         path = Path(work_dir).expanduser().resolve()
@@ -1098,8 +1061,6 @@ class TmuxManager:
 
                 # Start the agent (Codex or Claude) if requested
                 if start_codex:
-                    if not account_name and profile.agent_type == AGENT_CODEX:
-                        disable_codex_update_prompt()
                     pane = window.active_pane
                     if pane:
                         cmd = _agent_command_for_launch(
@@ -1110,14 +1071,7 @@ class TmuxManager:
                         if resume_session_id:
                             resume_target = _resume_target_id(resume_session_id)
                             resume_arg = shlex.quote(resume_target)
-                            if profile.agent_type in {
-                                AGENT_CLAUDE,
-                                AGENT_CLAUDE_OFFICIAL,
-                                AGENT_CURSOR,
-                            }:
-                                cmd = f"{cmd} --resume {resume_arg}"
-                            else:
-                                cmd = f"{cmd} resume {resume_arg}"
+                            cmd = f"{cmd} --resume {resume_arg}"
                         if account_name:
                             capabilities = agent_capabilities(profile.agent_type)
                             if not capabilities.supports_account_snapshots:
@@ -1130,14 +1084,6 @@ class TmuxManager:
                                 )
                                 cmd = (
                                     f"export HOME={shlex.quote(str(account_home))}; "
-                                    f"{cmd}"
-                                )
-                            else:
-                                account_home = ensure_account_home(
-                                    account_name, profile.agent_type
-                                )
-                                cmd = (
-                                    f"export CODEX_HOME={shlex.quote(str(account_home))}; "
                                     f"{cmd}"
                                 )
                         pane.send_keys(cmd, enter=True)

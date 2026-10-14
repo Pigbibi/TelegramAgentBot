@@ -13,7 +13,6 @@ from telegram_agent_bot.agent_profile import (
 )
 from telegram_agent_bot.config import _permission_mode_env, config
 from telegram_agent_bot.handlers.directory_browser import (
-    build_agent_picker,
     build_profile_picker,
 )
 from telegram_agent_bot.tmux_manager import _agent_command_for_launch
@@ -66,29 +65,6 @@ def test_cursor_agent_alias_uses_cursor_profile_without_reasoning_override():
 
     assert profile.agent_type == "cursor"
     assert profile.display_name == "Cursor Agent"
-
-
-def test_cursor_picker_omits_unsupported_reasoning_and_fast_controls():
-    text, keyboard = build_profile_picker(AgentProfile(agent_type="cursor"), [])
-
-    assert "Reasoning:" not in text
-    assert "Fast mode:" not in text
-    assert "Permissions: `Ask first`" in text
-    assert [button.text for row in keyboard.inline_keyboard for button in row] == [
-        "🔐 Permissions: Ask first",
-        "✅ Create session",
-        "Cancel",
-    ]
-    _picker_text, picker_keyboard = build_agent_picker()
-    assert "🔵 Cursor Agent" in [
-        button.text for row in picker_keyboard.inline_keyboard for button in row
-    ]
-    assert len(picker_keyboard.inline_keyboard[0]) == 2
-    assert len(picker_keyboard.inline_keyboard[1]) == 2
-    assert [button.text for button in picker_keyboard.inline_keyboard[1]] == [
-        "🟣 Claude Code API",
-        "🟣 Claude Code Official Subscription",
-    ]
 
 
 def test_fast_is_no_longer_a_reasoning_effort():
@@ -146,57 +122,6 @@ def test_codex_profile_exposes_fast_mode_toggle():
     assert keyboard.inline_keyboard[-4][0].text == "⚡ Fast: Off"
 
 
-@pytest.mark.parametrize(
-    ("agent_type", "command", "expected"),
-    [
-        ("codex", "/usr/bin/codex", "--dangerously-bypass-approvals-and-sandbox"),
-        ("claude", "/usr/bin/claude", "--dangerously-skip-permissions"),
-        ("claudeofficial", "/usr/bin/claude", "--dangerously-skip-permissions"),
-        ("cursor", "/usr/bin/agent", "--force"),
-    ],
-)
-def test_full_permission_mode_uses_provider_flag(agent_type, command, expected):
-    profile = AgentProfile(agent_type=agent_type, permission_mode="full")
-    with (
-        patch.object(config, "codex_cli_command", command),
-        patch.object(config, "claude_command", command),
-        patch.object(config, "cursor_command", command),
-    ):
-        launch = _agent_command_for_launch(profile)
-    assert launch.endswith(expected)
-
-
-def test_codex_ask_mode_overrides_vps_full_access_config():
-    profile = AgentProfile(agent_type="codex", permission_mode="ask")
-    with patch.object(
-        config,
-        "codex_cli_command",
-        "/usr/bin/codex --dangerously-bypass-approvals-and-sandbox",
-    ):
-        launch = _agent_command_for_launch(profile)
-    assert "--dangerously-bypass-approvals-and-sandbox" not in launch
-    assert launch.endswith("--sandbox workspace-write --ask-for-approval on-request")
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "/usr/bin/codex --search -s danger-full-access -a never",
-        "/usr/bin/codex --search --sandbox=danger-full-access --ask-for-approval=never",
-    ],
-)
-def test_codex_ask_mode_replaces_configured_sandbox_and_approval_options(command):
-    profile = AgentProfile(agent_type="codex", permission_mode="ask")
-    with patch.object(config, "codex_cli_command", command):
-        launch = _agent_command_for_launch(profile)
-
-    assert launch == (
-        '/usr/bin/codex --search -c model_reasoning_effort="medium" '
-        "--sandbox workspace-write "
-        "--ask-for-approval on-request"
-    )
-
-
 def test_ask_mode_removes_provider_bypass_flags_from_configured_commands():
     with (
         patch.object(
@@ -210,12 +135,12 @@ def test_ask_mode_removes_provider_bypass_flags_from_configured_commands():
         claude = _agent_command_for_launch(
             AgentProfile(agent_type="claude", permission_mode="ask")
         )
-        cursor = _agent_command_for_launch(
-            AgentProfile(agent_type="cursor", permission_mode="ask")
-        )
+        with pytest.raises(ValueError, match="retired"):
+            _agent_command_for_launch(
+                AgentProfile(agent_type="cursor", permission_mode="ask")
+            )
     assert "--dangerously-skip-permissions" not in claude
     assert claude.endswith("--permission-mode default")
-    assert cursor == "/usr/bin/agent"
 
 
 @pytest.mark.parametrize(
@@ -233,67 +158,6 @@ def test_claude_ask_mode_replaces_configured_permission_mode(command):
 
     assert launch.count("--permission-mode") == 1
     assert launch.endswith("--permission-mode default")
-
-
-@pytest.mark.parametrize("flag", ["-f", "--force", "--yolo"])
-def test_cursor_ask_mode_removes_all_full_access_aliases(flag):
-    with patch.object(config, "cursor_command", f"/usr/bin/agent {flag}"):
-        launch = _agent_command_for_launch(
-            AgentProfile(agent_type="cursor", permission_mode="ask")
-        )
-
-    assert launch == "/usr/bin/agent"
-
-
-def test_full_permissions_are_visible_and_explicit_in_profile_picker():
-    profile = AgentProfile(agent_type="claude", permission_mode="full")
-    text, keyboard = build_profile_picker(profile, [])
-    assert "Permissions: `Full access`" in text
-    assert "Full access skips agent approval prompts" in text
-    assert "VPS account limits still apply" in text
-    assert keyboard.inline_keyboard[-3][0].text == "🔐 Permissions: Full access"
-
-
-@pytest.mark.parametrize("agent_type", [AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL])
-def test_claude_permission_default_is_full_but_ask_remains_selectable(agent_type):
-    from telegram_agent_bot.bot import _profile_from_context
-    from telegram_agent_bot.handlers.directory_browser import PROFILE_AGENT_KEY
-
-    with patch.object(config, "claude_default_permission_mode", "full"):
-        profile = _profile_from_context({PROFILE_AGENT_KEY: agent_type})
-        text, keyboard = build_profile_picker(profile, [])
-
-    assert profile.permission_mode == "full"
-    assert "Permissions: `Full access`" in text
-    assert any(
-        button.text == "🔐 Permissions: Full access"
-        for row in keyboard.inline_keyboard
-        for button in row
-    )
-    assert "--dangerously-skip-permissions" in _agent_command_for_launch(profile)
-
-
-def test_cursor_server_full_mode_cannot_show_ask_first():
-    from telegram_agent_bot.bot import _profile_from_context
-    from telegram_agent_bot.handlers.directory_browser import (
-        PROFILE_AGENT_KEY,
-        PROFILE_PERMISSION_MODE_KEY,
-    )
-
-    with patch.object(config, "cursor_permission_mode", "full"):
-        profile = _profile_from_context(
-            {PROFILE_AGENT_KEY: AGENT_CURSOR, PROFILE_PERMISSION_MODE_KEY: "ask"}
-        )
-        text, keyboard = build_profile_picker(profile, [])
-
-    assert profile.permission_mode == "full"
-    assert "Permissions: `Full access`" in text
-    assert all(
-        "Permissions:" not in button.text
-        for row in keyboard.inline_keyboard
-        for button in row
-    )
-    assert _agent_command_for_launch(profile).endswith("--force")
 
 
 def test_invalid_permission_env_value_keeps_ask_default():
@@ -367,50 +231,6 @@ def test_claude_official_launch_does_not_source_deepseek_env(tmp_path):
     assert command == (
         "/usr/bin/claude --model sonnet --effort medium --permission-mode default"
     )
-
-
-def test_cursor_launch_uses_model_without_unsupported_reasoning_flag():
-    profile = AgentProfile(
-        agent_type="cursor",
-        model="gpt-5",
-        reasoning_effort="high",
-    )
-
-    with patch.object(config, "cursor_command", "/usr/bin/agent"):
-        command = _agent_command_for_launch(profile)
-
-    assert command == "/usr/bin/agent --model gpt-5"
-
-
-def test_codex_uses_config_override_for_reasoning_effort():
-    profile = AgentProfile(
-        agent_type="codex",
-        model="gpt-5.3-codex",
-        reasoning_effort="low",
-    )
-
-    with patch.object(config, "codex_cli_command", "/usr/bin/codex"):
-        command = _agent_command_for_launch(profile)
-
-    assert command == (
-        '/usr/bin/codex --model gpt-5.3-codex -c model_reasoning_effort="low" '
-        "--sandbox workspace-write --ask-for-approval on-request"
-    )
-
-
-@pytest.mark.parametrize("effort", ["xhigh", "max", "ultra"])
-def test_codex_launch_preserves_catalog_reasoning_effort(effort):
-    profile = AgentProfile(
-        agent_type="codex",
-        model="gpt-5.6-sol",
-        reasoning_effort=effort,
-    )
-
-    with patch.object(config, "codex_cli_command", "/usr/bin/codex"):
-        command = _agent_command_for_launch(profile)
-
-    assert f'-c model_reasoning_effort="{effort}"' in command
-    assert command.endswith("--sandbox workspace-write --ask-for-approval on-request")
 
 
 def test_model_effort_resolution_falls_back_when_selection_is_unsupported():

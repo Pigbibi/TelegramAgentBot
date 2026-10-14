@@ -172,7 +172,7 @@ def _command_options(command: list[str]) -> tuple[list[str], str, bool]:
         del command[index : index + 2]
         new_session = False
     valued = {"--model", "--effort", "--permission-mode"}
-    flags = {"--dangerously-skip-permissions"}
+    flags: set[str] = set()
     index = 1
     while index < len(command):
         if command[index] in valued and index + 1 < len(command):
