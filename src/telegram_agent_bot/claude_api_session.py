@@ -176,6 +176,11 @@ def _command_options(command: list[str]) -> tuple[list[str], str, bool]:
     index = 1
     while index < len(command):
         if command[index] in valued and index + 1 < len(command):
+            value = command[index + 1]
+            if value.startswith("-") or (
+                command[index] == "--permission-mode" and value != "default"
+            ):
+                raise BudgetDenied("Unsupported API launch option")
             index += 2
         elif command[index] in flags:
             index += 1

@@ -168,7 +168,9 @@ def _strip_agent_permission_options(command: str, agent_type: str) -> str:
             changed = True
             index += 1
             continue
-        if part in boolean_options:
+        if part in boolean_options or part.startswith(
+            tuple(f"{option}=" for option in boolean_options)
+        ):
             changed = True
             index += 1
             continue

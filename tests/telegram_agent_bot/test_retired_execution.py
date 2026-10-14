@@ -91,3 +91,30 @@ async def test_retired_or_unidentified_windows_receive_no_input(agent):
 def test_api_wrapper_refuses_permission_bypass():
     with pytest.raises(BudgetDenied):
         _command_options(["claude", "--dangerously-skip-permissions"])
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["--permission-mode", "bypassPermissions"],
+        ["--permission-mode", "dontAsk"],
+        ["--model", "--dangerously-skip-permissions"],
+    ],
+)
+def test_api_wrapper_refuses_permission_mode_and_missing_value_tricks(options):
+    with pytest.raises(BudgetDenied):
+        _command_options(["claude", *options])
+
+
+def test_launcher_strips_equals_form_of_permission_bypass():
+    with patch.object(
+        tmux_module.config,
+        "claude_command",
+        "claude --dangerously-skip-permissions=true",
+    ):
+        command = tmux_module._agent_command_for_launch(
+            AgentProfile(agent_type="claudeofficial")
+        )
+    assert "dangerously" not in command and command.endswith(
+        "--permission-mode default"
+    )
