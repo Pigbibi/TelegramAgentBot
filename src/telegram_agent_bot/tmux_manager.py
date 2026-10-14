@@ -19,6 +19,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import threading
 import uuid
 from dataclasses import dataclass
@@ -238,6 +239,32 @@ def _agent_command_for_launch(
         AGENT_CLAUDE_OFFICIAL,
     }:
         cmd = f"{cmd} --permission-mode default"
+    if profile.agent_type == AGENT_CLAUDE:
+        limits = []
+        for name, default in (
+            ("MAX_TOKENS", "4096"),
+            ("MAX_TURNS", "8"),
+            ("RUN_BUDGET_USD", "0.50"),
+            ("DAILY_BUDGET_USD", "0"),
+        ):
+            limits.extend(
+                [
+                    "--" + name.lower().replace("_", "-"),
+                    os.getenv("TELEGRAM_AGENT_BOT_CLAUDE_API_" + name, default),
+                ]
+            )
+        cmd = shlex.join(
+            [
+                sys.executable,
+                "-m",
+                "telegram_agent_bot.claude_api_session",
+                "--state-path",
+                str(config.config_dir / "claude-api-budget.sqlite3"),
+                *limits,
+                "--",
+                *shlex.split(cmd),
+            ]
+        )
     if agent_capabilities(profile.agent_type).loads_claude_env:
         env_file = getattr(config, "claude_env_file", None)
         if isinstance(env_file, Path) and env_file.is_file():

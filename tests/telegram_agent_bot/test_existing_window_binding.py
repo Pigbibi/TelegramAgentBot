@@ -116,6 +116,7 @@ def _make_voice_update(user_id: int = 12345, thread_id: int = 42):
     tg_file = MagicMock()
     tg_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"voice"))
     update.message.voice = MagicMock()
+    update.message.voice.duration = 2
     update.message.voice.get_file = AsyncMock(return_value=tg_file)
     return update
 
@@ -195,7 +196,7 @@ class TestExistingWindowBinding:
 
             await voice_handler(update, context)
 
-        transcribe_voice.assert_awaited_once_with(b"voice")
+        transcribe_voice.assert_awaited_once_with(b"voice", duration_seconds=2)
         send_message.assert_awaited_once_with(12345, 42, "", "voice text")
         mock_tmux.find_window_by_id.assert_not_called()
         mark_working.assert_not_awaited()

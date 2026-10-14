@@ -20,6 +20,7 @@ def _reset_client():
 def mock_config():
     """Patch config with test values (openai provider by default)."""
     with patch.object(transcribe, "config") as cfg:
+        cfg.transcription_max_duration_seconds = 120
         cfg.transcription_providers = ("openai",)
         cfg.transcription_openai_api_key = "sk-test-key"
         cfg.transcription_openai_base_url = "https://api.openai.com/v1"
@@ -43,7 +44,9 @@ class TestTranscribeOpenAI:
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ) as mock_post:
-            result = await transcribe.transcribe_voice(b"fake-ogg-data")
+            result = await transcribe.transcribe_voice(
+                b"fake-ogg-data", duration_seconds=2
+            )
 
         assert result == "Hello world"
         mock_post.assert_called_once()
@@ -59,7 +62,7 @@ class TestTranscribeOpenAI:
             with pytest.raises(
                 transcribe.TranscriptionError, match="empty transcription"
             ):
-                await transcribe.transcribe_voice(b"fake-ogg-data")
+                await transcribe.transcribe_voice(b"fake-ogg-data", duration_seconds=2)
 
     @pytest.mark.asyncio
     async def test_whitespace_only_raises(self, mock_config):
@@ -70,7 +73,7 @@ class TestTranscribeOpenAI:
             with pytest.raises(
                 transcribe.TranscriptionError, match="empty transcription"
             ):
-                await transcribe.transcribe_voice(b"fake-ogg-data")
+                await transcribe.transcribe_voice(b"fake-ogg-data", duration_seconds=2)
 
     @pytest.mark.asyncio
     async def test_missing_text_field_raises(self, mock_config):
@@ -81,7 +84,7 @@ class TestTranscribeOpenAI:
             with pytest.raises(
                 transcribe.TranscriptionError, match="empty transcription"
             ):
-                await transcribe.transcribe_voice(b"fake-ogg-data")
+                await transcribe.transcribe_voice(b"fake-ogg-data", duration_seconds=2)
 
     @pytest.mark.asyncio
     async def test_api_error_raises(self, mock_config):
@@ -90,7 +93,7 @@ class TestTranscribeOpenAI:
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ):
             with pytest.raises(transcribe.TranscriptionError):
-                await transcribe.transcribe_voice(b"fake-ogg-data")
+                await transcribe.transcribe_voice(b"fake-ogg-data", duration_seconds=2)
 
     @pytest.mark.asyncio
     async def test_custom_base_url(self, mock_config):
@@ -99,7 +102,9 @@ class TestTranscribeOpenAI:
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ) as mock_post:
-            result = await transcribe.transcribe_voice(b"fake-ogg-data")
+            result = await transcribe.transcribe_voice(
+                b"fake-ogg-data", duration_seconds=2
+            )
 
         assert result == "Transcribed"
         url_arg = mock_post.call_args[0][0]
@@ -112,7 +117,7 @@ class TestTranscribeOpenAI:
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ) as mock_post:
-            await transcribe.transcribe_voice(b"fake-ogg-data")
+            await transcribe.transcribe_voice(b"fake-ogg-data", duration_seconds=2)
 
         url_arg = mock_post.call_args[0][0]
         assert url_arg == "https://proxy.example.com/v1/audio/transcriptions"
@@ -126,7 +131,7 @@ class TestTranscribeMultiProvider:
         with pytest.raises(
             transcribe.TranscriptionError, match="All transcription providers failed"
         ):
-            await transcribe.transcribe_voice(b"fake-ogg-data")
+            await transcribe.transcribe_voice(b"fake-ogg-data", duration_seconds=2)
 
     @pytest.mark.asyncio
     async def test_fallback_to_second_provider(self, mock_config):
@@ -141,7 +146,9 @@ class TestTranscribeMultiProvider:
             httpx.AsyncClient, "post", new_callable=AsyncMock
         ) as mock_post_method:
             mock_post_method.side_effect = [fail_resp, ok_resp]
-            result = await transcribe.transcribe_voice(b"fake-ogg-data")
+            result = await transcribe.transcribe_voice(
+                b"fake-ogg-data", duration_seconds=2
+            )
 
         assert result == "Fallback worked"
         assert mock_post_method.call_count == 2
@@ -155,7 +162,7 @@ class TestTranscribeMultiProvider:
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=fail_resp
         ):
             with pytest.raises(transcribe.TranscriptionError):
-                await transcribe.transcribe_voice(b"fake-ogg-data")
+                await transcribe.transcribe_voice(b"fake-ogg-data", duration_seconds=2)
 
     @pytest.mark.asyncio
     async def test_unknown_provider_skipped(self, mock_config):
@@ -164,7 +171,7 @@ class TestTranscribeMultiProvider:
         with pytest.raises(
             transcribe.TranscriptionError, match="All transcription providers failed"
         ):
-            await transcribe.transcribe_voice(b"fake-ogg-data")
+            await transcribe.transcribe_voice(b"fake-ogg-data", duration_seconds=2)
 
 
 class TestCloseClient:
@@ -180,3 +187,24 @@ class TestCloseClient:
         assert transcribe._client is None
         await transcribe.close_client()
         assert transcribe._client is None
+
+
+@pytest.mark.parametrize(
+    "duration", [None, 0, -1, 121, True, float("nan"), float("inf")]
+)
+async def test_invalid_duration_never_contacts_provider(mock_config, duration):
+    with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as post:
+        with pytest.raises(transcribe.TranscriptionError, match="duration"):
+            await transcribe.transcribe_voice(b"synthetic", duration_seconds=duration)
+    post.assert_not_awaited()
+
+
+async def test_duration_at_cap_is_allowed(mock_config):
+    response = _mock_response(json_data={"text": "at cap"})
+    with patch.object(
+        httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=response
+    ):
+        assert (
+            await transcribe.transcribe_voice(b"synthetic", duration_seconds=120)
+            == "at cap"
+        )

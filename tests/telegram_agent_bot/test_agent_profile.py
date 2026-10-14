@@ -1,3 +1,4 @@
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -344,6 +345,9 @@ def test_claude_launch_uses_effort_flag_and_env_file(tmp_path):
 
     assert command == (
         f"set -a; . {env_file}; set +a; "
+        f"{sys.executable} -m telegram_agent_bot.claude_api_session "
+        f"--state-path {config.config_dir / 'claude-api-budget.sqlite3'} "
+        "--max-tokens 4096 --max-turns 8 --run-budget-usd 0.50 --daily-budget-usd 0 -- "
         "/usr/bin/claude --model deepseek-v4-pro --effort low "
         "--permission-mode default"
     )

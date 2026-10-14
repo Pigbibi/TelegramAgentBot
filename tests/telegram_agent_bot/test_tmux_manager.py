@@ -324,6 +324,9 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
             [
                 (
                     "export HOME=/tmp/telegram-agent-bot-claude-home; "
+                    f"{tmux_manager_module.sys.executable} -m telegram_agent_bot.claude_api_session "
+                    f"--state-path {tmux_manager_module.config.config_dir / 'claude-api-budget.sqlite3'} "
+                    "--max-tokens 4096 --max-turns 8 --run-budget-usd 0.50 --daily-budget-usd 0 -- "
                     "/usr/bin/claude --model deepseek-v4-pro --permission-mode default "
                     "--resume "
                     "550e8400-e29b-41d4-a716-446655440000",

@@ -522,6 +522,11 @@ class Config:
         )
 
         # ── Voice transcription providers ──────────────────────────────────
+        self.transcription_max_duration_seconds = int(
+            os.getenv("AI_TRANSCRIPTION_MAX_DURATION_SECONDS", "120")
+        )
+        if self.transcription_max_duration_seconds <= 0:
+            raise ValueError("AI_TRANSCRIPTION_MAX_DURATION_SECONDS must be positive")
         # Comma-separated provider IDs tried in order. First successful
         # transcription wins; on failure the next provider is attempted.
         # Supported providers: openai, google
