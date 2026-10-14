@@ -7,11 +7,11 @@
   <string>io.github.telegramagentbot.center-bot</string>
 
   <key>WorkingDirectory</key>
-  <string>/Users/YOUR_USER/Projects/TelegramCodexBot</string>
+  <string>/Users/YOUR_USER/Projects/TelegramAgentBot</string>
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/YOUR_USER/Projects/TelegramCodexBot/.venv/bin/telegram-agent-bot</string>
+    <string>/Users/YOUR_USER/Projects/TelegramAgentBot/.venv/bin/telegram-agent-bot</string>
   </array>
 
   <key>EnvironmentVariables</key>
