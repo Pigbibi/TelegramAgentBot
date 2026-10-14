@@ -1,13 +1,13 @@
 [Unit]
-Description=TelegramCodexBot center bot with socket backend
+Description=TelegramAgentBot center bot with socket backend
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Projects/TelegramCodexBot
+WorkingDirectory=%h/Projects/TelegramAgentBot
 EnvironmentFile=%h/.telegram-agent-bot/socket-center.env
-ExecStart=%h/Projects/TelegramCodexBot/.venv/bin/telegram-agent-bot
+ExecStart=%h/Projects/TelegramAgentBot/.venv/bin/telegram-agent-bot
 Restart=on-failure
 RestartSec=5
 
