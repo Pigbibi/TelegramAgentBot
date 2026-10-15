@@ -1981,47 +1981,20 @@ def _agent_command_name(agent_type: str, action: str) -> str:
 
 
 def _agent_login_executable(agent_type: str | None = None) -> str:
-    """Return the agent executable to use for device login.
-
-    Supports Codex (``codex login``), Claude Code (``claude auth login``),
-    and Cursor Agent (``agent login``).
-    """
+    """Return only the supported Claude login executable."""
     selected_agent = _requested_agent_type(agent_type)
-    if agent_type is None:
-        command = config.codex_command
-    elif selected_agent in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
-        command = config.claude_command
-    elif selected_agent == AGENT_CURSOR:
-        command = config.cursor_command
-    else:
-        command = getattr(config, "codex_cli_command", config.codex_command)
-    try:
-        command_parts = shlex.split(command)
-    except ValueError:
-        command_parts = []
-
-    for part in command_parts:
-        name, sep, _value = part.partition("=")
-        if sep and name.isidentifier():
-            continue
-        return shutil.which(part) or part
-    default = {
-        AGENT_CLAUDE: "claude",
-        AGENT_CLAUDE_OFFICIAL: "claude",
-        AGENT_CURSOR: "agent",
-    }.get(selected_agent, "codex")
-    return shutil.which(default) or default
+    if selected_agent not in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
+        raise ValueError("Codex/Cursor CLI login is retired")
+    parts = shlex.split(config.claude_command)
+    if not parts or Path(parts[0]).name != "claude":
+        raise ValueError("Only the Claude executable is supported")
+    return shutil.which(parts[0]) or parts[0]
 
 
 def _agent_login_args(agent_type: str | None = None) -> list[str]:
     """Return the argv used to start an interactive agent login."""
-    selected_agent = _requested_agent_type(agent_type)
     executable = _agent_login_executable(agent_type)
-    if selected_agent in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
-        return [executable, "auth", "login"]
-    if selected_agent == AGENT_CURSOR:
-        return [executable, "login"]
-    return [executable, "login", "--device-auth"]
+    return [executable, "auth", "login"]
 
 
 def _extract_device_login_details(output: str) -> tuple[str | None, str | None]:
@@ -2251,6 +2224,10 @@ async def _agent_login_command(
         return
 
     selected_agent = _requested_agent_type(agent_type)
+    if selected_agent not in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
+        await safe_reply(update.message, "Codex/Cursor CLI login is retired.")
+        return
+
     args = context.args or []
     if selected_agent == AGENT_CURSOR:
         if args:
@@ -8716,11 +8693,8 @@ async def post_init(application: Application) -> None:
         BotCommand("health", "Show host and AgentBot health"),
         BotCommand("agentlogin", AGENT_LOGIN_COMMAND_DESCRIPTION),
         BotCommand("agentaccount", ACCOUNT_COMMAND_DESCRIPTION),
-        BotCommand("codexlogin", "Login to Codex"),
-        BotCommand("codexaccount", "Manage Codex accounts"),
         BotCommand("claudelogin", "Login to Claude Code"),
         BotCommand("claudeaccount", "Manage Claude Code accounts"),
-        BotCommand("cursorlogin", "Login to Cursor Agent"),
     ]
     # Add Codex slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -8916,11 +8890,8 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("health", health_command))
     application.add_handler(CommandHandler("agentlogin", agent_login_command))
     application.add_handler(CommandHandler("agentaccount", agent_account_command))
-    application.add_handler(CommandHandler("codexlogin", codex_login_command))
-    application.add_handler(CommandHandler("codexaccount", codex_account_command))
     application.add_handler(CommandHandler("claudelogin", claude_login_command))
     application.add_handler(CommandHandler("claudeaccount", claude_account_command))
-    application.add_handler(CommandHandler("cursorlogin", cursor_login_command))
     application.add_handler(CommandHandler(["agentcmd", "cmd"], agent_command_mode))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
