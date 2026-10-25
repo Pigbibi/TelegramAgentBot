@@ -72,7 +72,6 @@ venv.bak/
 .uv/
 uv.lock
 .claude/
-AGENTS.md
 .ruff_cache/
 *.log
 
@@ -95,3 +94,7 @@ docs/audits/
 docs/plans/
 docs/handoffs/
 docs/superpowers/
+
+# AI 编程约束随仓库版本管理。
+!/AGENTS.md
+!/CLAUDE.md
