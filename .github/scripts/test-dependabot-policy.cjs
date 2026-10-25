@@ -56,10 +56,19 @@ for (const [name, mutate] of [
   ['missing', c => c.pop()], ['pending', c => {c[0].status = 'in_progress';}],
   ['failure', c => {c[0].conclusion = 'failure';}], ['skipped required', c => {c[0].conclusion = 'skipped';}],
   ['wrong app', c => {c[0].app.id = 1;}], ['old head', c => {c[0].head_sha = 'b'.repeat(40);}],
-  ['ambiguous name', c => c.push(check(required[0]))],
   ['optional pending', c => c.push({...check('Other'), status: 'queued', conclusion: null})],
   ['optional failure', c => c.push({...check('Other'), conclusion: 'failure'})],
 ]) test(name + ' prevents merge', () => {const c = required.map(check); mutate(c); assert.equal(checksReady(c, required, sha), false);});
+test('successful push and PR records on the same head can satisfy a required check', () => {
+  assert.equal(checksReady([...required.map(check), check(required[0])], required, sha), true);
+});
+for (const [label, record] of [
+  ['failed', {...check(required[0]), conclusion: 'failure'}],
+  ['pending', {...check(required[0]), status: 'in_progress', conclusion: null}],
+  ['skipped', {...check(required[0]), conclusion: 'skipped'}],
+]) test('duplicate ' + label + ' required record prevents merge', () => {
+  assert.equal(checksReady([...required.map(check), record], required, sha), false);
+});
 test('incomplete required check policy is rejected', () => assert.equal(checksReady([check('CI')], ['CI'], sha), false));
 test('merge matches the head, uses no admin bypass and no auto approval', () => {
   const args = mergeArguments('Pigbibi/Example', 1, sha);
@@ -112,6 +121,9 @@ process.stdout.write(JSON.stringify(result));
     return fs.existsSync(path.join(temp, 'merged.json')) ? JSON.parse(fs.readFileSync(path.join(temp, 'merged.json'))) : null;
   } finally {fs.rmSync(temp, {recursive: true, force: true});}
 }
+test('merge CLI accepts successful push and PR duplicates without ignoring either', () => {
+  assert.deepEqual(exerciseMerge(s => s.checks.push(check(required[0]))), mergeArguments('Pigbibi/Example', 1, sha));
+});
 test('real merge CLI consumes paginated evidence and sends exact-head merge', () => {
   assert.deepEqual(exerciseMerge(), mergeArguments('Pigbibi/Example', 1, sha));
 });
