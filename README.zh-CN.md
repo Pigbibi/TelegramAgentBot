@@ -95,8 +95,8 @@ telegram-agent-bot doctor --json
 ## 文档与开发
 
 - [文档索引](docs/README.md) · [功能](docs/features.md) · [配置](docs/configuration.md) · [部署](docs/deployment.md)
-- [后端插件](docs/agent_backend_plugins.md) · [Socket 后端](plugins/socket_backend/README.md)
-- [GitHub Issue 桥接](docs/github_codex_bridge.md) · [VPS 清理定时器](docs/vps_cleanup.md)
+- [后端插件](docs/agent-backend-plugins.md) · [Socket 后端](plugins/socket_backend/README.md)
+- [GitHub Issue 桥接](docs/github-codex-bridge.md) · [VPS 清理定时器](docs/vps-cleanup.md)
 
 开发时运行 `uv sync --extra dev`，再阅读[贡献指南](CONTRIBUTING.md)。使用帮助和漏洞报告见[支持](SUPPORT.md)及[安全说明](SECURITY.md)。
 

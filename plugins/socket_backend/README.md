@@ -140,5 +140,5 @@ Inspect both processes when a request fails. A center timeout can be caused by
 the network path, a stopped node, an oversized payload, or a blocked local agent
 session.
 
-See [Agent backend plugins](../../docs/agent_backend_plugins.md) for the core
+See [Agent backend plugins](../../docs/agent-backend-plugins.md) for the core
 backend contract and plugin-development guidance.

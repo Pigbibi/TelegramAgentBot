@@ -134,11 +134,11 @@ annotated [`.env.example`](../.env.example) before enabling automatic changes.
 
 The built-in `local` backend controls tmux on the same machine as the Telegram
 bot. The backend plugin API supports alternative transports and remote agent
-nodes. See [Agent backend plugins](agent_backend_plugins.md).
+nodes. See [Agent backend plugins](agent-backend-plugins.md).
 
 The separate `telegram-agent-bridge` command can translate selected GitHub
 issues into structured prompts for existing Codex windows. See
-[GitHub issue bridge](github_codex_bridge.md).
+[GitHub issue bridge](github-codex-bridge.md).
 
 ## Data locations
 

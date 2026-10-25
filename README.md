@@ -101,8 +101,8 @@ for defaults, accounting failures, and provider/CLI limitations.
 ## Documentation and development
 
 - [Documentation index](docs/README.md) · [Features](docs/features.md) · [Configuration](docs/configuration.md) · [Deployment](docs/deployment.md)
-- [Backend plugins](docs/agent_backend_plugins.md) · [Socket backend](plugins/socket_backend/README.md)
-- [GitHub issue bridge](docs/github_codex_bridge.md) · [VPS cleanup timer](docs/vps_cleanup.md)
+- [Backend plugins](docs/agent-backend-plugins.md) · [Socket backend](plugins/socket_backend/README.md)
+- [GitHub issue bridge](docs/github-codex-bridge.md) · [VPS cleanup timer](docs/vps-cleanup.md)
 
 To work on the code, run `uv sync --extra dev` and follow [Contributing](CONTRIBUTING.md). For help or vulnerability reports, see [Support](SUPPORT.md) and [Security](SECURITY.md).
 

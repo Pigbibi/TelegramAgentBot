@@ -238,4 +238,4 @@ TELEGRAM_AGENT_BOT_BACKEND=local
 
 Plugins may register additional backend IDs through Python entry points or
 modules listed in `TELEGRAM_AGENT_BOT_BACKEND_PLUGINS`. See
-[Agent backend plugins](agent_backend_plugins.md).
+[Agent backend plugins](agent-backend-plugins.md).
