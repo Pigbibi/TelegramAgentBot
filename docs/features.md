@@ -80,6 +80,11 @@ tool summaries. Private model reasoning is not forwarded.
 Long Telegram messages are paginated, and Markdown output falls back to plain
 text when Telegram rejects the formatted form.
 
+Indented paragraphs and nested list continuations retain their formatting; only
+fenced blocks are treated as code. Tables are shown as cards, and expandable tool
+output keeps its complete content across pages with surrounding text on separate
+lines.
+
 ## Authentication and accounts
 
 The default session uses the selected CLI credentials of the service user.
