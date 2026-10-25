@@ -27,6 +27,8 @@ jobs:
         run: python .github/scripts/test_workflows.py
       - name: Check workflow safety
         run: python .github/scripts/check_workflows.py
+      - name: Verify dependency merge policy regressions
+        run: node --test .github/scripts/test-dependabot-policy.cjs
       - name: Check workflow syntax
         shell: bash
         run: |

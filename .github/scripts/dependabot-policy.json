@@ -1,0 +1,19 @@
+{
+  "repo": "Pigbibi/TelegramAgentBot",
+  "branch": "main",
+  "files": [
+    "plugins/socket_backend/pyproject.toml",
+    "pyproject.toml"
+  ],
+  "directories": [
+    "/",
+    "/.github",
+    "/plugins/socket_backend"
+  ],
+  "required_checks": [
+    "test-summary",
+    "gitleaks",
+    "Repository hygiene",
+    "Safe dependency update"
+  ]
+}

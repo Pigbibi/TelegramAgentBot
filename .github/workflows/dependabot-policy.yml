@@ -1,0 +1,39 @@
+name: Dependabot update policy
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  metadata:
+    name: Verify Dependabot metadata
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      eligible: ${{ steps.policy.outputs.eligible }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Fetch verified Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98
+        with:
+          github-token: ${{ github.token }}
+      - name: Check explicit patch policy
+        id: policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPENDABOT_DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
+        run: node .github/scripts/dependabot-policy.cjs metadata
+  safe:
+    name: Safe dependency update
+    needs: metadata
+    if: needs.metadata.outputs.eligible == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'Verified patch. Merge requires all current configured checks.'
