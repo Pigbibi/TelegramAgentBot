@@ -35,7 +35,8 @@ function checksReady(checks, names, sha) {
   if (checks.some(c => c.status !== 'completed' || !['success', 'skipped', 'neutral'].includes(c.conclusion))) return false;
   return names.every(name => {
     const matching = checks.filter(c => c.name === name && c.app?.id === 15368 && c.head_sha === sha);
-    return matching.length === 1 && matching[0].status === 'completed' && matching[0].conclusion === 'success';
+    // A commit may have both push and PR runs. Every current matching record must pass.
+    return matching.length > 0 && matching.every(c => c.status === 'completed' && c.conclusion === 'success');
   });
 }
 function mergeArguments(repo, number, sha) {
