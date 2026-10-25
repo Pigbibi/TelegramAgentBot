@@ -109,3 +109,7 @@ large change into smaller pull requests.
 
 Contributors retain copyright in their work and agree to license submitted
 contributions under the repository's [MIT License](LICENSE).
+
+## AI 辅助维护
+
+维护流程、文档更新和交付核对见 [AI 辅助维护约定](.github/engineering.md)，项目约束见 [AGENTS.md](AGENTS.md)。

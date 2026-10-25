@@ -13,28 +13,7 @@ when it is safe to do so.
 
 ## Reporting a vulnerability
 
-Do not open a public issue with vulnerability details, credentials, private
-prompts, transcripts, or proof-of-concept exploit code.
-
-Private vulnerability reporting is not currently enabled for this repository.
-Open a minimal issue stating that you need a private security contact, without
-including technical details. A maintainer will provide an appropriate private
-channel. You may also use contact information published on the repository
-owner's GitHub profile.
-
-Include the following in the private report:
-
-- affected version or commit;
-- deployment type and backend;
-- required attacker access;
-- reproduction steps or a minimal proof of concept;
-- impact and data exposed;
-- suggested mitigation, if known;
-- whether the issue is already public.
-
-There is no guaranteed response SLA. Maintainers will try to acknowledge valid
-reports, reproduce the issue, coordinate a fix, and credit the reporter when
-requested and appropriate.
+Report security vulnerabilities through [GitHub private vulnerability reporting](https://github.com/Pigbibi/TelegramAgentBot/security/advisories/new). Do not post exploit details, credentials, private sessions or personal data in public issues or PRs. Include the affected version, impact and minimal redacted reproduction. The maintainer handles reports on a best-effort basis; no bounty or response-time guarantee is implied.
 
 ## Scope
 
