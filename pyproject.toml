@@ -26,7 +26,7 @@ local = "telegram_agent_bot.backends.local:LocalTmuxBackend"
 dev = [
     "pyright>=1.1.0",
     "pytest>=8.0",
-    "pytest-asyncio>=0.24.0",
+    "pytest-asyncio>=1.4.0",
     "pytest-cov>=6.0",
     "ruff>=0.8.0",
 ]
