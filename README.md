@@ -75,7 +75,9 @@ Useful commands:
 | `/unbind` | Detach the topic without stopping its terminal |
 | `/kill` | Stop the bound window and remove the binding |
 
-The bot preserves topic bindings and pending input across service restarts. An idle tmux window may be paused and resumed when the next message arrives. If the CLI receives input but the transcript does not confirm it, AgentBot does **not** send it again automatically: first check the agent session, then resend only if it did not receive the message. [Features](docs/features.md) describes the full command and message behavior.
+The bot preserves topic bindings and pending input across service restarts. An idle tmux window may be paused and resumed when the next message arrives.
+
+If the CLI receives input but the transcript does not confirm it, AgentBot does **not** send it again automatically: check the agent session first, then resend only if it never arrived. [Features](docs/features.md) describes the full command and message behavior.
 
 ## Operate safely
 
