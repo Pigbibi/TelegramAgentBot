@@ -119,7 +119,7 @@ class SessionMapLoadingTests(unittest.IsolatedAsyncioTestCase):
         manager.window_states = {
             "@1": WindowState(
                 session_id="rollout-2026-04-03T17-59-47-019d52c8-d90d-7f72-9062-45cf0f71f97e",
-                cwd="/Users/lisiyi/Projects",
+                cwd="/Users/example/Projects",
                 window_name="Projects",
             )
         }
