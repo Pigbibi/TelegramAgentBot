@@ -82,6 +82,37 @@ class AgentInstructionsTest(unittest.TestCase):
         self.assertNotIn(value[:12], "\n".join(hygiene.errors))
 
 
+class DocsBaselineTest(unittest.TestCase):
+    """Section 4.4 — the file set follows the repository's visibility."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        hygiene.errors.clear()
+        hygiene.warnings.clear()
+
+    def check(self):
+        hygiene.check_docs_baseline(self.root)
+        return list(hygiene.errors)
+
+    def test_public_repository_needs_the_other_three(self):
+        (self.root / "LICENSE").write_text("MIT\n", encoding="utf-8")
+        self.assertTrue(self.check())
+
+    def test_public_repository_passes_with_all_four(self):
+        for name in ("LICENSE", "CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md"):
+            (self.root / name).write_text("x\n", encoding="utf-8")
+        self.assertEqual(self.check(), [])
+
+    def test_private_repository_still_needs_security(self):
+        self.assertTrue(self.check())
+
+    def test_private_repository_passes_with_security_alone(self):
+        (self.root / "SECURITY.md").write_text("x\n", encoding="utf-8")
+        self.assertEqual(self.check(), [])
+
+
 class LocaleSuffixTest(unittest.TestCase):
     """Section 1.2 — only .zh-CN.md and .en.md exist."""
 
