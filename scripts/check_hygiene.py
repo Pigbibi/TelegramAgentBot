@@ -354,6 +354,27 @@ def check_gitignore(root: Path) -> None:
         warn(".gitignore is missing the audit-document block, see section 5")
 
 
+def check_docs_baseline(root: Path) -> None:
+    """The file set a reader expects, split by what the repository is.
+
+    A LICENSE is the signal: a repository that grants rights to outside readers
+    owes them a contribution path, a way to report a vulnerability, and a
+    conduct policy. A repository that does not grant them is internal, and an
+    internal repository needs one thing from this list — where credentials live
+    and what to do when one leaks — not a public disclosure process it will
+    never run.
+    """
+    if (root / "LICENSE").exists():
+        required = ["CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md"]
+        kind = "public"
+    else:
+        required = ["SECURITY.md"]
+        kind = "private"
+    missing = [name for name in required if not (root / name).exists()]
+    if missing:
+        err(f"{kind} repository is missing {', '.join(missing)} (section 4.4)")
+
+
 SECRET_PATTERNS = [
     (re.compile(r"ghp_[A-Za-z0-9]{20,}"), "GitHub PAT"),
     (re.compile(r"gho_[A-Za-z0-9]{20,}"), "GitHub OAuth token"),
@@ -399,6 +420,7 @@ def main() -> int:
     check_bilingual_pair(root)
     check_comment_language(root)
     check_gitignore(root)
+    check_docs_baseline(root)
     check_secrets(root)
 
     for w in sorted(set(warnings)):
