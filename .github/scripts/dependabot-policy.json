@@ -19,11 +19,6 @@
   ],
   "action_files": [
     ".github/workflows/check.yml",
-    ".github/workflows/dependabot-auto-merge.yml",
-    ".github/workflows/dependabot-policy.yml",
-    ".github/workflows/engineering-governance.yml",
-    ".github/workflows/repository-hygiene.yml",
-    ".github/workflows/risk-gate.yml",
     ".github/workflows/secret-scan.yml"
   ]
 }

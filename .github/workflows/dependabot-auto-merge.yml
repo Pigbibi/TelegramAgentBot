@@ -11,7 +11,7 @@ concurrency:
 jobs:
   merge:
     name: Approve and squash verified Dependabot updates
-    if: contains(fromJSON('["pull_request","pull_request_target"]'), github.event.workflow_run.event) && github.event.workflow_run.conclusion == 'success'
+    if: contains(fromJSON('["pull_request","pull_request_target"]'), github.event.workflow_run.event) && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
