@@ -11,7 +11,8 @@ function fixture() {
     pr: {user: {login: 'dependabot[bot]'}, state: 'open', draft: false, commits: 1, changed_files: 1,
       base: {ref: 'main', repo: {full_name: repo}}, head: {sha: head, repo: {full_name: repo}}},
     files: [{filename: 'requirements.txt', status: 'modified'}],
-    commits: [{sha: head, author: {login: 'dependabot[bot]'}, commit: {verification: {verified: true}}}],
+    commits: [{sha: head, author: {login: 'dependabot[bot]'}, committer: {login: 'web-flow'},
+      commit: {committer: {email: 'noreply@github.com'}, verification: {verified: true}}}],
     dependencies: [{dependencyName: 'example', packageEcosystem: 'pip', directory: '/', targetBranch: 'main',
       updateType: 'version-update:semver-patch', maintainerChanges: false, prevVersion: '1.2.3', newVersion: '1.2.4'}]};
 }
@@ -26,6 +27,8 @@ for (const [name, mutate] of [
   ['other base', f => {f.pr.base.ref = 'other';}],
   ['stale head', f => {f.pr.head.sha = 'b'.repeat(40);}],
   ['unsigned commit', f => {f.commits[0].commit.verification.verified = false;}],
+  ['human committer', f => {f.commits[0].committer.login = 'someone';}],
+  ['spoofed committer email', f => {f.commits[0].commit.committer.email = 'someone@example.com';}],
   ['extra human commit', f => {f.commits[0].author.login = 'someone';}],
   ['truncated commits', f => {f.pr.commits = 2;}],
   ['truncated files', f => {f.pr.changed_files = 2;}],
@@ -89,7 +92,7 @@ function exerciseMerge(mutate = () => {}) {
     fs.copyFileSync(path.join(__dirname, 'dependabot-policy.cjs'), path.join(temp, 'policy.cjs'));
     fs.writeFileSync(path.join(temp, 'dependabot-policy.json'), JSON.stringify(f.config));
     fs.writeFileSync(path.join(temp, 'event.json'), JSON.stringify({workflow_run: {
-      event: state.event || 'pull_request', conclusion: 'success', repository: {full_name: f.repo}, head_sha: f.eventHead,
+      event: state.event || 'pull_request', conclusion: 'success', repository: {full_name: f.repo}, head_repository: {full_name: state.headRepo || f.repo}, head_sha: f.eventHead,
       pull_requests: [{number: 1}],
     }}));
     fs.writeFileSync(path.join(temp, 'state.json'), JSON.stringify(state));
@@ -133,6 +136,8 @@ test('real merge CLI consumes paginated evidence and sends exact-head merge', ()
 for (const [name, mutate] of [
   ['human PR', s => {s.pr.user.login = 'human';}],
   ['unsigned', s => {s.commits[0].commit.verification.verified = false;}],
+  ['human committer', s => {s.commits[0].committer.login = 'someone';}],
+  ['fork head repository', s => {s.headRepo = 'Someone/Example';}],
   ['head changed', s => {s.pr.head.sha = 'c'.repeat(40);}],
   ['truncated files', s => {s.pr.changed_files = 2;}],
   ['workflow changed', s => {s.files[0].filename = '.github/workflows/ci.yml';}],
@@ -181,4 +186,21 @@ test('trusted governance completion can trigger the same exact-head merge', () =
 });
 test('unrelated workflow event cannot trigger merge', () => {
   assert.equal(exerciseMerge(s => {s.event = 'push';}), null);
+});
+
+test('Actions rejects protected workflows even when listed', () => {
+  for (const name of ['deploy.yml', 'release.yml', 'risk-gate.yml', 'engineering-governance.yml',
+    'dependabot-auto-merge.yml', 'dependabot-policy.yml', 'repository-hygiene.yml']) {
+    const f = actionFixture();
+    f.config.action_files = ['.github/workflows/' + name];
+    f.files[0].filename = '.github/workflows/' + name;
+    assert.equal(eligible(f), false, name);
+  }
+});
+
+test('configured action files exclude protected workflows', () => {
+  const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'dependabot-policy.json'), 'utf8'));
+  for (const file of config.action_files || []) {
+    assert.doesNotMatch(path.posix.basename(file), /(deploy|release|publish|ghcr|pages|azure|risk-gate|governance|review-signal|dependabot|codeql|hygiene)/i, file);
+  }
 });

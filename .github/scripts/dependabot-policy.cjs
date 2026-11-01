@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
 
+const protectedWorkflow = /(deploy|release|publish|ghcr|pages|azure|risk-gate|governance|review-signal|dependabot|codeql|hygiene)/i;
 const paused = new Set(['Pigbibi/SmsPressureCluster', 'Pigbibi/FranchiseLeadWorkflows']);
 function inScope(config, repo) {
   return config.repo === repo && /^Pigbibi\/[^/]+$/.test(repo) && !paused.has(repo) && config.branch === 'main';
@@ -11,6 +12,7 @@ function dependencyFilesAllowed(config, repo, files) {
     ['modified'].includes(f.status) && (config.files.includes(f.filename) || actionVersionOnly(config, f)) && !f.previous_filename);
 }
 function actionVersionOnly(config, file) {
+  if (protectedWorkflow.test(path.posix.basename(file.filename))) return false;
   if (!(config.action_files || []).includes(file.filename) || typeof file.patch !== 'string') return false;
   const removed = [], added = [];
   for (const line of file.patch.split('\n')) {
@@ -27,7 +29,9 @@ function trustedPR(config, repo, pr, head, commits) {
     pr.state === 'open' && !pr.draft && pr.base?.ref === config.branch &&
     pr.base?.repo?.full_name === repo && pr.head?.repo?.full_name === repo && pr.head.sha === head &&
     commits.length > 0 && commits.length === pr.commits && commits.at(-1).sha === head &&
-    commits.every(c => c.author?.login === 'dependabot[bot]' && c.commit?.verification?.verified === true);
+    // Dependabot commits are authored by the bot and committed by GitHub's web-flow key; a human-signed commit with a spoofed author fails.
+    commits.every(c => c.author?.login === 'dependabot[bot]' && c.committer?.login === 'web-flow'
+      && c.commit?.committer?.email === 'noreply@github.com' && c.commit?.verification?.verified === true);
 }
 function eligible({config, repo, pr, eventHead, dependencies, files, commits}) {
   if (!trustedPR(config, repo, pr, eventHead, commits) || files.length !== pr.changed_files || !dependencyFilesAllowed(config, repo, files)) return false;
@@ -82,7 +86,7 @@ function main(mode) {
   }
   if (mode !== 'merge') throw new Error('Expected metadata or merge command');
   const run = event.workflow_run;
-  if (!['pull_request', 'pull_request_target'].includes(run?.event) || run.conclusion !== 'success' || run.repository?.full_name !== repo) return;
+  if (!['pull_request', 'pull_request_target'].includes(run?.event) || run.conclusion !== 'success' || run.repository?.full_name !== repo || run.head_repository?.full_name !== repo) return;
   let numbers = (run.pull_requests || []).map(p => p.number);
   if (!numbers.length) numbers = pages(`repos/${repo}/commits/${run.head_sha}/pulls?per_page=100`).map(p => p.number);
   numbers = [...new Set(numbers)];
