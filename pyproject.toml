@@ -9,7 +9,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "httpx>=0.28.1",
     "libtmux>=0.37.0",
-    "Pillow>=10.0.0",
+    "Pillow>=13.0.0",
     "aiofiles>=24.0.0",
     "mistletoe>=1.4.0,<1.5.0",
     "telegramify-markdown>=1.4.1,<2.0.0",
@@ -26,7 +26,7 @@ local = "telegram_agent_bot.backends.local:LocalTmuxBackend"
 dev = [
     "pyright>=1.1.0",
     "pytest>=8.0",
-    "pytest-asyncio>=0.24.0",
+    "pytest-asyncio>=1.4.1",
     "pytest-cov>=6.0",
     "ruff>=0.8.0",
 ]

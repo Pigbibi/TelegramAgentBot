@@ -44,10 +44,6 @@ for (const [name, mutate] of [
   ['directory mismatch', f => {f.dependencies[0].directory = '/other';}],
   ['maintainer changes', f => {f.dependencies[0].maintainerChanges = true;}],
   ['Actions', f => {f.dependencies[0].packageEcosystem = 'github_actions';}],
-  ['authentication', f => {f.dependencies[0].dependencyName = 'PyJWT';}],
-  ['framework', f => {f.dependencies[0].dependencyName = 'fastapi';}],
-  ['React framework', f => {f.dependencies[0].dependencyName = 'react-dom';}],
-  ['browser runtime', f => {f.dependencies[0].dependencyName = 'playwright';}],
 ]) test(name + ' requires review', () => {const f = fixture(); mutate(f); assert.equal(eligible(f), false);});
 const sha = 'a'.repeat(40), required = ['Repository hygiene', 'Safe dependency update'];
 const check = name => ({name, app: {id: 15368}, head_sha: sha, status: 'completed', conclusion: 'success'});
@@ -70,10 +66,12 @@ for (const [label, record] of [
   assert.equal(checksReady([...required.map(check), record], required, sha), false);
 });
 test('incomplete required check policy is rejected', () => assert.equal(checksReady([check('CI')], ['CI'], sha), false));
-test('merge matches the head, uses no admin bypass and no auto approval', () => {
+test('merge matches the head, uses squash and no admin bypass', () => {
   const args = mergeArguments('Pigbibi/Example', 1, sha);
   assert.equal(args[args.indexOf('--match-head-commit') + 1], sha);
   assert.equal(args.includes('--admin'), false);
+  assert.equal(args.includes('--squash'), true);
+  assert.equal(args.includes('--delete-branch'), false);
   assert.equal(args.includes('--auto'), false);
 });
 
@@ -91,13 +89,14 @@ function exerciseMerge(mutate = () => {}) {
     fs.copyFileSync(path.join(__dirname, 'dependabot-policy.cjs'), path.join(temp, 'policy.cjs'));
     fs.writeFileSync(path.join(temp, 'dependabot-policy.json'), JSON.stringify(f.config));
     fs.writeFileSync(path.join(temp, 'event.json'), JSON.stringify({workflow_run: {
-      event: 'pull_request', conclusion: 'success', repository: {full_name: f.repo}, head_sha: f.eventHead,
+      event: state.event || 'pull_request', conclusion: 'success', repository: {full_name: f.repo}, head_sha: f.eventHead,
       pull_requests: [{number: 1}],
     }}));
     fs.writeFileSync(path.join(temp, 'state.json'), JSON.stringify(state));
     fs.writeFileSync(path.join(temp, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs'), path = require('node:path');
 const root = __dirname, s = JSON.parse(fs.readFileSync(path.join(root, 'state.json'))), args = process.argv.slice(2);
+if (args.includes('event=APPROVE')) {fs.writeFileSync(path.join(root, 'approved.json'), JSON.stringify(args)); process.stdout.write('{}'); process.exit(0);}
 if (args[0] === 'pr') {fs.writeFileSync(path.join(root, 'merged.json'), JSON.stringify(args)); process.exit(0);}
 const route = args.at(-1); let result;
 if (route.endsWith('/pulls/1')) result = s.pr;
@@ -118,6 +117,10 @@ process.stdout.write(JSON.stringify(result));
         GITHUB_EVENT_PATH: path.join(temp, 'event.json'), GITHUB_REPOSITORY: f.repo}, encoding: 'utf8',
     });
     assert.equal(result.status, 0, result.stderr);
+    if (fs.existsSync(path.join(temp, 'merged.json'))) {
+      const approval = JSON.parse(fs.readFileSync(path.join(temp, 'approved.json')));
+      assert.ok(approval.includes('commit_id=' + f.eventHead));
+    }
     return fs.existsSync(path.join(temp, 'merged.json')) ? JSON.parse(fs.readFileSync(path.join(temp, 'merged.json'))) : null;
   } finally {fs.rmSync(temp, {recursive: true, force: true});}
 }
@@ -141,3 +144,41 @@ for (const [name, mutate] of [
   ['failed legacy status', s => {s.legacy = {statuses: [{}], state: 'failure'};}],
   ['base changed during reads', s => {s.advanceBase = true;}],
 ]) test('merge CLI performs no write with ' + name, () => assert.equal(exerciseMerge(mutate), null));
+
+test('stable minor update is eligible', () => {
+  const f = fixture(); Object.assign(f.dependencies[0], {newVersion: '1.3.0', updateType: 'version-update:semver-minor'});
+  assert.equal(eligible(f), true);
+});
+test('stable framework patch is eligible after CI', () => {
+  const f = fixture(); f.dependencies[0].dependencyName = 'react-dom'; assert.equal(eligible(f), true);
+});
+function actionFixture() {
+  const f = fixture(); f.config.action_files = ['.github/workflows/ci.yml'];
+  f.files = [{filename: '.github/workflows/ci.yml', status: 'modified', additions: 1, deletions: 1, patch:
+    '-      - uses: actions/checkout@' + 'b'.repeat(40) + ' # v6\n+      - uses: actions/checkout@' + 'c'.repeat(40) + ' # v7'}];
+  Object.assign(f.dependencies[0], {dependencyName: 'actions/checkout', packageEcosystem: 'github_actions',
+    prevVersion: '6.0.0', newVersion: '7.0.0', updateType: 'version-update:semver-major'});
+  return f;
+}
+test('pinned Actions major version-only update is eligible', () => assert.equal(eligible(actionFixture()), true));
+for (const [name, mutate] of [
+  ['injected command', f => {f.files[0].patch += '\n+      - run: echo unexpected';}],
+  ['changed action owner', f => {f.files[0].patch = f.files[0].patch.replace('+      - uses: actions/', '+      - uses: other/');}],
+  ['missing patch', f => {delete f.files[0].patch;}],
+  ['truncated patch', f => {f.files[0].additions = 2;}],
+  ['unpinned action', f => {f.files[0].patch = f.files[0].patch.replace('c'.repeat(40), 'v7');}],
+  ['mixed group', f => {f.dependencies.push(fixture().dependencies[0]);}],
+  ['wrong directory', f => {f.dependencies[0].directory = '/elsewhere';}],
+]) test('Actions rejects ' + name, () => {const f = actionFixture(); mutate(f); assert.equal(eligible(f), false);});
+
+test('two-component stable requirement supports a minor update', () => {
+  const f = fixture(); Object.assign(f.dependencies[0], {prevVersion: '1.45', newVersion: '1.64.0', updateType: 'version-update:semver-minor'});
+  assert.equal(eligible(f), true);
+});
+
+test('trusted governance completion can trigger the same exact-head merge', () => {
+  assert.deepEqual(exerciseMerge(s => {s.event = 'pull_request_target';}), mergeArguments('Pigbibi/Example', 1, sha));
+});
+test('unrelated workflow event cannot trigger merge', () => {
+  assert.equal(exerciseMerge(s => {s.event = 'push';}), null);
+});
