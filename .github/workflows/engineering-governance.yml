@@ -1,0 +1,34 @@
+name: Engineering governance
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    name: Commit message convention
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate pull request commit messages
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          tool="$RUNNER_TEMP/governance-commitlint"
+          npm install --prefix "$tool" --ignore-scripts --no-audit --no-fund \
+            @commitlint/cli@21.2.4 @commitlint/config-conventional@21.2.4
+          printf '%s\n' "module.exports = {extends: [require.resolve('@commitlint/config-conventional')]};" > "$tool/commitlint.config.cjs"
+          node "$tool/node_modules/@commitlint/cli/cli.js" \
+            --config "$tool/commitlint.config.cjs" --from "$PR_BASE" --to "$PR_HEAD" --verbose

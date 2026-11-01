@@ -5,3 +5,21 @@
 **/auth/** @Pigbibi
 **/security/** @Pigbibi
 **/deploy* @Pigbibi
+
+# Risk-sensitive changes require the repository owner.
+/.env.example @Pigbibi
+/.github/CODEOWNERS @Pigbibi
+/.github/workflows/ @Pigbibi
+
+# Dependency-only files do not automatically request a human review.
+# CODEOWNERS is path-based: these exceptions also apply to human PRs.
+/.github/requirements-ci.txt
+/.github/workflows/check.yml
+/.github/workflows/dependabot-auto-merge.yml
+/.github/workflows/dependabot-policy.yml
+/.github/workflows/engineering-governance.yml
+/.github/workflows/repository-hygiene.yml
+/.github/workflows/risk-gate.yml
+/.github/workflows/secret-scan.yml
+/plugins/socket_backend/pyproject.toml
+/pyproject.toml

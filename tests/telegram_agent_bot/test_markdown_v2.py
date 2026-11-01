@@ -75,7 +75,10 @@ class TestConvertMarkdown:
         result = convert_markdown("- [x] **done**\n  - [ ] **todo**")
 
         assert "✅ *done*" in result
-        assert "☑" in result
+        # The checkbox glyph is telegramify-markdown's, not ours: 1.4.2 renders
+        # a checked item as ✅ and an unchecked one as ☐. Asserting the checked
+        # glyph twice would only pin the dependency.
+        assert "☐" in result
         assert "*todo*" in result
         assert "\\[x\\]" not in result
 

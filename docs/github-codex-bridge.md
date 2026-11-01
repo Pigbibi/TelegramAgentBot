@@ -1,5 +1,7 @@
 # GitHub issue bridge
 
+English | [简体中文](github-codex-bridge.zh-CN.md)
+
 `telegram-agent-bridge` polls GitHub issues and sends selected issue content to
 a Codex session already running in tmux. It is a separate process from the
 Telegram bot and does not replace TelegramAgentBot's session monitor.

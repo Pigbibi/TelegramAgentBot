@@ -46,12 +46,25 @@ uv run pytest --tb=short -q
 - 改文件名时同一次提交改完所有引用。
 - 提交前跑 `python scripts/check_hygiene.py`。
 
+<!-- repository-files:begin -->
+- 公开仓库（有 `LICENSE`）要有 `CONTRIBUTING.md`、`SECURITY.md`、`CODE_OF_CONDUCT.md` 和 issue / PR 模板；私有仓库至少要有 `SECURITY.md`。
+- 公开的 `SECURITY.md` 写对外披露流程，不写凭据放在哪、怎么轮换；私有仓库反过来写。两套不合并。
+- 模板文件名用下划线：`pull_request_template.md`、`issue_template.md`，写成连字符不会被 GitHub 识别。
+<!-- repository-files:end -->
+
 ## 不要做
 
 - 不要在消息里回显 Bot token、会话内容或本机路径。
 - 不要改 tmux 会话的命名和生命周期语义。已有会话靠这套命名恢复。
 - 不要在 handler 里直接执行 shell 命令。所有命令走已有的白名单路径。
 - 不要扩大允许的 chat 和 topic 范围。
+
+<!-- content-boundary:begin -->
+- 公开材料不出现真实资源名与账号：桶写 `gs://<bucket>/...`，账号写 `<account-id>`，示例用合成值。
+- 桶名、账号、主机名从 `vars.*`、环境变量或受保护配置读，不写死在源码、workflow 和文档里。
+- 哈希不是匿名手段：提交号、摘要、截断的 ID 只要能反查到真实对象，就不进公开材料。
+- 判断一次改动是否干净看 `git diff` 和 `git ls-files`；`.gitignore` 只影响未跟踪文件，不能当证据。
+<!-- content-boundary:end -->
 
 ## 提交与 PR
 
