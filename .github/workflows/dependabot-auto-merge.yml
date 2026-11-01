@@ -1,7 +1,7 @@
 name: Dependabot Auto Merge
 on:
   workflow_run:
-    workflows: ["Secret Scan", "Repository hygiene", "Check", "Dependabot update policy"]
+    workflows: ["Secret Scan", "Repository hygiene", "Check", "Dependabot update policy", "PR risk gate"]
     types: [completed]
 permissions:
   contents: read
@@ -11,7 +11,7 @@ concurrency:
 jobs:
   merge:
     name: Approve and squash verified Dependabot updates
-    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    if: contains(fromJSON('["pull_request","pull_request_target"]'), github.event.workflow_run.event) && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

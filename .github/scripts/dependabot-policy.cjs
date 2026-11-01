@@ -82,7 +82,7 @@ function main(mode) {
   }
   if (mode !== 'merge') throw new Error('Expected metadata or merge command');
   const run = event.workflow_run;
-  if (run?.event !== 'pull_request' || run.conclusion !== 'success' || run.repository?.full_name !== repo) return;
+  if (!['pull_request', 'pull_request_target'].includes(run?.event) || run.conclusion !== 'success' || run.repository?.full_name !== repo) return;
   let numbers = (run.pull_requests || []).map(p => p.number);
   if (!numbers.length) numbers = pages(`repos/${repo}/commits/${run.head_sha}/pulls?per_page=100`).map(p => p.number);
   numbers = [...new Set(numbers)];

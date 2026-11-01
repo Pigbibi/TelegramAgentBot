@@ -89,7 +89,7 @@ function exerciseMerge(mutate = () => {}) {
     fs.copyFileSync(path.join(__dirname, 'dependabot-policy.cjs'), path.join(temp, 'policy.cjs'));
     fs.writeFileSync(path.join(temp, 'dependabot-policy.json'), JSON.stringify(f.config));
     fs.writeFileSync(path.join(temp, 'event.json'), JSON.stringify({workflow_run: {
-      event: 'pull_request', conclusion: 'success', repository: {full_name: f.repo}, head_sha: f.eventHead,
+      event: state.event || 'pull_request', conclusion: 'success', repository: {full_name: f.repo}, head_sha: f.eventHead,
       pull_requests: [{number: 1}],
     }}));
     fs.writeFileSync(path.join(temp, 'state.json'), JSON.stringify(state));
@@ -174,4 +174,11 @@ for (const [name, mutate] of [
 test('two-component stable requirement supports a minor update', () => {
   const f = fixture(); Object.assign(f.dependencies[0], {prevVersion: '1.45', newVersion: '1.64.0', updateType: 'version-update:semver-minor'});
   assert.equal(eligible(f), true);
+});
+
+test('trusted governance completion can trigger the same exact-head merge', () => {
+  assert.deepEqual(exerciseMerge(s => {s.event = 'pull_request_target';}), mergeArguments('Pigbibi/Example', 1, sha));
+});
+test('unrelated workflow event cannot trigger merge', () => {
+  assert.equal(exerciseMerge(s => {s.event = 'push';}), null);
 });
