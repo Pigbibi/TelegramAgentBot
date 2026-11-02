@@ -1,0 +1,16 @@
+# Advisory provider opinion; native checks and the review bot remain authoritative.
+language: en-US
+reviews:
+  profile: chill
+  auto_apply_labels: false
+  review_status: true
+  auto_review:
+    enabled: false
+    drafts: true
+    auto_incremental_review: false
+    labels:
+      - review-ready
+  auto_approvals:
+    enabled: false
+    allow_author_approval: false
+    max_merge_risk: low
