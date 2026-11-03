@@ -36,17 +36,20 @@ issue number unless `--force` is used.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import json
 import logging
 import os
 import random
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -331,14 +334,64 @@ def load_state(path: Path) -> dict[str, Any]:
 
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
-    """Persist bridge state atomically."""
+    """Persist private bridge state before acknowledging an external send."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(
-        json.dumps(state, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    tmp_path.replace(path)
+    fd, temporary = tempfile.mkstemp(prefix=".bridge-state-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(state, indent=2, sort_keys=True) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        # state_lock or a failed earlier write may have created the ancestors.
+        # Persist every directory entry before allowing an external dispatch.
+        parent = path.parent.resolve()
+        for ancestor in (parent, *parent.parents):
+            directory = os.open(ancestor, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+class StateLockBusyError(BlockingIOError):
+    """Another executor already owns the bridge state lock."""
+
+
+@contextmanager
+def state_lock(path: Path) -> Iterator[None]:
+    """Hold one executor for this state file, including watch mode."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise StateLockBusyError(
+                "Another bridge executor is already running"
+            ) from exc
+        yield
+    finally:
+        os.close(fd)
+
+
+def _reserve_dispatch(
+    record: dict[str, Any], fingerprint: str, state: dict[str, Any], path: Path | None
+) -> bool:
+    if "dispatch_pending" in record:
+        logger.error("Dispatch outcome is unknown; reconcile before another send")
+        return False
+    if path is not None:
+        record["dispatch_pending"] = {
+            "fingerprint": fingerprint,
+            "reserved_at": datetime.now(tz=UTC).isoformat(),
+        }
+        save_state(path, state)
+    return True
 
 
 def list_open_issues(
@@ -628,13 +681,13 @@ def dispatch_to_tmux(
         _run_subprocess_with_retry(
             [*prefix, "paste-buffer", "-b", buffer_name, "-t", window, "-d"],
             retryable_prefixes=("tmux",),
-            attempts=attempts,
+            attempts=1,
             base_delay_seconds=base_delay_seconds,
         )
         _run_subprocess_with_retry(
             [*prefix, "send-keys", "-t", window, "C-m"],
             retryable_prefixes=("tmux",),
-            attempts=attempts,
+            attempts=1,
             base_delay_seconds=base_delay_seconds,
         )
     finally:
@@ -652,6 +705,7 @@ def process_target(
     *,
     force: bool = False,
     dry_run: bool = False,
+    state_file: Path | None = None,
 ) -> bool:
     """Poll one target and dispatch a new issue if needed."""
     target_state = state.setdefault("targets", {}).setdefault(target.name, {})
@@ -707,6 +761,9 @@ def process_target(
         print(message, end="")
         return True
 
+    if not _reserve_dispatch(target_state, fingerprint, state, state_file):
+        return False
+
     try:
         dispatch_to_tmux(
             candidate_target_window(target),
@@ -716,6 +773,9 @@ def process_target(
             base_delay_seconds=config.retry_base_delay_seconds,
         )
     except TmuxTargetNotFoundError as exc:
+        target_state.pop("dispatch_pending", None)
+        if state_file is not None:
+            save_state(state_file, state)
         logger.error(
             "Skipping dispatch for target=%s issue #%d: %s",
             target.name,
@@ -727,6 +787,9 @@ def process_target(
     target_state["last_issue_number"] = candidate.number
     target_state["last_issue_url"] = candidate.url
     target_state["last_dispatched_at"] = datetime.now(tz=UTC).isoformat()
+    target_state.pop("dispatch_pending", None)
+    if state_file is not None:
+        save_state(state_file, state)
     logger.info(
         "Dispatched issue #%d to target=%s window=%s",
         candidate.number,
@@ -743,6 +806,7 @@ def process_orchestrator(
     force: bool = False,
     dry_run: bool = False,
     issue_number: int | None = None,
+    state_file: Path | None = None,
 ) -> bool:
     """Poll the orchestrator issue and dispatch it to the runner window."""
     orch_state = state.setdefault("orchestrator", {})
@@ -793,6 +857,9 @@ def process_orchestrator(
         print(message, end="")
         return True
 
+    if not _reserve_dispatch(orch_state, fingerprint, state, state_file):
+        return False
+
     try:
         dispatch_to_tmux(
             config.runner_window,
@@ -802,6 +869,9 @@ def process_orchestrator(
             base_delay_seconds=config.retry_base_delay_seconds,
         )
     except TmuxTargetNotFoundError as exc:
+        orch_state.pop("dispatch_pending", None)
+        if state_file is not None:
+            save_state(state_file, state)
         logger.error(
             "Skipping orchestrator dispatch for issue #%d: %s",
             candidate.number,
@@ -812,6 +882,9 @@ def process_orchestrator(
     orch_state["last_issue_number"] = candidate.number
     orch_state["last_issue_url"] = candidate.url
     orch_state["last_dispatched_at"] = datetime.now(tz=UTC).isoformat()
+    orch_state.pop("dispatch_pending", None)
+    if state_file is not None:
+        save_state(state_file, state)
     logger.info(
         "Dispatched issue #%d to orchestrator runner window=%s",
         candidate.number,
@@ -906,6 +979,7 @@ def run_once(
     dry_run: bool = False,
     target_names: list[str] | None = None,
     issue_number: int | None = None,
+    state_file: Path | None = None,
 ) -> int:
     """Run one bridge pass and return the number of dispatches."""
     mode = config.bridge_mode.lower()
@@ -917,6 +991,7 @@ def run_once(
                 force=force,
                 dry_run=dry_run,
                 issue_number=issue_number,
+                state_file=state_file,
             )
         )
     if mode != "targets":
@@ -935,9 +1010,29 @@ def run_once(
                 merge_label=target.merge_label,
                 extra_instructions=target.extra_instructions,
             )
-        if process_target(target, config, state, force=force, dry_run=dry_run):
+        if process_target(
+            target, config, state, force=force, dry_run=dry_run, state_file=state_file
+        ):
             dispatched += 1
     return dispatched
+
+
+class PendingDispatchError(RuntimeError):
+    """The CLI cannot safely write or dispatch with unresolved evidence."""
+
+
+def _check_cli_pending_dispatch(state: dict[str, Any]) -> None:
+    """Check the whole shared file before any target can dispatch or save."""
+    records = [state.get("orchestrator")]
+    targets = state.get("targets", {})
+    if isinstance(targets, dict):
+        records.extend(targets.values())
+    if any(
+        isinstance(record, dict) and "dispatch_pending" in record for record in records
+    ):
+        raise PendingDispatchError(
+            "Dispatch outcome is unknown; reconcile before another send"
+        )
 
 
 def _watch(
@@ -953,6 +1048,7 @@ def _watch(
 ) -> None:
     """Run bridge passes without turning transient CLI failures into a crash loop."""
     while True:
+        _check_cli_pending_dispatch(state)
         try:
             dispatched = run_once(
                 config,
@@ -961,6 +1057,7 @@ def _watch(
                 dry_run=dry_run,
                 target_names=target_names,
                 issue_number=issue_number,
+                state_file=state_file,
             )
         except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as exc:
             logger.error(
@@ -978,7 +1075,18 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
     args = _parse_args(argv or sys.argv[1:])
     config = _load_config(args.config)
+    try:
+        with state_lock(args.state_file):
+            return _run_config(args, config)
+    except (PendingDispatchError, StateLockBusyError) as exc:
+        logger.error("%s", exc)
+        return 1
+
+
+def _run_config(args: argparse.Namespace, config: BridgeConfig) -> int:
+    """Read and use state only while the CLI holds its exclusive lock."""
     state = load_state(args.state_file)
+    _check_cli_pending_dispatch(state)
 
     logging.basicConfig(
         level=logging.INFO,
@@ -1012,6 +1120,7 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
         target_names=args.targets,
         issue_number=args.issue_number,
+        state_file=args.state_file,
     )
     save_state(args.state_file, state)
     logger.info("Bridge pass complete: dispatched=%d", dispatched)
