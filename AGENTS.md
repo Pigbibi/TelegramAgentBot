@@ -62,6 +62,7 @@ uv run pytest --tb=short -q
 <!-- content-boundary:begin -->
 - 公开材料不出现真实资源名与账号：桶写 `gs://<bucket>/...`，账号写 `<account-id>`，示例用合成值。
 - 桶名、账号、主机名从 `vars.*`、环境变量或受保护配置读，不写死在源码、workflow 和文档里。
+- 唯一例外是可复用工作流的 `uses: owner/repo/path@ref` 引用：GitHub 要求这里的 `owner/repo` 是字面量，不能来自 `vars.*`，而它指向的是公开仓库，不是资源名泄露。例外只覆盖 `uses:` 这一行；`with:` 里传的值、以及任何指向私有资源的名称，仍按上一条从配置读取。
 - 哈希不是匿名手段：提交号、摘要、截断的 ID 只要能反查到真实对象，就不进公开材料。
 - 判断一次改动是否干净看 `git diff` 和 `git ls-files`；`.gitignore` 只影响未跟踪文件，不能当证据。
 <!-- content-boundary:end -->
