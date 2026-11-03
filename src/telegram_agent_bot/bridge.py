@@ -357,6 +357,10 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
             os.unlink(temporary)
 
 
+class StateLockBusyError(BlockingIOError):
+    """Another executor already owns the bridge state lock."""
+
+
 @contextmanager
 def state_lock(path: Path) -> Iterator[None]:
     """Hold one executor for this state file, including watch mode."""
@@ -364,7 +368,12 @@ def state_lock(path: Path) -> Iterator[None]:
     lock_path = path.with_suffix(path.suffix + ".lock")
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise StateLockBusyError(
+                "Another bridge executor is already running"
+            ) from exc
         yield
     finally:
         os.close(fd)
@@ -1069,7 +1078,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with state_lock(args.state_file):
             return _run_config(args, config)
-    except PendingDispatchError as exc:
+    except (PendingDispatchError, StateLockBusyError) as exc:
         logger.error("%s", exc)
         return 1
 

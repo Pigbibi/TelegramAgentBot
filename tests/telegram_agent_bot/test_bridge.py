@@ -92,6 +92,17 @@ def test_state_lock_rejects_competing_executor(tmp_path: Path) -> None:
                 pytest.fail("second executor acquired active state")
 
 
+def test_cli_reports_competing_executor_without_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "state.json"
+    monkeypatch.setattr(bridge, "_load_config", lambda _: BridgeConfig(targets=[]))
+    monkeypatch.setattr(bridge, "_run_config", lambda *_: pytest.fail("dispatched"))
+    with bridge.state_lock(path):
+        assert bridge.main(["--state-file", str(path)]) != 0
+    assert "already running" in caplog.text
+
+
 def test_reservation_write_failure_prevents_send(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
