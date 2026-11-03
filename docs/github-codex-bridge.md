@@ -174,6 +174,10 @@ dispatch to that target, including `--force`. Paste and Enter are each attempted
 once because a timeout does not establish that the operation failed. A confirmed
 missing tmux target clears the reservation, since no input was sent.
 
+Any existing `dispatch_pending` key is treated as an unknown outcome, even when
+its value is empty or malformed. The bridge preserves that evidence and blocks
+dispatch until it has been reconciled; `--force` does not bypass this check.
+
 After a confirmed send, the bridge saves the dispatch receipt immediately. This
 records input delivery, not successful execution or business recovery. If a
 reservation remains, stop the bridge, reconcile the actual destination and job

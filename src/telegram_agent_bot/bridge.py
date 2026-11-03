@@ -369,7 +369,7 @@ def state_lock(path: Path) -> Iterator[None]:
 def _reserve_dispatch(
     record: dict[str, Any], fingerprint: str, state: dict[str, Any], path: Path | None
 ) -> bool:
-    if record.get("dispatch_pending"):
+    if "dispatch_pending" in record:
         logger.error("Dispatch outcome is unknown; reconcile before another send")
         return False
     if path is not None:

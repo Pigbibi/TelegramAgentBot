@@ -633,3 +633,53 @@ def test_process_orchestrator_fetches_full_issue_payload(monkeypatch) -> None:
     assert dispatched is True
     assert "owner/repo-a" in sent[0][1]
     assert "@ops" in sent[0][1]
+
+
+@pytest.mark.parametrize("mode", ["targets", "orchestrator"])
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize("pending", [None, {}, [], "", False, 0, "synthetic-malformed"])
+def test_present_pending_reservation_blocks_and_preserves_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    mode: str,
+    force: bool,
+    pending: object,
+) -> None:
+    issue = _make_issue(1, "Synthetic maintenance")
+    target = BridgeTarget(name="alpha", repo="org/repo", window="@1", issue_number=1)
+    config = BridgeConfig(bridge_mode=mode, targets=[target])
+    record = {"dispatch_pending": pending, "synthetic_evidence": "retain"}
+    state = (
+        {"targets": {"alpha": record}}
+        if mode == "targets"
+        else {"orchestrator": record}
+    )
+    path = tmp_path / "state.json"
+    bridge.save_state(path, state)
+    evidence = path.read_bytes()
+    monkeypatch.setattr(bridge, "fetch_issue", lambda *a, **k: issue)
+    monkeypatch.setattr(
+        bridge,
+        "dispatch_to_tmux",
+        lambda *a, **k: pytest.fail("dispatched over an unresolved reservation"),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "save_state",
+        lambda *a, **k: pytest.fail("overwrote unresolved reservation evidence"),
+    )
+    restarted = bridge.load_state(path)
+    assert (
+        bridge.run_once(
+            config,
+            restarted,
+            state_file=path,
+            issue_number=1,
+            force=force,
+        )
+        == 0
+    )
+    assert restarted == state
+    assert path.read_bytes() == evidence
+    assert "Dispatch outcome is unknown" in caplog.text
