@@ -98,3 +98,10 @@ docs/superpowers/
 # AI 编程约束随仓库版本管理。
 !/AGENTS.md
 !/CLAUDE.md
+
+# Working notes are drafts, not documentation. Ignoring them is the only layer
+# that acts before the note is committed — the other two only notice afterwards.
+.local/
+ops-notes/
+*.local.md
+*.internal.md
