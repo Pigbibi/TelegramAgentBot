@@ -114,7 +114,7 @@ Top-level limits keep each poll bounded:
 | `body_limit` | `4000` | Maximum issue-body characters added to the prompt |
 | `comment_limit` | `3` | Maximum recent comments added to the prompt |
 | `poll_interval_seconds` | `300` | Watch-mode interval |
-| `retry_attempts` | `3` | Attempts for transient `gh` and tmux subprocess failures |
+| `retry_attempts` | `3` | Attempts for transient `gh` and read-only tmux failures; paste and Enter are attempted once |
 | `retry_base_delay_seconds` | `1.0` | Exponential-backoff base delay |
 | `tmux_socket` | unset | Optional tmux socket path or name used by the bridge |
 
@@ -168,7 +168,9 @@ tmux destinations; separate files do not provide a shared lock. Programmatic
 callers must hold `state_lock` and pass `state_file` to `run_once` for the same
 guarantees. A dry run sends no input and writes no dispatch reservation.
 
-Before sending input, the bridge durably saves `dispatch_pending`. An interrupted
+Before sending input, the bridge durably saves `dispatch_pending`, syncing the
+state directory and its ancestors so newly created directories are persisted.
+If any sync fails, it does not send input. An interrupted
 or uncertain paste/Enter leaves that reservation in place and blocks further
 dispatch to that target, including `--force`. Paste and Enter are each attempted
 once because a timeout does not establish that the operation failed. A confirmed

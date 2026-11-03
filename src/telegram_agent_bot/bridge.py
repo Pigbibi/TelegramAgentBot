@@ -343,11 +343,15 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        # state_lock or a failed earlier write may have created the ancestors.
+        # Persist every directory entry before allowing an external dispatch.
+        parent = path.parent.resolve()
+        for ancestor in (parent, *parent.parents):
+            directory = os.open(ancestor, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)

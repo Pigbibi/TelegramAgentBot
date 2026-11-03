@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 from pathlib import Path
+import stat
 import subprocess
 
 import pytest
@@ -108,6 +110,80 @@ def test_reservation_write_failure_prevents_send(
         bridge.run_once(
             BridgeConfig(targets=[target]), {}, state_file=tmp_path / "state.json"
         )
+
+
+@pytest.mark.parametrize("mode", ["targets", "orchestrator"])
+@pytest.mark.parametrize("created_by_lock", [False, True])
+@pytest.mark.parametrize("relative", [False, True])
+def test_new_state_ancestors_are_durable_before_send(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    created_by_lock: bool,
+    relative: bool,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = Path("new/nested/state.json")
+    if not relative:
+        path = tmp_path / path
+    target = BridgeTarget(name="alpha", repo="org/repo", window="@1", issue_number=1)
+    config = BridgeConfig(bridge_mode=mode, targets=[target])
+    monkeypatch.setattr(bridge, "fetch_issue", lambda *a, **k: _make_issue(1, "Test"))
+    synced: set[tuple[int, int]] = set()
+    real_fsync = bridge.os.fsync
+
+    def record_fsync(fd: int) -> None:
+        real_fsync(fd)
+        info = bridge.os.fstat(fd)
+        if stat.S_ISDIR(info.st_mode):
+            synced.add((info.st_dev, info.st_ino))
+
+    monkeypatch.setattr(bridge.os, "fsync", record_fsync)
+    sends = []
+
+    def send(*args, **kwargs) -> None:
+        parent = path.parent.resolve()
+        for ancestor in (parent, *parent.parents):
+            info = ancestor.stat()
+            assert (info.st_dev, info.st_ino) in synced
+        sends.append(True)
+
+    monkeypatch.setattr(bridge, "dispatch_to_tmux", send)
+    with bridge.state_lock(path) if created_by_lock else nullcontext():
+        assert bridge.run_once(config, {}, state_file=path, issue_number=1) == 1
+    assert sends == [True]
+
+
+@pytest.mark.parametrize("mode", ["targets", "orchestrator"])
+@pytest.mark.parametrize("created_by_lock", [False, True])
+def test_ancestor_sync_failure_prevents_send(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    created_by_lock: bool,
+) -> None:
+    path = tmp_path / "new/nested/state.json"
+    target = BridgeTarget(name="alpha", repo="org/repo", window="@1", issue_number=1)
+    config = BridgeConfig(bridge_mode=mode, targets=[target])
+    monkeypatch.setattr(bridge, "fetch_issue", lambda *a, **k: _make_issue(1, "Test"))
+    ancestor = tmp_path.stat()
+    real_fsync = bridge.os.fsync
+
+    def fail_ancestor_sync(fd: int) -> None:
+        info = bridge.os.fstat(fd)
+        if (info.st_dev, info.st_ino) == (ancestor.st_dev, ancestor.st_ino):
+            raise OSError("synthetic ancestor sync failure")
+        real_fsync(fd)
+
+    monkeypatch.setattr(bridge.os, "fsync", fail_ancestor_sync)
+    monkeypatch.setattr(
+        bridge,
+        "dispatch_to_tmux",
+        lambda *a, **k: pytest.fail("sent before ancestor metadata was durable"),
+    )
+    with bridge.state_lock(path) if created_by_lock else nullcontext():
+        with pytest.raises(OSError, match="synthetic ancestor sync failure"):
+            bridge.run_once(config, {}, state_file=path, issue_number=1)
 
 
 def test_orchestrator_blocks_uncertain_dispatch_and_dry_run_writes_nothing(
