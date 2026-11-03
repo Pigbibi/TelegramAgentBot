@@ -683,3 +683,155 @@ def test_present_pending_reservation_blocks_and_preserves_evidence(
     assert restarted == state
     assert path.read_bytes() == evidence
     assert "Dispatch outcome is unknown" in caplog.text
+
+
+@pytest.mark.parametrize("mode", ["targets", "orchestrator"])
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize(
+    "pending",
+    [
+        None,
+        {},
+        [],
+        "",
+        False,
+        0,
+        "synthetic-malformed",
+        True,
+        1,
+        ["synthetic"],
+        {"unknown": "synthetic"},
+        {"fingerprint": "previous"},
+        {"fingerprint": "previous", "reserved_at": "2026-01-01T00:00:00Z"},
+    ],
+)
+@pytest.mark.parametrize(
+    "entry", ["default", "once", "watch", "config-watch", "dry-run"]
+)
+def test_cli_pending_reservation_fails_without_touching_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    mode: str,
+    force: bool,
+    pending: object,
+    entry: str,
+) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "bridge_mode": mode,
+                "dispatch_mode": "watch" if entry == "config-watch" else "once",
+                "source_repo": "org/repo",
+                "targets": [{"name": "alpha", "repo": "org/repo", "window": "@1"}],
+            }
+        )
+    )
+    record = {"dispatch_pending": pending, "synthetic_evidence": "retain"}
+    state = (
+        {"targets": {"alpha": record}}
+        if mode == "targets"
+        else {"orchestrator": record}
+    )
+    path = tmp_path / "state.json"
+    # Non-canonical JSON exposes even a rewrite that preserves the decoded value.
+    path.write_text(json.dumps(state, separators=(",", ":")) + "\n\n")
+    evidence = path.read_bytes()
+    original_stat = path.stat()
+    issue = _make_issue(1, "Synthetic maintenance")
+    monkeypatch.setattr(bridge, "fetch_issue", lambda *a, **k: issue)
+    monkeypatch.setattr(bridge, "list_open_issues", lambda *a, **k: [issue])
+    monkeypatch.setattr(
+        bridge, "dispatch_to_tmux", lambda *a, **k: pytest.fail("dispatched")
+    )
+    monkeypatch.setattr(
+        bridge.time, "sleep", lambda *a: pytest.fail("retried pending state")
+    )
+    argv = [
+        "--config",
+        str(config_path),
+        "--state-file",
+        str(path),
+        "--issue-number",
+        "1",
+    ]
+    if entry in {"once", "watch", "dry-run"}:
+        argv.append(f"--{entry}")
+    if force:
+        argv.append("--force")
+
+    assert bridge.main(argv) != 0
+    assert path.read_bytes() == evidence
+    assert path.stat().st_ino == original_stat.st_ino
+    assert path.stat().st_mtime_ns == original_stat.st_mtime_ns
+    assert "Dispatch outcome is unknown" in caplog.text
+
+
+@pytest.mark.parametrize("mode", ["targets", "orchestrator"])
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize("pending_location", ["unselected-target", "inactive-mode"])
+def test_cli_checks_entire_shared_state_before_processing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    force: bool,
+    pending_location: str,
+) -> None:
+    target = BridgeTarget(name="alpha", repo="org/repo", window="@1", issue_number=1)
+    config = BridgeConfig(bridge_mode=mode, targets=[target])
+    state: dict = {"targets": {"alpha": {}}}
+    if pending_location == "unselected-target" or mode == "orchestrator":
+        state["targets"]["beta"] = {"dispatch_pending": None}
+    else:
+        state["orchestrator"] = {"dispatch_pending": None}
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state, separators=(",", ":")))
+    evidence = path.read_bytes()
+    monkeypatch.setattr(bridge, "_load_config", lambda *a: config)
+    monkeypatch.setattr(
+        bridge, "run_once", lambda *a, **k: pytest.fail("processed state")
+    )
+    monkeypatch.setattr(
+        bridge, "save_state", lambda *a, **k: pytest.fail("saved state")
+    )
+    argv = ["--state-file", str(path), "--target", "alpha"]
+    if force:
+        argv.append("--force")
+    assert bridge.main(argv) != 0
+    assert path.read_bytes() == evidence
+
+
+@pytest.mark.parametrize("mode", ["targets", "orchestrator"])
+@pytest.mark.parametrize("force", [False, True])
+def test_cli_watch_stops_after_uncertain_send_without_rewriting_reservation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, force: bool
+) -> None:
+    target = BridgeTarget(name="alpha", repo="org/repo", window="@1", issue_number=1)
+    config = BridgeConfig(bridge_mode=mode, targets=[target])
+    path = tmp_path / "state.json"
+    issue = _make_issue(1, "Synthetic maintenance")
+    monkeypatch.setattr(bridge, "_load_config", lambda *a: config)
+    monkeypatch.setattr(bridge, "fetch_issue", lambda *a, **k: issue)
+    evidence: list[bytes] = []
+    sleeps: list[int] = []
+
+    def uncertain_send(*args, **kwargs):
+        evidence.append(path.read_bytes())
+        if len(evidence) > 1:
+            pytest.fail("retried uncertain dispatch")
+        raise subprocess.TimeoutExpired("synthetic-tmux", 10)
+
+    def sleep(interval):
+        sleeps.append(interval)
+        if len(sleeps) > 1:
+            pytest.fail("watch did not stop")
+
+    monkeypatch.setattr(bridge, "dispatch_to_tmux", uncertain_send)
+    monkeypatch.setattr(bridge.time, "sleep", sleep)
+    argv = ["--state-file", str(path), "--watch", "--issue-number", "1"]
+    if force:
+        argv.append("--force")
+    assert bridge.main(argv) != 0
+    assert len(evidence) == len(sleeps) == 1
+    assert path.read_bytes() == evidence[0]

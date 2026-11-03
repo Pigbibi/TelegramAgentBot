@@ -177,6 +177,13 @@ missing tmux target clears the reservation, since no input was sent.
 Any existing `dispatch_pending` key is treated as an unknown outcome, even when
 its value is empty or malformed. The bridge preserves that evidence and blocks
 dispatch until it has been reconciled; `--force` does not bypass this check.
+The CLI checks all records in the shared state file before processing any target,
+including targets excluded by `--target`. If any reservation is present, it exits
+nonzero without rewriting the file or dispatching. This applies to the default
+single pass, `--once`, both CLI/configured watch mode, and `--dry-run`.
+
+Watch mode checks before each subsequent pass and stops if an uncertain send left a
+reservation behind.
 
 After a confirmed send, the bridge saves the dispatch receipt immediately. This
 records input delivery, not successful execution or business recovery. If a

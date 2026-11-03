@@ -1004,6 +1004,24 @@ def run_once(
     return dispatched
 
 
+class PendingDispatchError(RuntimeError):
+    """The CLI cannot safely write or dispatch with unresolved evidence."""
+
+
+def _check_cli_pending_dispatch(state: dict[str, Any]) -> None:
+    """Check the whole shared file before any target can dispatch or save."""
+    records = [state.get("orchestrator")]
+    targets = state.get("targets", {})
+    if isinstance(targets, dict):
+        records.extend(targets.values())
+    if any(
+        isinstance(record, dict) and "dispatch_pending" in record for record in records
+    ):
+        raise PendingDispatchError(
+            "Dispatch outcome is unknown; reconcile before another send"
+        )
+
+
 def _watch(
     config: BridgeConfig,
     state: dict[str, Any],
@@ -1017,6 +1035,7 @@ def _watch(
 ) -> None:
     """Run bridge passes without turning transient CLI failures into a crash loop."""
     while True:
+        _check_cli_pending_dispatch(state)
         try:
             dispatched = run_once(
                 config,
@@ -1043,13 +1062,18 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
     args = _parse_args(argv or sys.argv[1:])
     config = _load_config(args.config)
-    with state_lock(args.state_file):
-        return _run_config(args, config)
+    try:
+        with state_lock(args.state_file):
+            return _run_config(args, config)
+    except PendingDispatchError as exc:
+        logger.error("%s", exc)
+        return 1
 
 
 def _run_config(args: argparse.Namespace, config: BridgeConfig) -> int:
     """Read and use state only while the CLI holds its exclusive lock."""
     state = load_state(args.state_file)
+    _check_cli_pending_dispatch(state)
 
     logging.basicConfig(
         level=logging.INFO,
