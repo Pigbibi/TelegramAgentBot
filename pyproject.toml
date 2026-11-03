@@ -5,7 +5,7 @@ description = "Telegram bot for monitoring Codex CLI / Claude Code sessions via 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "python-telegram-bot[rate-limiter]>=21.0",
+    "python-telegram-bot[rate-limiter]>=22.8",
     "python-dotenv>=1.0.0",
     "httpx>=0.28.1",
     "libtmux>=0.37.0",
