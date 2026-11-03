@@ -114,7 +114,7 @@ Top-level limits keep each poll bounded:
 | `body_limit` | `4000` | Maximum issue-body characters added to the prompt |
 | `comment_limit` | `3` | Maximum recent comments added to the prompt |
 | `poll_interval_seconds` | `300` | Watch-mode interval |
-| `retry_attempts` | `3` | Attempts for transient `gh` and tmux subprocess failures |
+| `retry_attempts` | `3` | Attempts for transient `gh` and read-only tmux failures; paste and Enter are attempted once |
 | `retry_base_delay_seconds` | `1.0` | Exponential-backoff base delay |
 | `tmux_socket` | unset | Optional tmux socket path or name used by the bridge |
 
@@ -159,6 +159,46 @@ The default state file is:
 ```text
 ~/.telegram-agent-bot/github_codex_bridge_state.json
 ```
+
+## Dispatch recovery
+
+The CLI holds an exclusive lock beside its state file for the entire invocation,
+including watch mode. Use one state file for every executor targeting the same
+tmux destinations; separate files do not provide a shared lock. Programmatic
+callers must hold `state_lock` and pass `state_file` to `run_once` for the same
+guarantees. A dry run sends no input and writes no dispatch reservation.
+
+Before sending input, the bridge durably saves `dispatch_pending`, syncing the
+state directory and its ancestors so newly created directories are persisted.
+If any sync fails, it does not send input. An interrupted
+or uncertain paste/Enter leaves that reservation in place and blocks further
+dispatch to that target, including `--force`. Paste and Enter are each attempted
+once because a timeout does not establish that the operation failed. A confirmed
+missing tmux target clears the reservation, since no input was sent.
+
+Any existing `dispatch_pending` key is treated as an unknown outcome, even when
+its value is empty or malformed. The bridge preserves that evidence and blocks
+dispatch until it has been reconciled; `--force` does not bypass this check.
+The CLI checks all records in the shared state file before processing any target,
+including targets excluded by `--target`. If any reservation is present, it exits
+nonzero without rewriting the file or dispatching. This applies to the default
+single pass, `--once`, both CLI/configured watch mode, and `--dry-run`.
+
+Watch mode checks before each subsequent pass and stops if an uncertain send left a
+reservation behind.
+
+After a confirmed send, the bridge saves the dispatch receipt immediately. This
+records input delivery, not successful execution or business recovery. If a
+reservation remains, stop the bridge, reconcile the actual destination and job
+receipts, and back up state before clearing only the reconciled reservation. If
+delivery occurred, also record its fingerprint as the last dispatched fingerprint
+before restarting. Never clear a reservation or resubmit a mutating job merely
+because a completion callback is missing. Keep state and its backups private.
+
+This bridge has no authenticated completion-callback endpoint. It does not claim
+callback delivery, operation completion or deployment acceptance. Integrating
+those results requires the existing executor's authenticated receipt contract;
+dispatch state is not a substitute for it.
 
 ## Automatic merge
 
