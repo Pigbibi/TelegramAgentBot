@@ -160,6 +160,33 @@ The default state file is:
 ~/.telegram-agent-bot/github_codex_bridge_state.json
 ```
 
+## Dispatch recovery
+
+The CLI holds an exclusive lock beside its state file for the entire invocation,
+including watch mode. Use one state file for every executor targeting the same
+tmux destinations; separate files do not provide a shared lock. Programmatic
+callers must hold `state_lock` and pass `state_file` to `run_once` for the same
+guarantees. A dry run sends no input and writes no dispatch reservation.
+
+Before sending input, the bridge durably saves `dispatch_pending`. An interrupted
+or uncertain paste/Enter leaves that reservation in place and blocks further
+dispatch to that target, including `--force`. Paste and Enter are each attempted
+once because a timeout does not establish that the operation failed. A confirmed
+missing tmux target clears the reservation, since no input was sent.
+
+After a confirmed send, the bridge saves the dispatch receipt immediately. This
+records input delivery, not successful execution or business recovery. If a
+reservation remains, stop the bridge, reconcile the actual destination and job
+receipts, and back up state before clearing only the reconciled reservation. If
+delivery occurred, also record its fingerprint as the last dispatched fingerprint
+before restarting. Never clear a reservation or resubmit a mutating job merely
+because a completion callback is missing. Keep state and its backups private.
+
+This bridge has no authenticated completion-callback endpoint. It does not claim
+callback delivery, operation completion or deployment acceptance. Integrating
+those results requires the existing executor's authenticated receipt contract;
+dispatch state is not a substitute for it.
+
 ## Automatic merge
 
 Keep `merge_mode` set to `manual` unless the destination repository has a

@@ -42,6 +42,113 @@ def _make_issue(
     )
 
 
+def test_dispatch_reservation_survives_uncertain_send_and_blocks_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue = _make_issue(1, "Synthetic maintenance")
+    target = BridgeTarget(name="alpha", repo="org/repo", window="@1", issue_number=1)
+    config = BridgeConfig(targets=[target])
+    path = tmp_path / "state.json"
+    monkeypatch.setattr(bridge, "fetch_issue", lambda *a, **k: issue)
+
+    def uncertain_send(*args, **kwargs):
+        saved = bridge.load_state(path)
+        assert saved["targets"]["alpha"]["dispatch_pending"]
+        raise subprocess.TimeoutExpired("tmux", 10)
+
+    monkeypatch.setattr(bridge, "dispatch_to_tmux", uncertain_send)
+    with pytest.raises(subprocess.TimeoutExpired):
+        bridge.run_once(config, {}, state_file=path)
+    restarted = bridge.load_state(path)
+    monkeypatch.setattr(
+        bridge,
+        "dispatch_to_tmux",
+        lambda *a, **k: pytest.fail("replayed uncertain dispatch"),
+    )
+    assert bridge.run_once(config, restarted, state_file=path, force=True) == 0
+
+
+def test_successful_dispatch_receipt_is_persisted_before_next_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue = _make_issue(1, "Synthetic maintenance")
+    target = BridgeTarget(name="alpha", repo="org/repo", window="@1", issue_number=1)
+    path = tmp_path / "state.json"
+    monkeypatch.setattr(bridge, "fetch_issue", lambda *a, **k: issue)
+    monkeypatch.setattr(bridge, "dispatch_to_tmux", lambda *a, **k: None)
+    assert bridge.run_once(BridgeConfig(targets=[target]), {}, state_file=path) == 1
+    receipt = bridge.load_state(path)["targets"]["alpha"]
+    assert receipt["last_issue_number"] == 1
+    assert "dispatch_pending" not in receipt
+
+
+def test_state_lock_rejects_competing_executor(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    with bridge.state_lock(path):
+        with pytest.raises(BlockingIOError):
+            with bridge.state_lock(path):
+                pytest.fail("second executor acquired active state")
+
+
+def test_reservation_write_failure_prevents_send(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue = _make_issue(1, "Synthetic maintenance")
+    target = BridgeTarget(name="alpha", repo="org/repo", window="@1", issue_number=1)
+    monkeypatch.setattr(bridge, "fetch_issue", lambda *a, **k: issue)
+    monkeypatch.setattr(
+        bridge, "save_state", lambda *a: (_ for _ in ()).throw(OSError("disk full"))
+    )
+    monkeypatch.setattr(
+        bridge,
+        "dispatch_to_tmux",
+        lambda *a, **k: pytest.fail("sent before durable reservation"),
+    )
+    with pytest.raises(OSError):
+        bridge.run_once(
+            BridgeConfig(targets=[target]), {}, state_file=tmp_path / "state.json"
+        )
+
+
+def test_orchestrator_blocks_uncertain_dispatch_and_dry_run_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue = _make_issue(1, "Synthetic maintenance")
+    config = BridgeConfig(bridge_mode="orchestrator")
+    path = tmp_path / "state.json"
+    monkeypatch.setattr(bridge, "fetch_issue", lambda *a, **k: issue)
+    monkeypatch.setattr(
+        bridge,
+        "dispatch_to_tmux",
+        lambda *a, **k: pytest.fail("uncertain send replayed"),
+    )
+    state = {"orchestrator": {"dispatch_pending": {"fingerprint": "previous"}}}
+    assert (
+        bridge.run_once(config, state, state_file=path, issue_number=1, force=True) == 0
+    )
+    assert (
+        bridge.run_once(config, {}, state_file=path, issue_number=1, dry_run=True) == 1
+    )
+    assert not path.exists()
+
+
+def test_input_side_effects_are_never_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bridge, "_tmux_target_exists", lambda *a, **k: True)
+    calls = []
+    monkeypatch.setattr(
+        bridge,
+        "_run_subprocess_with_retry",
+        lambda args, **kwargs: calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(bridge.subprocess, "run", lambda *a, **k: None)
+    dispatch_to_tmux("@1", "synthetic", attempts=5)
+    assert [
+        kwargs["attempts"]
+        for args, kwargs in calls
+        if "paste-buffer" in args or "send-keys" in args
+    ] == [1, 1]
+
+
 def test_load_config(tmp_path: Path) -> None:
     cfg_path = tmp_path / "bridge.json"
     cfg_path.write_text(
