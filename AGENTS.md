@@ -72,7 +72,7 @@ uv run pytest --tb=short -q
 - Commit and PR titles use professional English, imperative Conventional Commits (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`, `ci`) and at most 72 characters. Sentence case is allowed; commitlint ignores merge commits.
 - PR descriptions explain the problem, changes, verification and risk. AI-authored PRs identify the tool and the model when available. Labels and approval or risk summaries use professional English.
 - Use `risk:low` for documentation, tests and ordinary checks; use `risk:high` and `needs-owner-approval` for protected paths. Classification labels describe risk; the path-based `risk-gate` determines whether approval is required.
-- AI-only development uses required automated checks, template validation and independent AI review when available, with zero required human or code-owner approvals. High-risk paths require the owner's `owner-approved` label; agents must never add or remove it.
+- AI-only development uses required automated checks, template validation and independent AI review when available, with zero required human or code-owner approvals. High-risk paths need an approval label: `owner-approved` states the owner confirmed it, while `agent-approved` states an agent cleared the change itself. Agents must never add or remove `owner-approved`; `risk-gate` names which label applied in its status. When both are present, `owner-approved` wins.
 - Preserve required checks and branch protection; merge only through normal checks. Use `<type>/<topic>` PR branches; never push directly to the default branch or force-push a reviewed branch. Commit, push, merge and production actions require authorization; existing authorization remains valid within its scope.
 
 ## AI 维护与交付
