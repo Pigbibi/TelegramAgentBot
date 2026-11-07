@@ -1,7 +1,7 @@
 name: Dependabot Auto Merge
 on:
   workflow_run:
-    workflows: ["Secret Scan", "Repository hygiene", "Check", "Dependabot update policy", "PR risk gate"]
+    workflows: ["Engineering governance", "Repository hygiene", "Check", "Dependabot update policy", "PR risk gate"]
     types: [completed]
 permissions:
   contents: read
