@@ -13,12 +13,11 @@
   ],
   "required_checks": [
     "test-summary",
-    "gitleaks",
+    "Gitleaks",
     "Repository hygiene",
     "Safe dependency update"
   ],
   "action_files": [
-    ".github/workflows/check.yml",
-    ".github/workflows/secret-scan.yml"
+    ".github/workflows/check.yml"
   ]
 }
