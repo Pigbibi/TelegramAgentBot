@@ -25,6 +25,17 @@ from telegram_agent_bot.backends.files import FileUploadResult
 from telegram_agent_bot.session import CodexSession
 
 from .protocol import (
+    DEFAULT_MAX_MESSAGE_BYTES,
+    OP_CAPTURE,
+    OP_CREATE_SESSION,
+    OP_LIST_DIRECTORY,
+    OP_LIST_ROOTS,
+    OP_LIST_SESSIONS,
+    OP_MESSAGE,
+    OP_SEND_CONTROL,
+    OP_SEND_MESSAGE,
+    OP_SUBSCRIBE,
+    OP_UPLOAD_FILE,
     listing_from_dict,
     message_from_dict,
     root_from_dict,
@@ -84,7 +95,8 @@ class SocketClusterBackend:
         )
         self.max_message_bytes = int(
             os.getenv(
-                "TELEGRAM_AGENT_BOT_SOCKET_MAX_MESSAGE_BYTES", str(25 * 1024 * 1024)
+                "TELEGRAM_AGENT_BOT_SOCKET_MAX_MESSAGE_BYTES",
+                str(DEFAULT_MAX_MESSAGE_BYTES),
             )
         )
         self._message_callback: MessageCallback | None = None
@@ -140,7 +152,7 @@ class SocketClusterBackend:
             result = await self._request(
                 node_id,
                 {
-                    "op": "create_session",
+                    "op": OP_CREATE_SESSION,
                     "cwd": request.cwd,
                     "window_name": request.window_name,
                     "resume_session_id": request.resume_session_id,
@@ -178,10 +190,10 @@ class SocketClusterBackend:
         )
 
     async def send_message(self, target: AgentTarget, text: str) -> SendResult:
-        return await self._send_to_target(target, {"op": "send_message", "text": text})
+        return await self._send_to_target(target, {"op": OP_SEND_MESSAGE, "text": text})
 
     async def send_control(self, target: AgentTarget, key: str) -> SendResult:
-        return await self._send_to_target(target, {"op": "send_control", "key": key})
+        return await self._send_to_target(target, {"op": OP_SEND_CONTROL, "key": key})
 
     async def capture(
         self,
@@ -193,7 +205,7 @@ class SocketClusterBackend:
             result = await self._request(
                 target.node_id,
                 {
-                    "op": "capture",
+                    "op": OP_CAPTURE,
                     "target": target_to_dict(target),
                     "with_ansi": with_ansi,
                 },
@@ -209,7 +221,7 @@ class SocketClusterBackend:
         roots: list[BrowserRoot] = []
         for node_id in self.nodes:
             try:
-                result = await self._request(node_id, {"op": "list_roots"})
+                result = await self._request(node_id, {"op": OP_LIST_ROOTS})
             except Exception:
                 logger.exception("Socket list_roots failed on %s", node_id)
                 continue
@@ -236,7 +248,7 @@ class SocketClusterBackend:
         result = await self._request(
             node_id,
             {
-                "op": "list_directory",
+                "op": OP_LIST_DIRECTORY,
                 "path": path,
                 "root_path": root_path,
             },
@@ -247,7 +259,7 @@ class SocketClusterBackend:
         result = await self._request(
             node_id,
             {
-                "op": "list_sessions",
+                "op": OP_LIST_SESSIONS,
                 "cwd": cwd,
             },
         )
@@ -270,7 +282,7 @@ class SocketClusterBackend:
             data = await asyncio.to_thread(path.read_bytes)
             content_b64 = base64.b64encode(data).decode("ascii")
             payload = {
-                "op": "upload_file",
+                "op": OP_UPLOAD_FILE,
                 "target": target_to_dict(target),
                 "filename": filename or path.name,
                 "content_b64": content_b64,
@@ -357,7 +369,7 @@ class SocketClusterBackend:
                 try:
                     request = {
                         "id": uuid.uuid4().hex,
-                        "op": "subscribe",
+                        "op": OP_SUBSCRIBE,
                         "node_id": node_id,
                     }
                     writer.write(
@@ -380,7 +392,7 @@ class SocketClusterBackend:
                 await asyncio.sleep(self.reconnect_delay)
 
     async def _handle_event(self, event: dict[str, Any]) -> None:
-        if event.get("op") != "message" or self._message_callback is None:
+        if event.get("op") != OP_MESSAGE or self._message_callback is None:
             return
         message_data = event.get("message")
         if not isinstance(message_data, dict):
