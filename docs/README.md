@@ -15,13 +15,13 @@ integrations.
 
 ## Optional components
 
-- [Agent backend plugins](agent_backend_plugins.md) — backend contract and
+- [Agent backend plugins](agent-backend-plugins.md) — backend contract and
   remote-node architecture
 - [Socket backend](../plugins/socket_backend/README.md) — center bot and remote
   agent node setup
-- [GitHub issue bridge](github_codex_bridge.md) — dispatch GitHub issues to
+- [GitHub issue bridge](github-codex-bridge.md) — dispatch GitHub issues to
   live Codex windows
-- [VPS cleanup timer](vps_cleanup.md) — bounded cleanup for small Linux hosts
+- [VPS cleanup timer](vps-cleanup.md) — bounded cleanup for small Linux hosts
 
 ## Project participation
 

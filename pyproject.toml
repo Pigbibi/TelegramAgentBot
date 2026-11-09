@@ -5,13 +5,14 @@ description = "Telegram bot for monitoring Codex CLI / Claude Code sessions via 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "python-telegram-bot[rate-limiter]>=21.0",
-    "python-dotenv>=1.0.0",
-    "httpx>=0.27.0",
+    "python-telegram-bot[rate-limiter]>=22.8",
+    "python-dotenv>=1.2.4",
+    "httpx>=0.28.1",
     "libtmux>=0.37.0",
-    "Pillow>=10.0.0",
+    "Pillow>=13.0.0",
     "aiofiles>=24.0.0",
-    "telegramify-markdown>=0.5.0,<1.0.0",
+    "mistletoe>=1.6.0,<1.7.0",
+    "telegramify-markdown>=1.4.2,<2.0.0",
 ]
 
 [project.scripts]
@@ -25,7 +26,7 @@ local = "telegram_agent_bot.backends.local:LocalTmuxBackend"
 dev = [
     "pyright>=1.1.0",
     "pytest>=8.0",
-    "pytest-asyncio>=0.24.0",
+    "pytest-asyncio>=1.4.1",
     "pytest-cov>=6.0",
     "ruff>=0.8.0",
 ]

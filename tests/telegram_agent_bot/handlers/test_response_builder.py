@@ -62,6 +62,29 @@ class TestBuildResponseParts:
         assert recovered == inner
         assert all(len(convert_markdown(part)) < 4096 for part in parts)
 
+    def test_long_quote_keeps_surrounding_markdown_and_boundaries(self):
+        inner = "quoted _ output!\n" * 600
+        text = (
+            f"**before**\n{EXP_START}{inner}{EXP_END}\n"
+            "- parent\n  - child\n    continued **after**"
+        )
+
+        parts = build_response_parts(text, is_complete=True, content_type="tool_result")
+        rendered = [convert_markdown(part) for part in parts]
+        recovered = "".join(
+            part.split(EXP_START, 1)[1].split(EXP_END, 1)[0]
+            for part in parts
+            if EXP_START in part
+        )
+
+        assert recovered == inner
+        assert all(len(part) < 4096 for part in rendered)
+        combined = "\n".join(rendered)
+        assert combined.count("*before*") == 1
+        assert combined.count("continued *after*") == 1
+        assert "    continued *after*" in combined
+        assert "||⦁" not in combined
+
     def test_thinking_has_prefix(self):
         parts = build_response_parts(
             "some thought", is_complete=True, content_type="thinking"

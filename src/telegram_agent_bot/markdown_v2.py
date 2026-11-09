@@ -9,15 +9,20 @@ Key function: convert_markdown(text) → MarkdownV2 string.
 """
 
 import re
+from collections.abc import Iterable
+from copy import copy
+from itertools import chain
+from threading import Lock
 
-import mistletoe
-from mistletoe.block_token import BlockCode, remove_token
-from telegramify_markdown import _update_block, escape_latex
-from telegramify_markdown.render import TelegramMarkdownRenderer
+from mistletoe import block_token, span_token
+from mistletoe.markdown_renderer import Fragment, MarkdownRenderer
+from mistletoe.token import Token
+from telegramify_markdown import markdownify
 
 from .transcript_parser import TranscriptParser
 
 _TABLE_SEP_RE = re.compile(r"^[\s|:\-]+$")
+_MARKDOWN_RENDER_LOCK = Lock()
 
 
 def _split_table_row(line: str) -> list[str]:
@@ -128,23 +133,72 @@ def _render_expandable_quote(m: re.Match[str]) -> str:
     return "\n".join(f">{line}" for line in escaped.split("\n")) + "||"
 
 
-def _markdownify(text: str) -> str:
-    """Custom markdownify with our rendering rules.
+class _MarkdownV2Renderer(MarkdownRenderer):
+    """Keep transcript block layout while delegating content to the public API.
 
-    Wraps TelegramMarkdownRenderer directly (instead of calling
-    telegramify_markdown.markdownify) so we can tweak token rules
-    inside the context manager — reset_tokens() in __exit__ would
-    otherwise undo any module-level changes.
-
-    Custom rules:
-      - Disable indented code blocks (only fenced ``` blocks are code).
+    Mistletoe still parses the existing fenced-code-only dialect. Its container
+    renderer preserves list continuation indentation; telegramify-markdown 1.x
+    renders the normalized leaf blocks, including code escaping and LaTeX.
     """
-    with TelegramMarkdownRenderer(normalize_whitespace=False) as renderer:
-        remove_token(BlockCode)
-        content = escape_latex(text)
-        document = mistletoe.Document(content)
-        _update_block(document)
-        return renderer.render(document)
+
+    def render_link_or_image(
+        self, token: span_token.SpanToken, target: str
+    ) -> Iterable[Fragment]:
+        if isinstance(
+            token, (span_token.Link, span_token.Image)
+        ) and token.dest_type not in ("uri", "angle_uri"):
+            # Resolve reference links before leaf blocks lose document context.
+            token = copy(token)
+            token.dest_type = "angle_uri"
+            token.title = ""  # Telegram links do not retain Markdown tooltips.
+        yield from super().render_link_or_image(token, target)
+
+    def blocks_to_lines(
+        self, tokens: Iterable[Token], max_line_length: int | None
+    ) -> Iterable[str]:
+        for token in tokens:
+            if isinstance(
+                token, (block_token.List, block_token.ListItem, block_token.Quote)
+            ):
+                yield from self.render_map[type(token).__name__](
+                    token, max_line_length=max_line_length
+                )
+            else:
+                source = super().render(token)
+                yield from markdownify(source).removesuffix("\n").split("\n")
+
+    def render_list_item(
+        self, token: block_token.ListItem, max_line_length: int | None
+    ) -> Iterable[str]:
+        children = list(token.children or ())
+        first_source = ""
+        if children and isinstance(children[0], block_token.Paragraph):
+            first_source = super().render(children.pop(0))
+
+        # Convert the marker with the first paragraph so the public API also
+        # handles ordered lists and task checkboxes. Layout is applied afterward
+        # rather than reparsing indented continuation lines as code.
+        first = (
+            markdownify(f"{token.leader} {first_source}").removesuffix("\n").split("\n")
+        )
+        following = self.blocks_to_lines(children, max_line_length=max_line_length)
+        return self.prefix_lines(
+            chain(first, following),
+            first_line_prefix=" " * token.indentation,
+            following_line_prefix=" " * token.prepend,
+        )
+
+
+def _markdownify(text: str) -> str:
+    """Render using public APIs, with only fenced blocks treated as code."""
+    # Mistletoe's token registry is process-global. Serialize our contexts and
+    # let the public renderer context restore its defaults even after errors.
+    with (
+        _MARKDOWN_RENDER_LOCK,
+        _MarkdownV2Renderer(normalize_whitespace=False) as renderer,
+    ):
+        block_token.remove_token(block_token.BlockCode)
+        return renderer.render(block_token.Document(text))
 
 
 def convert_markdown(text: str) -> str:
@@ -172,9 +226,19 @@ def convert_markdown(text: str) -> str:
         return _markdownify(text)
 
     parts: list[str] = []
+    previous_is_quote = False
     for is_quote, segment in segments:
         if is_quote:
-            parts.append(_EXPQUOTE_RE.sub(_render_expandable_quote, segment))
+            rendered = _EXPQUOTE_RE.sub(_render_expandable_quote, segment)
         else:
-            parts.append(_markdownify(segment))
+            rendered = _markdownify(segment)
+        if (
+            parts
+            and (is_quote or previous_is_quote)
+            and not parts[-1].endswith("\n")
+            and not rendered.startswith("\n")
+        ):
+            parts.append("\n")
+        parts.append(rendered)
+        previous_is_quote = is_quote
     return "".join(parts)

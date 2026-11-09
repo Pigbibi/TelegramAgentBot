@@ -1,5 +1,7 @@
 # Agent backend plugins
 
+English | [简体中文](agent-backend-plugins.zh-CN.md)
+
 TelegramAgentBot routes session operations through an agent backend. The
 built-in `local` backend controls tmux and transcript files on the same machine
 as the Telegram bot. A plugin can route those operations to another transport

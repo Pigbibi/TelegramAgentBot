@@ -1,6 +1,6 @@
 # Agent backend 插件
 
-[English](agent_backend_plugins.md)
+[English](agent-backend-plugins.md)
 
 TelegramAgentBot 默认使用 `local` backend，在运行机器上直接管理 tmux 和 agent
 transcript。只有 Telegram bot 与 agent 会话需要分布在不同机器时，才需要安装
@@ -16,4 +16,4 @@ backend 插件。
 
 Socket 协议本身不提供公网 TLS 或身份认证。节点应绑定在 `127.0.0.1`，并通过 SSH
 隧道或受控私有网络连接。完整接口、配置和插件设计约束见
-[英文文档](agent_backend_plugins.md)。
+[英文文档](agent-backend-plugins.md)。

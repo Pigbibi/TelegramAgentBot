@@ -80,6 +80,11 @@ tool summaries. Private model reasoning is not forwarded.
 Long Telegram messages are paginated, and Markdown output falls back to plain
 text when Telegram rejects the formatted form.
 
+Indented paragraphs and nested list continuations retain their formatting; only
+fenced blocks are treated as code. Tables are shown as cards, and expandable tool
+output keeps its complete content across pages with surrounding text on separate
+lines.
+
 ## Authentication and accounts
 
 The default session uses the selected CLI credentials of the service user.
@@ -134,11 +139,11 @@ annotated [`.env.example`](../.env.example) before enabling automatic changes.
 
 The built-in `local` backend controls tmux on the same machine as the Telegram
 bot. The backend plugin API supports alternative transports and remote agent
-nodes. See [Agent backend plugins](agent_backend_plugins.md).
+nodes. See [Agent backend plugins](agent-backend-plugins.md).
 
 The separate `telegram-agent-bridge` command can translate selected GitHub
 issues into structured prompts for existing Codex windows. See
-[GitHub issue bridge](github_codex_bridge.md).
+[GitHub issue bridge](github-codex-bridge.md).
 
 ## Data locations
 

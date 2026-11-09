@@ -77,7 +77,9 @@ Useful commands:
 | `/unbind` | Detach the topic without stopping its terminal |
 | `/kill` | Stop the bound window and remove the binding |
 
-The bot preserves topic bindings and pending input across service restarts. An idle tmux window may be paused and resumed when the next message arrives. If the CLI receives input but the transcript does not confirm it, AgentBot does **not** send it again automatically: first check the agent session, then resend only if it did not receive the message. [Features](docs/features.md) describes the full command and message behavior.
+The bot preserves topic bindings and pending input across service restarts. An idle tmux window may be paused and resumed when the next message arrives.
+
+If the CLI receives input but the transcript does not confirm it, AgentBot does **not** send it again automatically: check the agent session first, then resend only if it never arrived. [Features](docs/features.md) describes the full command and message behavior.
 
 ## Operate safely
 
@@ -101,8 +103,8 @@ for defaults, accounting failures, and provider/CLI limitations.
 ## Documentation and development
 
 - [Documentation index](docs/README.md) · [Features](docs/features.md) · [Configuration](docs/configuration.md) · [Deployment](docs/deployment.md)
-- [Backend plugins](docs/agent_backend_plugins.md) · [Socket backend](plugins/socket_backend/README.md)
-- [GitHub issue bridge](docs/github_codex_bridge.md) · [VPS cleanup timer](docs/vps_cleanup.md)
+- [Backend plugins](docs/agent-backend-plugins.md) · [Socket backend](plugins/socket_backend/README.md)
+- [GitHub issue bridge](docs/github-codex-bridge.md) · [VPS cleanup timer](docs/vps-cleanup.md)
 
 To work on the code, run `uv sync --extra dev` and follow [Contributing](CONTRIBUTING.md). For help or vulnerability reports, see [Support](SUPPORT.md) and [Security](SECURITY.md).
 

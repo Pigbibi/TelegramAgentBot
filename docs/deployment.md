@@ -175,7 +175,7 @@ Keep builds and test suites on GitHub-hosted runners or another development
 machine. The bot's health monitor reports memory, swap, disk, queue age, and
 transcript lag; `/health` provides a compact snapshot.
 
-The optional [VPS cleanup timer](vps_cleanup.md) reclaims selected rebuildable
+The optional [VPS cleanup timer](vps-cleanup.md) reclaims selected rebuildable
 artifacts without removing the AgentBot checkout or active uv runtimes.
 
 ## Troubleshooting

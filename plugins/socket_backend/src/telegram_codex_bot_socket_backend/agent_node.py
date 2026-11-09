@@ -21,6 +21,17 @@ from telegram_agent_bot.session import _session_ids_match, session_manager
 from telegram_agent_bot.session_monitor import NewMessage
 
 from .protocol import (
+    DEFAULT_MAX_MESSAGE_BYTES,
+    OP_CAPTURE,
+    OP_CREATE_SESSION,
+    OP_LIST_DIRECTORY,
+    OP_LIST_ROOTS,
+    OP_LIST_SESSIONS,
+    OP_MESSAGE,
+    OP_SEND_CONTROL,
+    OP_SEND_MESSAGE,
+    OP_SUBSCRIBE,
+    OP_UPLOAD_FILE,
     listing_to_dict,
     message_to_dict,
     root_to_dict,
@@ -51,7 +62,7 @@ class AgentNodeServer:
         self.max_message_bytes = max_message_bytes or int(
             os.getenv(
                 "TELEGRAM_AGENT_NODE_MAX_MESSAGE_BYTES",
-                str(25 * 1024 * 1024),
+                str(DEFAULT_MAX_MESSAGE_BYTES),
             )
         )
         self.local_backend = LocalTmuxBackend()
@@ -104,7 +115,7 @@ class AgentNodeServer:
             if not line:
                 return
             request = json.loads(line.decode())
-            if request.get("op") == "subscribe":
+            if request.get("op") == OP_SUBSCRIBE:
                 await self._handle_subscribe(reader, writer)
                 return
 
@@ -133,43 +144,43 @@ class AgentNodeServer:
 
     async def _dispatch(self, request: dict[str, Any]) -> dict[str, Any]:
         op = request.get("op")
-        if op == "create_session":
+        if op == OP_CREATE_SESSION:
             return await self._create_session(request)
-        if op == "send_message":
+        if op == OP_SEND_MESSAGE:
             result = await self.local_backend.send_message(
                 self._local_target(request),
                 str(request.get("text", "")),
             )
             return {"ok": result.ok, "message": result.message}
-        if op == "send_control":
+        if op == OP_SEND_CONTROL:
             result = await self.local_backend.send_control(
                 self._local_target(request),
                 str(request.get("key", "")),
             )
             return {"ok": result.ok, "message": result.message}
-        if op == "capture":
+        if op == OP_CAPTURE:
             text = await self.local_backend.capture(
                 self._local_target(request),
                 with_ansi=bool(request.get("with_ansi", False)),
             )
             return {"text": text}
-        if op == "list_roots":
+        if op == OP_LIST_ROOTS:
             roots = await self.local_backend.list_roots()
             return {"roots": [root_to_dict(root) for root in roots]}
-        if op == "list_directory":
+        if op == OP_LIST_DIRECTORY:
             listing = await self.local_backend.list_directory(
                 self.node_id,
                 str(request.get("path", "")),
                 root_path=str(request.get("root_path", "")),
             )
             return {"listing": listing_to_dict(listing)}
-        if op == "list_sessions":
+        if op == OP_LIST_SESSIONS:
             sessions = await self.local_backend.list_sessions(
                 self.node_id,
                 str(request.get("cwd", "")),
             )
             return {"sessions": [session_to_dict(session) for session in sessions]}
-        if op == "upload_file":
+        if op == OP_UPLOAD_FILE:
             return await self._upload_file(request)
         raise ValueError(f"Unsupported op {op!r}")
 
@@ -263,7 +274,7 @@ class AgentNodeServer:
                 session_id=target_session_id(self.node_id, window_id),
             )
         event = {
-            "op": "message",
+            "op": OP_MESSAGE,
             "node_id": self.node_id,
             "window_id": window_id,
             "message": message_to_dict(routed_message),
@@ -320,7 +331,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=int(
             os.getenv(
                 "TELEGRAM_AGENT_NODE_MAX_MESSAGE_BYTES",
-                str(25 * 1024 * 1024),
+                str(DEFAULT_MAX_MESSAGE_BYTES),
             )
         ),
         help="Maximum JSON line size accepted from the center bot",

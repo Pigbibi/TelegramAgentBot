@@ -72,7 +72,6 @@ venv.bak/
 .uv/
 uv.lock
 .claude/
-AGENTS.md
 .ruff_cache/
 *.log
 
@@ -83,3 +82,26 @@ state.json
 session_map.json
 monitor_state.json
 hooks.json
+
+# 内部审计、复盘与交接记录不进仓库。
+# 这类文档描述某一刻的状态，写完之后代码继续变，它不会跟着变，
+# 留在仓库里只会变成一份看起来权威的过期材料。需要追溯时看 commit 历史。
+*[Aa][Uu][Dd][Ii][Tt]*.md
+*[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*.md
+*-[Rr][Ee][Vv][Ii][Ee][Ww]-*.md
+*_[Rr][Ee][Vv][Ii][Ee][Ww]_*.md
+docs/audits/
+docs/plans/
+docs/handoffs/
+docs/superpowers/
+
+# AI 编程约束随仓库版本管理。
+!/AGENTS.md
+!/CLAUDE.md
+
+# Working notes are drafts, not documentation. Ignoring them is the only layer
+# that acts before the note is committed — the other two only notice afterwards.
+.local/
+ops-notes/
+*.local.md
+*.internal.md

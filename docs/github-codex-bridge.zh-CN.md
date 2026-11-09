@@ -1,6 +1,6 @@
 # GitHub issue bridge
 
-[English](github_codex_bridge.md)
+[English](github-codex-bridge.md)
 
 `telegram-agent-bridge` 轮询 GitHub issue，把符合条件的 issue 转成结构化任务，并
 发送到已经运行 Codex 的 tmux 窗口。它是独立任务注入器，不替代 TelegramAgentBot
@@ -16,4 +16,4 @@
 前，先用 `--dry-run` 检查生成的 prompt，再用 `--once` 验证仓库权限和 tmux 目标。
 
 自动合并应保持显式 opt-in，并由 label、PR、GitHub 必需检查和独立 merge gate
-共同约束。完整字段和命令见[英文文档](github_codex_bridge.md)。
+共同约束。完整字段和命令见[英文文档](github-codex-bridge.md)。

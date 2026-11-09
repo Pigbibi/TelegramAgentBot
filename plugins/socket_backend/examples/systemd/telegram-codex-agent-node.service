@@ -1,16 +1,16 @@
 [Unit]
-Description=TelegramCodexBot socket agent node
+Description=TelegramAgentBot socket agent node
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Projects/TelegramCodexBot
+WorkingDirectory=%h/Projects/TelegramAgentBot
 Environment=TELEGRAM_AGENT_NODE_ID=linux-node
 Environment=TELEGRAM_AGENT_NODE_HOST=127.0.0.1
 Environment=TELEGRAM_AGENT_NODE_PORT=8765
 Environment=TELEGRAM_AGENT_NODE_MAX_MESSAGE_BYTES=26214400
-ExecStart=%h/Projects/TelegramCodexBot/.venv/bin/telegram-agent-node
+ExecStart=%h/Projects/TelegramAgentBot/.venv/bin/telegram-agent-node
 Restart=on-failure
 RestartSec=5
 

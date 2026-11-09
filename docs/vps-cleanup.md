@@ -1,5 +1,7 @@
 # VPS cleanup timer
 
+English | [简体中文](vps-cleanup.zh-CN.md)
+
 TelegramAgentBot includes an optional Linux user timer for reclaiming selected
 rebuildable files on small hosts. It is conservative by default and runs only
 when disk pressure crosses a configured threshold.
