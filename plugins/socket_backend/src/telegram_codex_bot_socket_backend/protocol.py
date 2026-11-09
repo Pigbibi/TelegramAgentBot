@@ -1,4 +1,11 @@
-"""JSON protocol helpers for the socket backend plugin."""
+"""Wire vocabulary and JSON helpers for the socket backend plugin.
+
+The center bot (``backend.py``) writes newline-delimited JSON requests and the
+agent node (``agent_node.py``) dispatches on them. Both ends import this module,
+so the operation codes and the shared frame cap are defined once here: a
+mismatched ``op`` or frame size is only discovered at runtime, after a request
+has already been sent over the socket.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +16,21 @@ from telegram_agent_bot.backends.base import AgentTarget
 from telegram_agent_bot.backends.browser import BrowserRoot, DirectoryListing
 from telegram_agent_bot.session import CodexSession
 from telegram_agent_bot.session_monitor import NewMessage
+
+OP_CREATE_SESSION = "create_session"
+OP_SEND_MESSAGE = "send_message"
+OP_SEND_CONTROL = "send_control"
+OP_CAPTURE = "capture"
+OP_LIST_ROOTS = "list_roots"
+OP_LIST_DIRECTORY = "list_directory"
+OP_LIST_SESSIONS = "list_sessions"
+OP_UPLOAD_FILE = "upload_file"
+OP_SUBSCRIBE = "subscribe"
+OP_MESSAGE = "message"
+
+# Both ends bound the same asyncio StreamReader/JSON line with this cap; it is a
+# transport limit, so the center and every agent node must stay in agreement.
+DEFAULT_MAX_MESSAGE_BYTES = 25 * 1024 * 1024
 
 
 def target_session_id(node_id: str, window_id: str) -> str:
