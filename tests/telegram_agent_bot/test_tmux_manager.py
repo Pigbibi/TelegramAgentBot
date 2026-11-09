@@ -134,150 +134,6 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(prefix, ["tmux", "-S", str(explicit_socket)])
             self.assertEqual(parent.stat().st_mode & 0o777, 0o755)
 
-    async def test_create_window_uses_resume_subcommand(self) -> None:
-        pane = _DummyPane()
-        window = _DummyWindow(pane)
-        session = _DummySession(window)
-        manager = tmux_manager_module.TmuxManager(
-            session_name="telegram-agent-bot-test"
-        )
-
-        with tempfile.TemporaryDirectory(
-            prefix="telegram-agent-bot-workdir-"
-        ) as tmpdir:
-            with (
-                patch.object(
-                    manager, "find_window_by_name", AsyncMock(return_value=None)
-                ),
-                patch.object(manager, "get_or_create_session", return_value=session),
-                patch("telegram_agent_bot.tmux_manager.disable_codex_update_prompt"),
-                patch.object(
-                    tmux_manager_module.config,
-                    "codex_command",
-                    "/usr/local/bin/codex --search -s danger-full-access",
-                ),
-                patch(
-                    "telegram_agent_bot.tmux_manager.ensure_account_home",
-                    return_value=Path("/tmp/telegram-agent-bot-account-home"),
-                ),
-            ):
-                ok, _msg, _window_name, window_id = await manager.create_window(
-                    tmpdir,
-                    window_name="Projects",
-                    resume_session_id="sid-123",
-                    account_name="plus1",
-                )
-
-        self.assertTrue(ok)
-        self.assertEqual(window_id, "@9")
-        self.assertEqual(session.created, ("Projects", str(Path(tmpdir).resolve())))
-        self.assertEqual(window.window_options, [("allow-rename", "off")])
-        self.assertEqual(
-            pane.commands,
-            [
-                (
-                    "export CODEX_HOME=/tmp/telegram-agent-bot-account-home; "
-                    "/usr/local/bin/codex --search --sandbox "
-                    "workspace-write --ask-for-approval on-request resume sid-123",
-                    True,
-                )
-            ],
-        )
-
-    async def test_create_window_strips_rollout_prefix_for_resume(self) -> None:
-        pane = _DummyPane()
-        window = _DummyWindow(pane)
-        session = _DummySession(window)
-        manager = tmux_manager_module.TmuxManager(
-            session_name="telegram-agent-bot-test"
-        )
-
-        with tempfile.TemporaryDirectory(
-            prefix="telegram-agent-bot-workdir-"
-        ) as tmpdir:
-            with (
-                patch.object(
-                    manager, "find_window_by_name", AsyncMock(return_value=None)
-                ),
-                patch.object(manager, "get_or_create_session", return_value=session),
-                patch(
-                    "telegram_agent_bot.tmux_manager.disable_codex_update_prompt"
-                ) as disable_mock,
-                patch.object(
-                    tmux_manager_module.config,
-                    "codex_command",
-                    "/usr/local/bin/codex --search -s danger-full-access",
-                ),
-            ):
-                ok, _msg, _window_name, _window_id = await manager.create_window(
-                    tmpdir,
-                    window_name="Projects",
-                    resume_session_id=(
-                        "rollout-2026-04-03T17-59-47-"
-                        "019d52c8-d90d-7f72-9062-45cf0f71f97e"
-                    ),
-                )
-
-        self.assertTrue(ok)
-        disable_mock.assert_called_once_with()
-        self.assertEqual(
-            pane.commands,
-            [
-                (
-                    "/usr/local/bin/codex --search --sandbox "
-                    "workspace-write --ask-for-approval on-request resume "
-                    "019d52c8-d90d-7f72-9062-45cf0f71f97e",
-                    True,
-                )
-            ],
-        )
-
-    async def test_create_window_can_bypass_codex_hook_trust(self) -> None:
-        pane = _DummyPane()
-        window = _DummyWindow(pane)
-        session = _DummySession(window)
-        manager = tmux_manager_module.TmuxManager(
-            session_name="telegram-agent-bot-test"
-        )
-
-        with tempfile.TemporaryDirectory(
-            prefix="telegram-agent-bot-workdir-"
-        ) as tmpdir:
-            with (
-                patch.object(
-                    manager, "find_window_by_name", AsyncMock(return_value=None)
-                ),
-                patch.object(manager, "get_or_create_session", return_value=session),
-                patch("telegram_agent_bot.tmux_manager.disable_codex_update_prompt"),
-                patch.object(
-                    tmux_manager_module.config,
-                    "codex_command",
-                    "IS_SANDBOX=1 /usr/local/bin/codex --search",
-                ),
-                patch.object(
-                    tmux_manager_module.config,
-                    "codex_bypass_hook_trust",
-                    True,
-                ),
-            ):
-                ok, _msg, _window_name, _window_id = await manager.create_window(
-                    tmpdir,
-                    window_name="Projects",
-                )
-
-        self.assertTrue(ok)
-        self.assertEqual(
-            pane.commands,
-            [
-                (
-                    "IS_SANDBOX=1 /usr/local/bin/codex --search --sandbox "
-                    "workspace-write --ask-for-approval on-request "
-                    "--dangerously-bypass-hook-trust",
-                    True,
-                )
-            ],
-        )
-
     async def test_create_window_uses_claude_resume_flag_and_home(self) -> None:
         pane = _DummyPane()
         window = _DummyWindow(pane)
@@ -297,7 +153,7 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(tmux_manager_module.config, "agent_type", "claude"),
                 patch.object(
                     tmux_manager_module.config,
-                    "codex_command",
+                    "claude_command",
                     "/usr/bin/claude --model deepseek-v4-pro",
                 ),
                 patch.object(
@@ -335,45 +191,6 @@ class CreateWindowTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_create_window_uses_cursor_resume_flag_and_model(self) -> None:
-        pane = _DummyPane()
-        window = _DummyWindow(pane)
-        session = _DummySession(window)
-        manager = tmux_manager_module.TmuxManager(
-            session_name="telegram-agent-bot-test"
-        )
-
-        with tempfile.TemporaryDirectory(
-            prefix="telegram-agent-bot-workdir-"
-        ) as tmpdir:
-            with (
-                patch.object(
-                    manager, "find_window_by_name", AsyncMock(return_value=None)
-                ),
-                patch.object(manager, "get_or_create_session", return_value=session),
-                patch.object(tmux_manager_module.config, "cursor_command", "agent"),
-            ):
-                ok, _msg, _window_name, window_id = await manager.create_window(
-                    tmpdir,
-                    window_name="Projects",
-                    resume_session_id="cursor-chat-id",
-                    agent_type="cursor",
-                    model="auto",
-                )
-
-        self.assertTrue(ok)
-        self.assertEqual(window_id, "@9")
-        self.assertEqual(
-            pane.commands,
-            [
-                (
-                    "export TELEGRAM_AGENT_BOT_AGENT_TYPE=cursor; "
-                    "agent --model auto --resume cursor-chat-id",
-                    True,
-                )
-            ],
-        )
-
 
 class _SendKeysDummyPane:
     def __init__(self) -> None:
@@ -405,6 +222,17 @@ class _SendKeysDummySession:
 
 
 class SendKeysTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        from types import SimpleNamespace
+        from telegram_agent_bot.session import session_manager
+
+        self.state_patch = patch.dict(
+            session_manager.window_states,
+            {"@9": SimpleNamespace(agent_type="claudeofficial")},
+        )
+        self.state_patch.start()
+        self.addCleanup(self.state_patch.stop)
+
     def test_literal_submit_delay_increases_for_long_multiline_text(self) -> None:
         short_delay = tmux_manager_module.TmuxManager._literal_submit_delay("hello")
         long_delay = tmux_manager_module.TmuxManager._literal_submit_delay(

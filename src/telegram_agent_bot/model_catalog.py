@@ -8,12 +8,9 @@ the request fails.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import re
-import shlex
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -221,102 +218,12 @@ async def _fetch_model_ids(
 
 
 async def _discover_codex_models(values: dict[str, str]) -> list[CodexModelInfo]:
-    app_server_models = await _discover_codex_app_server_models()
-    if app_server_models:
-        allowed = set(_codex_model_ids([item.model for item in app_server_models]))
-        return [item for item in app_server_models if item.model in allowed]
-
-    if not values.get("OPENAI_API_KEY", "").strip():
-        return []
-    base_url = values.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    ids = await _fetch_model_ids(
-        _models_url(base_url, provider="openai"),
-        _provider_headers(values, provider="openai"),
-        provider="OpenAI",
-    )
-    return [CodexModelInfo(model_id) for model_id in _codex_model_ids(ids)]
+    """Retired provider: never discover accounts or start a CLI."""
+    return []
 
 
 async def _discover_codex_app_server_models() -> list[CodexModelInfo]:
-    """Ask the installed Codex CLI for models available to its current account."""
-    try:
-        command_parts = shlex.split(config.codex_cli_command)
-    except ValueError:
-        return []
-    if not command_parts:
-        return []
-
-    env = os.environ.copy()
-    executable_parts: list[str] = []
-    for part in command_parts:
-        name, separator, value = part.partition("=")
-        if separator and name.isidentifier():
-            env[name] = value
-        else:
-            executable_parts.append(part)
-    if not executable_parts:
-        return []
-    executable_parts[0] = shutil.which(executable_parts[0]) or executable_parts[0]
-
-    process: asyncio.subprocess.Process | None = None
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *executable_parts,
-            "app-server",
-            "--listen",
-            "stdio://",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            env=env,
-        )
-        if process.stdin is None or process.stdout is None:
-            return []
-
-        requests = (
-            {
-                "method": "initialize",
-                "id": 1,
-                "params": {
-                    "clientInfo": {
-                        "name": "telegram_agent_bot",
-                        "title": "TelegramAgentBot",
-                        "version": "2.0",
-                    }
-                },
-            },
-            {"method": "initialized"},
-            {"method": "model/list", "id": 2, "params": {}},
-        )
-        process.stdin.write(
-            ("\n".join(json.dumps(request) for request in requests) + "\n").encode()
-        )
-        await process.stdin.drain()
-
-        deadline = asyncio.get_running_loop().time() + 5.0
-        while asyncio.get_running_loop().time() < deadline:
-            timeout = max(0.1, deadline - asyncio.get_running_loop().time())
-            try:
-                line = await asyncio.wait_for(process.stdout.readline(), timeout)
-            except TimeoutError:
-                break
-            if not line:
-                break
-            try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(message, dict) and message.get("id") == 2:
-                return _extract_codex_models(message.get("result"))
-    except (OSError, asyncio.TimeoutError):
-        logger.debug("Codex app-server model discovery unavailable", exc_info=True)
-    finally:
-        if process is not None and process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=1.0)
-            except (TimeoutError, ProcessLookupError):
-                process.kill()
+    """Retired provider: no local process is available."""
     return []
 
 

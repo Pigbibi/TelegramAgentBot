@@ -25,7 +25,6 @@ from ..backends.browser import BrowserRoot, DirectoryListing
 from ..agent_profile import (
     AGENT_CLAUDE,
     AGENT_CLAUDE_OFFICIAL,
-    AGENT_CODEX,
     AGENT_CURSOR,
     AgentProfile,
     DEFAULT_CLAUDE_EFFORTS,
@@ -54,8 +53,8 @@ from .callback_data import (
     CB_PROFILE_CONFIRM,
     CB_PROFILE_EFFORT,
     CB_PROFILE_FAST,
-    CB_PROFILE_MODEL,
     CB_PROFILE_PERMISSION,
+    CB_PROFILE_MODEL,
     CB_WIN_BIND,
     CB_WIN_CANCEL,
     CB_WIN_NEW,
@@ -146,15 +145,6 @@ def build_agent_picker() -> tuple[str, InlineKeyboardMarkup]:
         [
             [
                 InlineKeyboardButton(
-                    "🟢 Codex", callback_data=f"{CB_PROFILE_AGENT}{AGENT_CODEX}"
-                ),
-                InlineKeyboardButton(
-                    "🔵 Cursor Agent",
-                    callback_data=f"{CB_PROFILE_AGENT}{AGENT_CURSOR}",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
                     "🟣 Claude Code API",
                     callback_data=f"{CB_PROFILE_AGENT}{AGENT_CLAUDE}",
                 ),
@@ -191,7 +181,7 @@ def build_profile_picker(
     lines.append(f"Permissions: `{profile.permission_label}`")
     if profile.permission_mode == "full":
         lines.append(
-            "⚠️ Full access skips agent approval prompts; VPS account limits still apply."
+            "⚠️ Full access is retired. Select Ask first before creating a session."
         )
     lines.append("\nChoose model and settings, then create:")
     buttons: list[list[InlineKeyboardButton]] = []
@@ -244,20 +234,13 @@ def build_profile_picker(
                 )
             ]
         )
-    if not (
-        profile.agent_type == AGENT_CURSOR and config.cursor_permission_mode == "full"
-    ):
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    f"🔐 Permissions: {profile.permission_label}",
-                    callback_data=(
-                        f"{CB_PROFILE_PERMISSION}"
-                        f"{'ask' if profile.permission_mode == 'full' else 'full'}"
-                    ),
-                )
-            ]
-        )
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                "🔐 Permissions: Ask first", callback_data=f"{CB_PROFILE_PERMISSION}ask"
+            )
+        ]
+    )
     buttons.append(
         [InlineKeyboardButton("✅ Create session", callback_data=CB_PROFILE_CONFIRM)]
     )

@@ -43,17 +43,11 @@ chmod 600 ~/.telegram-agent-bot/.env
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | `codex` | Default agent: `codex`, `claude`, `claudeofficial`, or `cursor` |
-| `TELEGRAM_AGENT_BOT_CODEX_COMMAND` | `codex` | Command used to start Codex |
+| `TELEGRAM_AGENT_BOT_AGENT_TYPE` | legacy default refuses execution | Choose `claude` (guarded API) or `claudeofficial` (subscription) explicitly |
 | `TELEGRAM_AGENT_BOT_CLAUDE_COMMAND` | `claude` | Command used to start Claude Code |
-| `TELEGRAM_AGENT_BOT_CLAUDE_DEFAULT_PERMISSION_MODE` | `ask` | Default permission choice for new Claude Code API and official-subscription topics; `full` adds `--dangerously-skip-permissions` |
-| `TELEGRAM_AGENT_BOT_CURSOR_PERMISSION_MODE` | `ask` | Cursor permission choice for new topics; `full` locks the picker to Full access and adds `--force` |
-| `TELEGRAM_AGENT_BOT_CODEX_MODEL` | `gpt-5.4-mini` | Default Codex model for new topics; `auto` follows the account's current Codex default |
 | `TELEGRAM_AGENT_BOT_CLAUDE_MODEL` | `deepseek-v4-flash` | Default Claude Code model shown for new topics |
-| `TELEGRAM_AGENT_BOT_CODEX_MODELS` | automatic | Comma-separated model picker override |
 | `TELEGRAM_AGENT_BOT_CLAUDE_MODELS` | automatic | Comma-separated model picker override |
 | `TELEGRAM_AGENT_BOT_MODEL_DISCOVERY` | `true` | Refresh available models from the configured CLI or provider |
-| `TELEGRAM_AGENT_BOT_CODEX_REASONING_EFFORT` | `medium` | Default Codex reasoning level |
 | `TELEGRAM_AGENT_BOT_CLAUDE_REASONING_EFFORT` | `high` | Default Claude Code reasoning level |
 | `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` | `$TELEGRAM_AGENT_BOT_DIR/claude.env` | Optional owner-only environment file for Claude Code providers |
 
@@ -62,27 +56,7 @@ sets the initial default. `claude` is Claude Code API mode and may load
 `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` for a provider such as DeepSeek.
 `claudeofficial` is Claude Code's official subscription mode and deliberately
 skips that file so its official login and model defaults remain authoritative.
-Permission settings affect new sessions only. Existing tmux sessions keep their
-current mode. Use `TELEGRAM_AGENT_BOT_CURSOR_PERMISSION_MODE=full` when the VPS-wide
-Cursor CLI is set to unrestricted, so the Telegram picker matches its effective
-permissions. Claude Code still lets the user choose Ask first for a new topic;
-that choice explicitly overrides a full-access user-level CLI default.
-
-Automatic model discovery keeps the configured default available if discovery
-fails. Set an explicit comma-separated list when a gateway uses custom aliases
-or when operators need a fixed picker.
-
-To follow new Codex model releases automatically, set
-`TELEGRAM_AGENT_BOT_CODEX_MODEL=auto` and leave model discovery enabled. At startup
-and whenever Codex is selected in the topic setup picker, the bot uses the visible
-model marked `isDefault` by the installed CLI's `model/list` response. It follows
-the account's official default rather than guessing from model names or list order.
-An explicit model picker list still limits which default can be selected.
-
-Existing topic selections stay unchanged. If discovery fails or returns no default
-metadata, the last resolved default is retained. Before the first successful
-resolution, the bot omits `--model` so the CLI uses its own configuration. Setting
-a concrete model ID instead of `auto` keeps that default pinned.
+Only Claude profiles can launch. New sessions require Ask first. A saved Full profile is refused until the user chooses Ask first; retired Codex/Cursor defaults fail closed. No local Codex model-discovery process runs. See [migration requirements](cli-retirement.md).
 
 ## tmux and project paths
 
@@ -93,7 +67,6 @@ a concrete model ID instead of `auto` keeps that default pinned.
 | `TELEGRAM_AGENT_BOT_TMUX_SOCKET_PATH` | derived | Absolute private socket path override |
 | `TELEGRAM_AGENT_BOT_DEFAULT_PROJECTS_PATH` | `~/Projects` | Initial directory picker root |
 | `TELEGRAM_AGENT_BOT_PROJECT_ROOTS` | unset | Named roots in `Label=/path` form |
-| `TELEGRAM_AGENT_BOT_CODEX_PROJECTS_PATH` | agent-specific | Transcript root override |
 | `TELEGRAM_AGENT_BOT_SHOW_HIDDEN_DIRS` | `false` | Include dot-directories in the picker |
 | `TELEGRAM_AGENT_BOT_SHOW_EXTERNAL_RESUME_SESSIONS` | `false` | Include untracked CLI sessions in the resume picker |
 
@@ -194,10 +167,7 @@ uv run telegram-agent-bot hook --install
 ```
 
 The hook records tmux window and session associations in
-`$TELEGRAM_AGENT_BOT_DIR/session_map.json`. On unattended Codex hosts,
-`TELEGRAM_AGENT_BOT_CODEX_BYPASS_HOOK_TRUST=true` bypasses the CLI trust prompt
-for the configured hook. Enable it only after reviewing the installed hook
-configuration.
+`$TELEGRAM_AGENT_BOT_DIR/session_map.json`. No hook-trust or approval bypass is injected.
 
 ## Updates
 
@@ -211,9 +181,6 @@ Source-checkout installations support bounded update checks:
 | `TELEGRAM_AGENT_BOT_UPDATE_BUSY_RETRY_SECONDS` | `300` | Retry delay while work is active |
 | `TELEGRAM_AGENT_BOT_UPDATE_MAX_BUSY_DEFERRAL_SECONDS` | `0` | Maximum continuous busy delay before a restart-safe AgentBot source update; `0` waits indefinitely, and agent CLI updates remain idle-only |
 | `TELEGRAM_AGENT_BOT_UPDATE_RUN_UV_SYNC` | `true` | Sync dependencies after a source update |
-| `TELEGRAM_AGENT_BOT_CODEX_UPDATE_CHECK` | `false` | Check the selected agent CLI package for updates |
-| `TELEGRAM_AGENT_BOT_CODEX_AUTO_UPDATE` | `false` | Install an available agent CLI package update |
-| `TELEGRAM_AGENT_BOT_CODEX_UPDATE_NPM` | `npm` | npm command used for CLI package updates |
 
 Self-update requires a clean Git checkout and a fast-forwardable branch. It is
 skipped for `pipx` and `uv tool` installations.

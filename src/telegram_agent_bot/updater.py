@@ -697,6 +697,16 @@ def check_codex_update(
     (``@anthropic/claude-code``) via ``settings.agent_type``.
     """
 
+    if (
+        settings.agent_type not in {"claude", "claudeofficial"}
+        or Path(settings.codex_executable or "").name != "claude"
+    ):
+        return CodexUpdateResult(
+            checked=False,
+            supported=False,
+            skipped_reason="retired_cli",
+            message="Codex/Cursor CLI execution is retired.",
+        )
     agent_name = _agent_display_name(settings)
     work_dir = cwd or find_git_repo() or Path.cwd()
     npm_command = _split_command(settings.npm_executable)

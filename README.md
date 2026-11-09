@@ -1,3 +1,5 @@
+> CLI retirement: Codex/Cursor execution and Full approval bypass are removed. Existing deployments require an owner-planned transition; see [details](docs/cli-retirement.md).
+
 # TelegramAgentBot
 
 [简体中文](README.zh-CN.md)

@@ -637,25 +637,6 @@ def build_orchestrator_message(issue: GitHubIssue, config: BridgeConfig) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def _tmux_prefix(socket_name: str | None) -> list[str]:
-    cmd = ["tmux"]
-    if socket_name:
-        cmd.extend(["-L", socket_name])
-    return cmd
-
-
-def _tmux_target_exists(window: str, *, socket_name: str | None = None) -> bool:
-    """Return whether a tmux target exists before dispatching to it."""
-    prefix = _tmux_prefix(socket_name)
-    result = subprocess.run(
-        [*prefix, "list-panes", "-t", window],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
-
-
 def dispatch_to_tmux(
     window: str,
     text: str,
@@ -664,38 +645,8 @@ def dispatch_to_tmux(
     attempts: int = DEFAULT_RETRY_ATTEMPTS,
     base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
 ) -> None:
-    """Paste text into a tmux window and press Enter."""
-    if not _tmux_target_exists(window, socket_name=socket_name):
-        raise TmuxTargetNotFoundError(f"tmux target not found: {window}")
-
-    buffer_name = f"telegram-agent-bridge-{os.getpid()}-{time.time_ns()}"
-    prefix = _tmux_prefix(socket_name)
-    _run_subprocess_with_retry(
-        [*prefix, "load-buffer", "-b", buffer_name, "-"],
-        input=text.encode("utf-8"),
-        retryable_prefixes=("tmux",),
-        attempts=attempts,
-        base_delay_seconds=base_delay_seconds,
-    )
-    try:
-        _run_subprocess_with_retry(
-            [*prefix, "paste-buffer", "-b", buffer_name, "-t", window, "-d"],
-            retryable_prefixes=("tmux",),
-            attempts=1,
-            base_delay_seconds=base_delay_seconds,
-        )
-        _run_subprocess_with_retry(
-            [*prefix, "send-keys", "-t", window, "C-m"],
-            retryable_prefixes=("tmux",),
-            attempts=1,
-            base_delay_seconds=base_delay_seconds,
-        )
-    finally:
-        subprocess.run(
-            [*prefix, "delete-buffer", "-b", buffer_name],
-            check=False,
-            capture_output=True,
-        )
+    """The legacy GitHub-to-Codex input path is retired."""
+    raise TmuxTargetNotFoundError("Legacy Codex bridge dispatch is retired")
 
 
 def process_target(
