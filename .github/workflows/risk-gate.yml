@@ -170,9 +170,10 @@ jobs:
             }
             // REST and GraphQL disagree on the bot suffix, so accept both forms.
             const CODEX_LOGIN = /^chatgpt-codex-connector(?:\[bot\])?$/;
-            // The receipt is a single JSON object closed just before the HTML
-            // comment terminator, so the capture must stay greedy.
-            const REVIEW_RECEIPT = /<!--\s*codex-review-state:v1\s*(\{[\s\S]*\})\s*-->/;
+            // A Codex summary body carries several marker comments. Stay greedy
+            // inside this one, but never cross its own terminator or the next
+            // marker's JSON becomes part of the receipt.
+            const REVIEW_RECEIPT = /<!--\s*codex-review-state:v1\s*(\{(?:(?!-->)[\s\S])*\})\s*-->/;
             // A receipt names only the head it reviewed, and commit dates are author
             // metadata rather than the time a branch moved, so an old review can
             // outlive a base push. Git ancestry is the authenticated evidence: the
