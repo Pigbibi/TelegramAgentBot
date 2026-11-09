@@ -34,7 +34,7 @@ jobs:
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/actionlint.tar.gz"
-          curl --fail --silent --show-error --location --retry 2 \
+          curl --fail --silent --show-error --location --retry 6 --retry-all-errors --retry-delay 5 --connect-timeout 20 \
             https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o "$archive"
           printf '%s  %s\n' '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8' "$archive" | sha256sum --check
           tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
