@@ -106,3 +106,11 @@ docs/superpowers/
 ops-notes/
 *.local.md
 *.internal.md
+
+# Local AI scratch, plans, and internal notes (never commit)
+docs/changes/
+docs/acceptance-policy.md
+.cursor/
+.cursorrules
+.worktrees/
+worktrees/
