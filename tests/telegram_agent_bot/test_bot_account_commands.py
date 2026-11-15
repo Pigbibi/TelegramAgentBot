@@ -37,21 +37,6 @@ def test_extract_device_login_details_strips_ansi() -> None:
     )
 
 
-def test_agent_login_args_use_codex_device_auth() -> None:
-    from telegram_agent_bot import bot as bot_module
-
-    with (
-        patch.object(bot_module.config, "agent_type", "codex"),
-        patch.object(bot_module.config, "codex_command", "codex"),
-        patch("telegram_agent_bot.bot.shutil.which", return_value="/usr/bin/codex"),
-    ):
-        assert bot_module._agent_login_args() == [
-            "/usr/bin/codex",
-            "login",
-            "--device-auth",
-        ]
-
-
 def test_agent_login_args_use_claude_auth_login() -> None:
     from telegram_agent_bot import bot as bot_module
 
@@ -65,17 +50,6 @@ def test_agent_login_args_use_claude_auth_login() -> None:
             "auth",
             "login",
         ]
-
-
-def test_agent_login_args_use_cursor_browser_flow() -> None:
-    from telegram_agent_bot import bot as bot_module
-
-    with (
-        patch.object(bot_module.config, "agent_type", "cursor"),
-        patch.object(bot_module.config, "cursor_command", "agent"),
-        patch("telegram_agent_bot.bot.shutil.which", return_value="/usr/bin/agent"),
-    ):
-        assert bot_module._agent_login_args() == ["/usr/bin/agent", "login"]
 
 
 @pytest.mark.asyncio
@@ -111,11 +85,8 @@ def test_explicit_agent_login_args_ignore_global_agent_type() -> None:
             "auth",
             "login",
         ]
-        assert bot_module._agent_login_args("codex") == [
-            "/usr/bin/codex",
-            "login",
-            "--device-auth",
-        ]
+        with pytest.raises(ValueError, match="retired"):
+            bot_module._agent_login_args("codex")
 
 
 @pytest.mark.asyncio
@@ -173,6 +144,7 @@ async def test_agent_login_command_rejects_invalid_account_name() -> None:
 
     with (
         patch("telegram_agent_bot.bot.is_user_allowed", return_value=True),
+        patch("telegram_agent_bot.bot.config.agent_type", "claudeofficial"),
         patch(
             "telegram_agent_bot.bot.safe_reply", new_callable=AsyncMock
         ) as safe_reply,

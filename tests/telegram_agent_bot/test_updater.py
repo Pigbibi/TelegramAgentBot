@@ -308,16 +308,17 @@ def test_dirty_worktree_skips_update(tmp_path: Path) -> None:
 def test_codex_update_check_reports_available_update(tmp_path: Path) -> None:
     runner = FakeRunner(
         {
-            ("codex", "--version"): "codex-cli 0.125.0\n",
-            ("npm", "view", "@openai/codex", "version"): "0.126.0\n",
+            ("claude", "--version"): "claude-code 0.125.0\n",
+            ("npm", "view", "@anthropic/claude-code", "version"): "0.126.0\n",
         }
     )
 
     result = check_codex_update(
         CodexUpdateSettings(
-            codex_executable="codex",
+            agent_type="claude",
+            codex_executable="claude",
             npm_executable="npm",
-            package="@openai/codex",
+            package="@anthropic/claude-code",
         ),
         runner=runner,
         cwd=tmp_path,
@@ -332,25 +333,26 @@ def test_codex_update_check_reports_available_update(tmp_path: Path) -> None:
 def test_codex_update_applies_global_npm_update(tmp_path: Path) -> None:
     runner = FakeRunner(
         {
-            ("codex", "--version"): "codex-cli 0.125.0\n",
-            ("npm", "view", "@openai/codex", "version"): "0.126.0\n",
+            ("claude", "--version"): "claude-code 0.125.0\n",
+            ("npm", "view", "@anthropic/claude-code", "version"): "0.126.0\n",
             (
                 "npm",
                 "list",
                 "-g",
                 "--depth=0",
-                "@openai/codex",
+                "@anthropic/claude-code",
                 "--json",
-            ): '{"dependencies":{"@openai/codex":{"version":"0.125.0"}}}\n',
-            ("npm", "install", "-g", "@openai/codex@latest"): "",
+            ): '{"dependencies":{"@anthropic/claude-code":{"version":"0.125.0"}}}\n',
+            ("npm", "install", "-g", "@anthropic/claude-code@latest"): "",
         }
     )
 
     result = check_codex_update(
         CodexUpdateSettings(
-            codex_executable="codex",
+            agent_type="claude",
+            codex_executable="claude",
             npm_executable="npm",
-            package="@openai/codex",
+            package="@anthropic/claude-code",
         ),
         apply_update=True,
         runner=runner,
@@ -358,14 +360,21 @@ def test_codex_update_applies_global_npm_update(tmp_path: Path) -> None:
     )
 
     assert result.updated is True
-    assert ("npm", "install", "-g", "@openai/codex@latest") in runner.calls
+    assert ("npm", "install", "-g", "@anthropic/claude-code@latest") in runner.calls
 
 
 def test_codex_update_supports_wrapped_npm_command(tmp_path: Path) -> None:
     runner = FakeRunner(
         {
-            ("codex", "--version"): "codex-cli 0.125.0\n",
-            ("sudo", "-n", "npm", "view", "@openai/codex", "version"): "0.126.0\n",
+            ("claude", "--version"): "claude-code 0.125.0\n",
+            (
+                "sudo",
+                "-n",
+                "npm",
+                "view",
+                "@anthropic/claude-code",
+                "version",
+            ): "0.126.0\n",
             (
                 "sudo",
                 "-n",
@@ -373,25 +382,26 @@ def test_codex_update_supports_wrapped_npm_command(tmp_path: Path) -> None:
                 "list",
                 "-g",
                 "--depth=0",
-                "@openai/codex",
+                "@anthropic/claude-code",
                 "--json",
-            ): '{"dependencies":{"@openai/codex":{"version":"0.125.0"}}}\n',
+            ): '{"dependencies":{"@anthropic/claude-code":{"version":"0.125.0"}}}\n',
             (
                 "sudo",
                 "-n",
                 "npm",
                 "install",
                 "-g",
-                "@openai/codex@latest",
+                "@anthropic/claude-code@latest",
             ): "",
         }
     )
 
     result = check_codex_update(
         CodexUpdateSettings(
-            codex_executable="codex",
+            agent_type="claude",
+            codex_executable="claude",
             npm_executable="sudo -n npm",
-            package="@openai/codex",
+            package="@anthropic/claude-code",
         ),
         apply_update=True,
         runner=runner,
@@ -405,31 +415,31 @@ def test_codex_update_supports_wrapped_npm_command(tmp_path: Path) -> None:
         "npm",
         "install",
         "-g",
-        "@openai/codex@latest",
+        "@anthropic/claude-code@latest",
     ) in runner.calls
 
 
 def test_codex_update_uses_prefix_from_executable(tmp_path: Path) -> None:
     prefix = tmp_path / "usr-local"
-    package_dir = prefix / "lib/node_modules/@openai/codex"
+    package_dir = prefix / "lib/node_modules/@anthropic/claude-code"
     package_dir.mkdir(parents=True)
     (package_dir / "package.json").write_text(
-        '{"name":"@openai/codex","version":"0.125.0"}', encoding="utf-8"
+        '{"name":"@anthropic/claude-code","version":"0.125.0"}', encoding="utf-8"
     )
     bin_dir = prefix / "bin"
     bin_dir.mkdir()
-    codex = bin_dir / "codex"
+    codex = bin_dir / "claude"
     codex.symlink_to(package_dir / "bin/codex.js")
 
     runner = FakeRunner(
         {
-            (str(codex), "--version"): "codex-cli 0.125.0\n",
+            (str(codex), "--version"): "claude-code 0.125.0\n",
             (
                 "sudo",
                 "-n",
                 "npm",
                 "view",
-                "@openai/codex",
+                "@anthropic/claude-code",
                 "version",
             ): "0.126.0\n",
             (
@@ -439,7 +449,7 @@ def test_codex_update_uses_prefix_from_executable(tmp_path: Path) -> None:
                 "list",
                 "-g",
                 "--depth=0",
-                "@openai/codex",
+                "@anthropic/claude-code",
                 "--json",
             ): CommandResult(args=(), returncode=1),
             (
@@ -451,9 +461,9 @@ def test_codex_update_uses_prefix_from_executable(tmp_path: Path) -> None:
                 "list",
                 "-g",
                 "--depth=0",
-                "@openai/codex",
+                "@anthropic/claude-code",
                 "--json",
-            ): '{"dependencies":{"@openai/codex":{"version":"0.125.0"}}}\n',
+            ): '{"dependencies":{"@anthropic/claude-code":{"version":"0.125.0"}}}\n',
             (
                 "sudo",
                 "-n",
@@ -462,16 +472,17 @@ def test_codex_update_uses_prefix_from_executable(tmp_path: Path) -> None:
                 str(prefix),
                 "install",
                 "-g",
-                "@openai/codex@latest",
+                "@anthropic/claude-code@latest",
             ): "",
         }
     )
 
     result = check_codex_update(
         CodexUpdateSettings(
+            agent_type="claude",
             codex_executable=str(codex),
             npm_executable="sudo -n npm",
-            package="@openai/codex",
+            package="@anthropic/claude-code",
         ),
         apply_update=True,
         runner=runner,
@@ -487,7 +498,7 @@ def test_codex_update_uses_prefix_from_executable(tmp_path: Path) -> None:
         str(prefix),
         "install",
         "-g",
-        "@openai/codex@latest",
+        "@anthropic/claude-code@latest",
     ) in runner.calls
 
 
