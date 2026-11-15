@@ -39,7 +39,6 @@ import io
 import json
 import logging
 import os
-import posixpath
 import re
 import shlex
 import shutil
@@ -98,9 +97,6 @@ from .agent_profile import (
     AGENT_CODEX,
     AGENT_CURSOR,
     AgentProfile,
-    DEFAULT_CLAUDE_EFFORTS,
-    DEFAULT_CODEX_EFFORTS,
-    DEFAULT_CURSOR_EFFORTS,
     agent_capabilities,
     agent_display_name,
     is_claude_agent,
@@ -108,9 +104,30 @@ from .agent_profile import (
     normalize_effort,
 )
 from .backends.base import AgentBackend, AgentTarget
-from .backends.browser import AgentBrowser, DirectoryListing
+from .backends.browser import AgentBrowser
 from .backends.input_routing import AgentInputMode
 from .backends.registry import get_configured_backend
+from .browser_routing import (
+    COMMAND_ARG_SEPARATORS,
+    FORWARDED_COMMAND_RE,
+    DirectoryBrowserKwargs,
+    RootSelection,
+    active_remote_root_browser,
+    adapt_forward_command_for_agent,
+    as_browser,
+    browse_backend_context,
+    browse_root_context,
+    browser_for_backend_id,
+    build_backend_directory_browser,
+    clamp_to_selected_root,
+    default_directory_browser_path,
+    directory_browser_kwargs,
+    directory_listing_with_root,
+    normalize_forward_command_text,
+    parse_root_selection,
+    remote_child_path,
+    remote_parent_path,
+)
 from .config import config
 from .durable_state import (
     AGENT_INPUT_MODE_QUEUE,
@@ -189,7 +206,6 @@ from .handlers.directory_browser import (
     PROFILE_PERMISSION_MODE_KEY,
     build_backend_root_picker,
     build_directory_browser,
-    build_directory_browser_from_listing,
     build_project_root_picker,
     build_session_picker,
     build_window_picker,
@@ -208,6 +224,13 @@ from .output_mode import (
     OUTPUT_MODE_TRACE,
     normalize_output_mode,
     output_mode_label,
+)
+from .profile_helpers import (
+    default_profile_permission,
+    profile_effort_values,
+    profile_from_context,
+    profile_models,
+    resolve_profile_effort,
 )
 from .handlers.interactive_ui import (
     INTERACTIVE_TOOL_NAMES,
@@ -423,63 +446,33 @@ CC_COMMANDS: dict[str, str] = {
 }
 
 
-_FORWARDED_COMMAND_RE = re.compile(
-    r"^/(?P<name>[A-Za-z0-9_]+)(?:@[A-Za-z0-9_]+)?(?P<rest>.*)$"
-)
-_COMMAND_ARG_SEPARATORS = ".。"
+_FORWARDED_COMMAND_RE = FORWARDED_COMMAND_RE
+_COMMAND_ARG_SEPARATORS = COMMAND_ARG_SEPARATORS
+_DirectoryBrowserKwargs = DirectoryBrowserKwargs
+_RootSelection = RootSelection
+_browse_root_context = browse_root_context
+_directory_browser_kwargs = directory_browser_kwargs
+_browse_backend_context = browse_backend_context
+_as_browser = as_browser
+_parse_root_selection = parse_root_selection
+_remote_child_path = remote_child_path
+_remote_parent_path = remote_parent_path
+_directory_listing_with_root = directory_listing_with_root
+_clamp_to_selected_root = clamp_to_selected_root
 
 
 def _normalize_forward_command_text(cmd_text: str) -> str:
     """Normalize Telegram slash commands before forwarding them to an agent."""
-    match = _FORWARDED_COMMAND_RE.match(cmd_text)
-    if not match:
-        return cmd_text
-
-    command_name = match.group("name")
-    rest = match.group("rest") or ""
-    normalized = f"/{command_name}"
-
-    # Telegram users sometimes type "/goal.继续..." from Chinese input. Codex
-    # expects a space between a known slash command and its argument; without it
-    # the TUI can leave the text pending and the bot reports a low-level send
-    # failure. Keep this limited to known Codex commands so arbitrary forwarded
-    # commands keep their original spelling.
-    if (
-        command_name.lower() in CC_COMMANDS
-        and rest
-        and rest[0] in _COMMAND_ARG_SEPARATORS
-    ):
-        rest = " " + rest[1:].lstrip()
-
-    return normalized + rest
+    return normalize_forward_command_text(cmd_text, known_commands=CC_COMMANDS)
 
 
 def _adapt_forward_command_for_agent(cmd_text: str, agent_type: str) -> str:
     """Map one stable Telegram command to the active agent's native spelling."""
-    normalized = _normalize_forward_command_text(cmd_text)
-    match = _FORWARDED_COMMAND_RE.match(normalized)
-    if not match:
-        return normalized
-
-    command_name = match.group("name").lower()
-    rest = match.group("rest") or ""
-    normalized_agent_type = normalize_agent_type(agent_type)
-    if command_name in {"plugin", "plugins"}:
-        native_name = agent_capabilities(normalized_agent_type).plugin_command
-        return f"/{native_name}{rest}"
-    return normalized
-
-
-class _DirectoryBrowserKwargs(TypedDict, total=False):
-    root_label: str
-    root_path: str
-
-
-class _RootSelection(TypedDict):
-    label: str
-    path: str
-    backend_id: str
-    node_id: str
+    return adapt_forward_command_for_agent(
+        cmd_text,
+        agent_type,
+        known_commands=CC_COMMANDS,
+    )
 
 
 class _PendingThreadMedia(TypedDict):
@@ -493,139 +486,20 @@ class _PendingThreadMedia(TypedDict):
 
 def _default_directory_browser_path(root_path: str | None = None) -> str:
     """Choose a generic starting directory for the project browser."""
-    if root_path:
-        root = Path(root_path).expanduser()
-        if root.is_dir():
-            return str(root)
-    projects_dir = config.default_projects_path.expanduser()
-    if projects_dir.is_dir():
-        return str(projects_dir)
-    return str(Path.home())
-
-
-def _browse_root_context(user_data: dict | None) -> tuple[str | None, str | None]:
-    """Return selected browser root label/path from user state."""
-    if not user_data:
-        return None, None
-    label = user_data.get(BROWSE_ROOT_LABEL_KEY)
-    path = user_data.get(BROWSE_ROOT_PATH_KEY)
-    return (
-        label if isinstance(label, str) and label else None,
-        path if isinstance(path, str) and path else None,
+    return default_directory_browser_path(
+        root_path,
+        default_projects_path=config.default_projects_path,
     )
-
-
-def _directory_browser_kwargs(user_data: dict | None) -> _DirectoryBrowserKwargs:
-    """Build root kwargs for the directory browser from user state."""
-    label, path = _browse_root_context(user_data)
-    kwargs: _DirectoryBrowserKwargs = {}
-    if label:
-        kwargs["root_label"] = label
-    if path:
-        kwargs["root_path"] = path
-    return kwargs
-
-
-def _browse_backend_context(user_data: dict | None) -> tuple[str, str]:
-    """Return selected backend/node for a remote directory browser."""
-    if not user_data:
-        return "", ""
-    backend_id = user_data.get(BROWSE_BACKEND_ID_KEY)
-    node_id = user_data.get(BROWSE_NODE_ID_KEY)
-    return (
-        backend_id if isinstance(backend_id, str) else "",
-        node_id if isinstance(node_id, str) else "",
-    )
-
-
-def _as_browser(backend: AgentBackend | None) -> AgentBrowser | None:
-    """Return backend as AgentBrowser when it exposes the optional methods."""
-    if backend is None:
-        return None
-    required = ("list_roots", "list_directory", "list_sessions")
-    if not all(callable(getattr(backend, attr, None)) for attr in required):
-        return None
-    return cast(AgentBrowser, backend)
 
 
 def _active_remote_root_browser() -> AgentBrowser | None:
     """Return the configured non-local backend browser for root selection."""
-    backend = agent_backend
-    if backend is None:
-        return None
-    try:
-        info = backend.info()
-    except Exception:
-        logger.exception("Unable to read backend info for root browser")
-        return None
-    if backend.backend_id == "local" or info.mode == "local":
-        return None
-    return _as_browser(backend)
+    return active_remote_root_browser(agent_backend)
 
 
 def _browser_for_backend_id(backend_id: str) -> AgentBrowser | None:
     """Return the active backend browser matching a cached root selection."""
-    if not backend_id:
-        return None
-    backend = agent_backend or get_configured_backend()
-    if backend.backend_id != backend_id:
-        return None
-    return _as_browser(backend)
-
-
-def _parse_root_selection(entry: object) -> _RootSelection | None:
-    """Parse cached root tuples from old local or new backend root pickers."""
-    if not isinstance(entry, (list, tuple)) or len(entry) < 2:
-        return None
-    label, path = entry[0], entry[1]
-    if not isinstance(label, str) or not isinstance(path, str):
-        return None
-    backend_id = entry[2] if len(entry) > 2 and isinstance(entry[2], str) else ""
-    node_id = entry[3] if len(entry) > 3 and isinstance(entry[3], str) else ""
-    return {
-        "label": label,
-        "path": path,
-        "backend_id": backend_id,
-        "node_id": node_id,
-    }
-
-
-def _remote_child_path(current_path: str, subdir_name: str) -> str:
-    """Join one path segment for a backend node using POSIX-like paths."""
-    current = current_path.rstrip("/") or "/"
-    return posixpath.normpath(posixpath.join(current, subdir_name))
-
-
-def _remote_parent_path(current_path: str, root_path: str | None) -> str:
-    """Move one level up for a backend node while respecting selected root."""
-    current = current_path.rstrip("/") or "/"
-    root = root_path.rstrip("/") if root_path else ""
-    if root and current == root:
-        return root_path or root
-
-    parent = posixpath.dirname(current) or "/"
-    if root and not (parent == root or parent.startswith(root + "/")):
-        return root_path or root
-    return parent
-
-
-def _directory_listing_with_root(
-    listing: DirectoryListing,
-    *,
-    root_label: str | None,
-    root_path: str | None,
-) -> DirectoryListing:
-    """Fill root metadata when a backend leaves it blank."""
-    if listing.root_label or not root_label:
-        return listing
-    return DirectoryListing(
-        path=listing.path,
-        subdirs=listing.subdirs,
-        root_label=root_label,
-        root_path=listing.root_path or root_path or "",
-        can_go_up=listing.can_go_up,
-        error=listing.error,
-    )
+    return browser_for_backend_id(backend_id, agent_backend)
 
 
 async def _build_backend_directory_browser(
@@ -641,41 +515,15 @@ async def _build_backend_directory_browser(
     browser = _browser_for_backend_id(backend_id)
     if browser is None:
         return None
-    try:
-        listing = await browser.list_directory(
-            node_id,
-            path,
-            root_path=root_path or "",
-        )
-    except Exception:
-        logger.exception(
-            "Backend directory listing failed: backend=%s node=%s path=%s",
-            backend_id,
-            node_id,
-            path,
-        )
-        return None
-
-    listing = _directory_listing_with_root(
-        listing,
+    return await build_backend_directory_browser(
+        backend_id=backend_id,
+        node_id=node_id,
+        path=path,
+        page=page,
         root_label=root_label,
         root_path=root_path,
+        browser=browser,
     )
-    text, keyboard, subdirs = build_directory_browser_from_listing(listing, page=page)
-    return text, keyboard, subdirs, listing.path
-
-
-def _clamp_to_selected_root(path: str, user_data: dict | None) -> str:
-    """Keep selected paths inside the configured project root when present."""
-    _label, root_path = _browse_root_context(user_data)
-    if not root_path:
-        return path
-
-    root = Path(root_path).expanduser().resolve()
-    selected = Path(path).expanduser().resolve()
-    if selected == root or root in selected.parents:
-        return str(selected)
-    return str(root)
 
 
 async def _show_root_or_directory_picker(
@@ -1044,97 +892,38 @@ def _build_resume_conflict_keyboard() -> InlineKeyboardMarkup:
 
 def _profile_models(agent_type: str) -> tuple[str, ...]:
     """Return configured model choices for one agent type."""
-    normalized = normalize_agent_type(agent_type)
-    if normalized == AGENT_CLAUDE_OFFICIAL:
-        return ()
-    if normalized in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
-        return config.claude_models
-    if normalized == AGENT_CURSOR:
-        return config.cursor_models
-    return config.codex_models
+    return profile_models(agent_type, cfg=config)
 
 
 def _profile_effort_values(agent_type: str, model: str) -> tuple[str, ...]:
     """Return reasoning efforts supported by the selected agent/model."""
-    normalized = normalize_agent_type(agent_type)
-    if normalized in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
-        return DEFAULT_CLAUDE_EFFORTS
-    if normalized == AGENT_CURSOR:
-        return DEFAULT_CURSOR_EFFORTS
-    return config.codex_model_efforts.get(model, DEFAULT_CODEX_EFFORTS)
+    return profile_effort_values(agent_type, model, cfg=config)
 
 
 def _resolve_profile_effort(agent_type: str, model: str, requested: str) -> str:
     """Keep a supported effort or fall back to the model/provider default."""
-    normalized = normalize_agent_type(agent_type)
-    supported = _profile_effort_values(normalized, model)
-    if not supported:
-        return ""
-    selected = normalize_effort(requested, "")
-    if selected in supported:
-        return selected
-
-    candidates = []
-    if normalized == AGENT_CODEX:
-        candidates.append(config.codex_model_default_efforts.get(model, ""))
-        candidates.append(config.codex_reasoning_effort)
-    elif is_claude_agent(normalized):
-        candidates.append(config.claude_reasoning_effort)
-    candidates.extend(("medium", supported[0] if supported else ""))
-    return next((value for value in candidates if value in supported), "medium")
+    return resolve_profile_effort(
+        agent_type,
+        model,
+        requested,
+        cfg=config,
+        effort_values=_profile_effort_values,
+    )
 
 
 def _profile_from_context(user_data: dict | None) -> AgentProfile:
     """Build the pending topic profile, retaining legacy defaults."""
-    agent_type = (
-        user_data.get(PROFILE_AGENT_KEY, config.agent_type)
-        if user_data
-        else config.agent_type
-    )
-    normalized = normalize_agent_type(agent_type, config.agent_type)
-    default_effort = (
-        config.claude_reasoning_effort
-        if normalized in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}
-        else config.codex_reasoning_effort
-        if normalized == AGENT_CODEX
-        else ""
-    )
-    requested_effort = (
-        user_data.get(PROFILE_EFFORT_KEY, default_effort)
-        if user_data
-        else default_effort
-    )
-    model = user_data.get(PROFILE_MODEL_KEY, "") if user_data else ""
-    fast_mode = user_data.get(PROFILE_FAST_MODE_KEY, False) if user_data else False
-    default_permission = _default_profile_permission(normalized)
-    permission_mode = (
-        user_data.get(PROFILE_PERMISSION_MODE_KEY, default_permission)
-        if user_data
-        else default_permission
-    )
-    if normalized == AGENT_CURSOR and config.cursor_permission_mode == "full":
-        permission_mode = "full"
-    return AgentProfile(
-        agent_type=normalized,
-        model=model if isinstance(model, str) else "",
-        reasoning_effort=_resolve_profile_effort(
-            normalized,
-            model if isinstance(model, str) else "",
-            requested_effort if isinstance(requested_effort, str) else default_effort,
-        ),
-        fast_mode=bool(fast_mode),
-        permission_mode=(
-            permission_mode if isinstance(permission_mode, str) else "ask"
-        ),
+    return profile_from_context(
+        user_data,
+        cfg=config,
+        resolve_effort=_resolve_profile_effort,
+        default_permission_fn=_default_profile_permission,
     )
 
 
 def _default_profile_permission(agent_type: str) -> str:
-    if agent_type in {AGENT_CLAUDE, AGENT_CLAUDE_OFFICIAL}:
-        return config.claude_default_permission_mode
-    if agent_type == AGENT_CURSOR:
-        return config.cursor_permission_mode
-    return "ask"
+    """Return the configured default permission mode for one agent type."""
+    return default_profile_permission(agent_type, cfg=config)
 
 
 async def _show_agent_profile_picker(
