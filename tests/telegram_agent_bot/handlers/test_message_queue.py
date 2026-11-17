@@ -1220,3 +1220,69 @@ async def test_check_status_uses_synthetic_timer_after_content(monkeypatch):
         working_status._synthetic_working_starts.clear()
 
     assert sent_texts == ["💭 Thinking (8s)"]
+
+
+@pytest.mark.asyncio
+async def test_enqueue_content_message_accepts_request_object(monkeypatch):
+    """ContentMessageRequest can be passed positionally or via request=."""
+    await message_queue.shutdown_workers()
+    processed: list[message_queue.MessageTask] = []
+
+    async def fake_process_content(bot, user_id, task):
+        processed.append(task)
+        return True
+
+    monkeypatch.setattr(message_queue, "_process_content_task", fake_process_content)
+    bot = object()
+    req = message_queue.ContentMessageRequest(
+        bot=bot,  # type: ignore[arg-type]
+        user_id=7,
+        window_id="@11",
+        parts=["part-a", "part-b"],
+        tool_use_id="tool-1",
+        tool_name="Bash",
+        content_type="tool_result",
+        role="user",
+        text="full",
+        thread_id=99,
+        wait_until_sent=True,
+    )
+
+    try:
+        delivered = await message_queue.enqueue_content_message(req)
+        assert delivered is True
+        assert len(processed) == 1
+        task = processed[0]
+        assert task.window_id == "@11"
+        assert task.parts == ["part-a", "part-b"]
+        assert task.tool_use_id == "tool-1"
+        assert task.tool_name == "Bash"
+        assert task.content_type == "tool_result"
+        assert task.role == "user"
+        assert task.text == "full"
+        assert task.thread_id == 99
+
+        with pytest.raises(AttributeError):
+            req.window_id = "@12"  # type: ignore[misc]
+    finally:
+        await message_queue.shutdown_workers()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_content_message_rejects_missing_or_mixed_arguments():
+    """Mixing request with legacy kwargs or omitting required fields raises."""
+    req = message_queue.ContentMessageRequest(
+        bot=object(),  # type: ignore[arg-type]
+        user_id=7,
+        window_id="@11",
+        parts=["x"],
+    )
+
+    with pytest.raises(TypeError):
+        await message_queue.enqueue_content_message()
+
+    with pytest.raises(TypeError):
+        await message_queue.enqueue_content_message(req, text="override")  # type: ignore[call-overload]
+
+    with pytest.raises(TypeError):
+        await message_queue.enqueue_content_message(req, wait_until_sent=True)  # type: ignore[call-overload]

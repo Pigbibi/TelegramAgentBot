@@ -1161,3 +1161,75 @@ class TestParseEntries:
         result, pending = TranscriptParser.parse_entries(entries)
         user_entries = [e for e in result if e.role == "user"]
         assert len(user_entries) == 0
+
+
+class TestDispatchTableEdgeCases:
+    """Verify edge cases handled by parser line and entry dispatch tables."""
+
+    def test_parse_line_ignores_non_dict_payload_or_unknown_types(self):
+        non_dict_payload = json.dumps({"type": "response_item", "payload": "bad"})
+        unknown_response = json.dumps(
+            {"type": "response_item", "payload": {"type": "other_event"}}
+        )
+        unknown_event = json.dumps(
+            {"type": "event_msg", "payload": {"type": "heartbeat"}}
+        )
+        unknown_line = json.dumps({"type": "session_meta", "payload": {"id": "1"}})
+
+        assert TranscriptParser.parse_line(non_dict_payload) is None
+        assert TranscriptParser.parse_line(unknown_response) is None
+        assert TranscriptParser.parse_line(unknown_event) is None
+        assert TranscriptParser.parse_line(unknown_line) is None
+
+    def test_parse_entries_carry_over_unmatched_tool_result_and_source_offset(self):
+        entries = [
+            {
+                "type": "user",
+                "_telegram_agent_bot_end_offset": 128,
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "orphan-ok",
+                            "content": "ignored-without-use",
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "orphan-err",
+                            "is_error": True,
+                            "content": "failed",
+                        },
+                        "plain-str-fallback",
+                    ]
+                },
+            }
+        ]
+        result, pending = TranscriptParser.parse_entries(entries, pending_tools={})
+        assert [(e.content_type, e.tool_use_id, e.source_offset) for e in result] == [
+            ("tool_result", "orphan-err", 128),
+            ("text", None, 128),
+        ]
+        assert "Error: failed" in result[0].text
+        assert result[1].text == "plain-str-fallback"
+        assert pending == {}
+
+    def test_parse_entries_pairs_local_command_invoke_and_stdout(self):
+        entries = [
+            {
+                "type": "user",
+                "_telegram_agent_bot_end_offset": 10,
+                "message": {"content": "<command-name>/status</command-name>"},
+            },
+            {
+                "type": "user",
+                "_telegram_agent_bot_end_offset": 20,
+                "message": {
+                    "content": "<local-command-stdout>OK</local-command-stdout>"
+                },
+            },
+        ]
+        result, _ = TranscriptParser.parse_entries(entries)
+        assert len(result) == 1
+        assert result[0].content_type == "local_command"
+        assert result[0].text == "❯ `/status`\n`OK`"
+        assert result[0].source_offset == 20
