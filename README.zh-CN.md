@@ -100,4 +100,4 @@ telegram-agent-bot doctor --json
 
 开发时运行 `uv sync --extra dev`，再阅读[贡献指南](CONTRIBUTING.md)。使用帮助和漏洞报告见[支持](SUPPORT.md)及[安全说明](SECURITY.md)。
 
-项目使用 [MIT 许可证](LICENSE)。内置字体保留 `src/telegram_agent_bot/fonts/` 中的许可证。
+项目使用 [MIT 许可证](LICENSE)。内置字体保留 `src/telegram_agent_bot/fonts/` 中各自的许可证。

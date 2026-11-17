@@ -45,6 +45,7 @@ import shutil
 import sys
 import time
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypedDict, cast
@@ -140,13 +141,36 @@ from .durable_state import (
     TransientAgentRetry,
 )
 from .handlers.callback_data import (
+    CB_ASK_ESC,
+    CB_ASK_REFRESH,
     CB_CODEX_UPDATE_APPLY,
     CB_CODEX_UPDATE_DISMISS,
+    CB_DIR_CANCEL,
+    CB_DIR_CONFIRM,
+    CB_DIR_PAGE,
+    CB_DIR_SELECT,
+    CB_DIR_UP,
+    CB_HISTORY_NEXT,
+    CB_HISTORY_PREV,
+    CB_INPUT_ROUTE,
+    CB_KEYS_PREFIX,
     CB_OUTPUT_MODE,
+    CB_PROFILE_AGENT,
+    CB_PROFILE_CANCEL,
+    CB_PROFILE_CONFIRM,
+    CB_PROFILE_EFFORT,
+    CB_PROFILE_FAST,
+    CB_PROFILE_MODEL,
+    CB_PROFILE_PERMISSION,
+    CB_ROOT_CANCEL,
+    CB_ROOT_SELECT,
+    CB_SCREENSHOT_REFRESH,
     CB_SESSION_CANCEL,
     CB_SESSION_NEW,
-    CB_KEYS_PREFIX,
-    CB_SCREENSHOT_REFRESH,
+    CB_SESSION_SELECT,
+    CB_WIN_BIND,
+    CB_WIN_CANCEL,
+    CB_WIN_NEW,
 )
 from .handlers.directory_browser import (
     BROWSE_DIRS_KEY,
@@ -177,7 +201,41 @@ from .handlers.directory_browser import (
     clear_profile_picker_state,
 )
 from .handlers.cleanup import clear_topic_state
-from .handlers.callback_router import CallbackContext, DEFAULT_CALLBACK_REGISTRY
+from .handlers.callback_router import (
+    ASK_REFRESH_ACTIONS,
+    CallbackContext,
+    handle_ask_control,
+    handle_ask_esc,
+    handle_ask_refresh,
+    handle_codex_update_apply,
+    handle_codex_update_dismiss,
+    handle_dir_cancel,
+    handle_dir_confirm,
+    handle_dir_page,
+    handle_dir_select,
+    handle_dir_up,
+    handle_history_page,
+    handle_input_route,
+    handle_noop,
+    handle_output_mode,
+    handle_profile_agent,
+    handle_profile_cancel,
+    handle_profile_confirm,
+    handle_profile_effort,
+    handle_profile_fast,
+    handle_profile_model,
+    handle_profile_permission,
+    handle_quick_keys,
+    handle_root_cancel,
+    handle_root_select,
+    handle_screenshot_refresh,
+    handle_session_cancel,
+    handle_session_new,
+    handle_session_select,
+    handle_window_bind,
+    handle_window_cancel,
+    handle_window_new,
+)
 from .handlers.history import send_history
 from .output_mode import (
     OUTPUT_MODE_CLEAN,
@@ -7042,6 +7100,90 @@ async def _handle_input_routing_callback(
     )
     await safe_edit(query, f"✅ {message}")
     await _safe_answer_callback(query, "Sent")
+
+
+CallbackHandler = Callable[[CallbackContext], Awaitable[None]]
+
+
+class CallbackRegistry:
+    """Registry mapping exact callback keys and prefixes to async handlers."""
+
+    def __init__(self) -> None:
+        self._exact: dict[str, CallbackHandler] = {}
+        self._prefixes: list[tuple[str, CallbackHandler]] = []
+
+    def register_exact(self, key: str, handler: CallbackHandler) -> None:
+        self._exact[key] = handler
+
+    def register_prefix(self, prefix: str, handler: CallbackHandler) -> None:
+        self._prefixes.append((prefix, handler))
+
+    def resolve(self, data: str) -> CallbackHandler | None:
+        exact = self._exact.get(data)
+        if exact is not None:
+            return exact
+        for prefix, handler in self._prefixes:
+            if data.startswith(prefix):
+                return handler
+        return None
+
+    async def dispatch(self, ctx: CallbackContext) -> bool:
+        handler = self.resolve(ctx.data)
+        if handler is None:
+            return False
+        await handler(ctx)
+        return True
+
+
+def build_default_callback_registry() -> CallbackRegistry:
+    """Construct and wire the default callback registry in bot.py."""
+    registry = CallbackRegistry()
+
+    registry.register_exact(CB_CODEX_UPDATE_APPLY, handle_codex_update_apply)
+    registry.register_exact(CB_CODEX_UPDATE_DISMISS, handle_codex_update_dismiss)
+    registry.register_prefix(CB_INPUT_ROUTE, handle_input_route)
+
+    registry.register_prefix(CB_HISTORY_PREV, handle_history_page)
+    registry.register_prefix(CB_HISTORY_NEXT, handle_history_page)
+    registry.register_prefix(CB_OUTPUT_MODE, handle_output_mode)
+
+    registry.register_prefix(CB_ROOT_SELECT, handle_root_select)
+    registry.register_exact(CB_ROOT_CANCEL, handle_root_cancel)
+
+    registry.register_prefix(CB_PROFILE_AGENT, handle_profile_agent)
+    registry.register_prefix(CB_PROFILE_MODEL, handle_profile_model)
+    registry.register_prefix(CB_PROFILE_EFFORT, handle_profile_effort)
+    registry.register_prefix(CB_PROFILE_FAST, handle_profile_fast)
+    registry.register_prefix(CB_PROFILE_PERMISSION, handle_profile_permission)
+    registry.register_exact(CB_PROFILE_CONFIRM, handle_profile_confirm)
+    registry.register_exact(CB_PROFILE_CANCEL, handle_profile_cancel)
+
+    registry.register_prefix(CB_DIR_SELECT, handle_dir_select)
+    registry.register_exact(CB_DIR_UP, handle_dir_up)
+    registry.register_prefix(CB_DIR_PAGE, handle_dir_page)
+    registry.register_exact(CB_DIR_CONFIRM, handle_dir_confirm)
+    registry.register_exact(CB_DIR_CANCEL, handle_dir_cancel)
+
+    registry.register_prefix(CB_SESSION_SELECT, handle_session_select)
+    registry.register_exact(CB_SESSION_NEW, handle_session_new)
+    registry.register_exact(CB_SESSION_CANCEL, handle_session_cancel)
+
+    registry.register_prefix(CB_WIN_BIND, handle_window_bind)
+    registry.register_exact(CB_WIN_NEW, handle_window_new)
+    registry.register_exact(CB_WIN_CANCEL, handle_window_cancel)
+
+    registry.register_prefix(CB_SCREENSHOT_REFRESH, handle_screenshot_refresh)
+    registry.register_exact("noop", handle_noop)
+    for prefix in ASK_REFRESH_ACTIONS:
+        registry.register_prefix(prefix, handle_ask_control)
+    registry.register_prefix(CB_ASK_ESC, handle_ask_esc)
+    registry.register_prefix(CB_ASK_REFRESH, handle_ask_refresh)
+    registry.register_prefix(CB_KEYS_PREFIX, handle_quick_keys)
+
+    return registry
+
+
+DEFAULT_CALLBACK_REGISTRY = build_default_callback_registry()
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

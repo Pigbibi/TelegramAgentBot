@@ -1,16 +1,16 @@
-"""Domain-organized callback query routing for Telegram inline keyboards.
+"""Domain callback handler implementations for Telegram inline keyboards.
 
 Each domain handler receives a ``CallbackContext`` whose ``deps`` object is the
 ``telegram_agent_bot.bot`` module (or compatible mock namespace in tests).
 Resolving runtime helpers and singletons via ``ctx.deps`` preserves existing
 ``monkeypatch.setattr`` / ``unittest.mock.patch`` hooks on ``bot.*``.
+Registry construction and handler wiring remain in ``telegram_agent_bot.bot``.
 """
 
 from __future__ import annotations
 
 import io
 import logging
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,34 +38,20 @@ from .callback_data import (
     CB_ASK_TAB,
     CB_ASK_TRUST,
     CB_ASK_UP,
-    CB_CODEX_UPDATE_APPLY,
-    CB_CODEX_UPDATE_DISMISS,
-    CB_DIR_CANCEL,
-    CB_DIR_CONFIRM,
     CB_DIR_PAGE,
     CB_DIR_SELECT,
-    CB_DIR_UP,
-    CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
-    CB_INPUT_ROUTE,
     CB_KEYS_PREFIX,
     CB_OUTPUT_MODE,
     CB_PROFILE_AGENT,
-    CB_PROFILE_CANCEL,
-    CB_PROFILE_CONFIRM,
     CB_PROFILE_EFFORT,
     CB_PROFILE_FAST,
     CB_PROFILE_MODEL,
     CB_PROFILE_PERMISSION,
-    CB_ROOT_CANCEL,
     CB_ROOT_SELECT,
     CB_SCREENSHOT_REFRESH,
-    CB_SESSION_CANCEL,
-    CB_SESSION_NEW,
     CB_SESSION_SELECT,
     CB_WIN_BIND,
-    CB_WIN_CANCEL,
-    CB_WIN_NEW,
 )
 from .input_routing import parse_input_routing_callback
 from .directory_browser import (
@@ -98,7 +84,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CallbackContext:
-    """Normalized callback invocation passed to domain dispatchers."""
+    """Normalized callback invocation passed to domain handlers."""
 
     update: Update
     context: ContextTypes.DEFAULT_TYPE
@@ -107,39 +93,6 @@ class CallbackContext:
     user: User
     thread_id: int | None
     deps: Any
-
-
-CallbackHandler = Callable[[CallbackContext], Awaitable[None]]
-
-
-class CallbackRegistry:
-    """Registry mapping exact callback keys and prefixes to async handlers."""
-
-    def __init__(self) -> None:
-        self._exact: dict[str, CallbackHandler] = {}
-        self._prefixes: list[tuple[str, CallbackHandler]] = []
-
-    def register_exact(self, key: str, handler: CallbackHandler) -> None:
-        self._exact[key] = handler
-
-    def register_prefix(self, prefix: str, handler: CallbackHandler) -> None:
-        self._prefixes.append((prefix, handler))
-
-    def resolve(self, data: str) -> CallbackHandler | None:
-        exact = self._exact.get(data)
-        if exact is not None:
-            return exact
-        for prefix, handler in self._prefixes:
-            if data.startswith(prefix):
-                return handler
-        return None
-
-    async def dispatch(self, ctx: CallbackContext) -> bool:
-        handler = self.resolve(ctx.data)
-        if handler is None:
-            return False
-        await handler(ctx)
-        return True
 
 
 def _pending_thread_id(ctx: CallbackContext) -> int | None:
@@ -166,16 +119,16 @@ async def _ensure_matching_topic(
 # --- Update & Input Routing ---
 
 
-async def _handle_codex_update_apply(ctx: CallbackContext) -> None:
+async def handle_codex_update_apply(ctx: CallbackContext) -> None:
     await ctx.deps._apply_codex_update_from_callback(ctx.query)
 
 
-async def _handle_codex_update_dismiss(ctx: CallbackContext) -> None:
+async def handle_codex_update_dismiss(ctx: CallbackContext) -> None:
     await ctx.deps._safe_answer_callback(ctx.query, "Dismissed")
     await ctx.deps.safe_edit(ctx.query, "Codex CLI update dismissed.")
 
 
-async def _handle_input_route(ctx: CallbackContext) -> None:
+async def handle_input_route(ctx: CallbackContext) -> None:
     parsed = parse_input_routing_callback(ctx.data)
     if parsed is None:
         await ctx.deps._safe_answer_callback(
@@ -194,7 +147,7 @@ async def _handle_input_route(ctx: CallbackContext) -> None:
 # --- History & Output Mode ---
 
 
-async def _handle_history_page(ctx: CallbackContext) -> None:
+async def handle_history_page(ctx: CallbackContext) -> None:
     prefix_len = len(
         CB_HISTORY_PREV
     )  # same length for CB_HISTORY_PREV and CB_HISTORY_NEXT
@@ -232,7 +185,7 @@ async def _handle_history_page(ctx: CallbackContext) -> None:
     await ctx.query.answer("Page updated")
 
 
-async def _handle_output_mode(ctx: CallbackContext) -> None:
+async def handle_output_mode(ctx: CallbackContext) -> None:
     mode = normalize_output_mode(ctx.data[len(CB_OUTPUT_MODE) :])
     thread_id = ctx.deps._get_thread_id(ctx.update)
     selected = ctx.deps.session_manager.set_output_mode(ctx.user.id, thread_id, mode)
@@ -247,7 +200,7 @@ async def _handle_output_mode(ctx: CallbackContext) -> None:
 # --- Project Root Picker ---
 
 
-async def _handle_root_select(ctx: CallbackContext) -> None:
+async def handle_root_select(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale root picker (topic mismatch)")
     if not ok:
         return
@@ -307,7 +260,7 @@ async def _handle_root_select(ctx: CallbackContext) -> None:
     await ctx.query.answer()
 
 
-async def _handle_root_cancel(ctx: CallbackContext) -> None:
+async def handle_root_cancel(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale root picker (topic mismatch)")
     if not ok:
         return
@@ -329,7 +282,7 @@ def _configured_effort(deps: Any, agent_type: str) -> str:
     return ""
 
 
-async def _handle_profile_agent(ctx: CallbackContext) -> None:
+async def handle_profile_agent(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale picker (topic mismatch)")
     if not ok:
         return
@@ -354,7 +307,7 @@ async def _handle_profile_agent(ctx: CallbackContext) -> None:
     await ctx.query.answer()
 
 
-async def _handle_profile_model(ctx: CallbackContext) -> None:
+async def handle_profile_model(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale picker (topic mismatch)")
     if not ok:
         return
@@ -386,7 +339,7 @@ async def _handle_profile_model(ctx: CallbackContext) -> None:
     await ctx.query.answer("Model selected")
 
 
-async def _handle_profile_effort(ctx: CallbackContext) -> None:
+async def handle_profile_effort(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale picker (topic mismatch)")
     if not ok:
         return
@@ -410,7 +363,7 @@ async def _handle_profile_effort(ctx: CallbackContext) -> None:
     await ctx.query.answer("Reasoning selected")
 
 
-async def _handle_profile_fast(ctx: CallbackContext) -> None:
+async def handle_profile_fast(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale picker (topic mismatch)")
     if not ok:
         return
@@ -421,7 +374,7 @@ async def _handle_profile_fast(ctx: CallbackContext) -> None:
     await ctx.query.answer("Fast mode updated")
 
 
-async def _handle_profile_permission(ctx: CallbackContext) -> None:
+async def handle_profile_permission(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale picker (topic mismatch)")
     if not ok:
         return
@@ -444,14 +397,14 @@ async def _handle_profile_permission(ctx: CallbackContext) -> None:
     await ctx.query.answer("Permission mode updated")
 
 
-async def _handle_profile_confirm(ctx: CallbackContext) -> None:
+async def handle_profile_confirm(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale picker (topic mismatch)")
     if not ok:
         return
     await ctx.deps._continue_creation_with_profile(ctx.query, ctx.context, ctx.user)
 
 
-async def _handle_profile_cancel(ctx: CallbackContext) -> None:
+async def handle_profile_cancel(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale picker (topic mismatch)")
     if not ok:
         return
@@ -463,7 +416,7 @@ async def _handle_profile_cancel(ctx: CallbackContext) -> None:
 # --- Directory Browser ---
 
 
-async def _handle_dir_select(ctx: CallbackContext) -> None:
+async def handle_dir_select(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale browser (topic mismatch)")
     if not ok:
         return
@@ -530,7 +483,7 @@ async def _handle_dir_select(ctx: CallbackContext) -> None:
     await ctx.query.answer()
 
 
-async def _handle_dir_up(ctx: CallbackContext) -> None:
+async def handle_dir_up(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale browser (topic mismatch)")
     if not ok:
         return
@@ -578,7 +531,7 @@ async def _handle_dir_up(ctx: CallbackContext) -> None:
     await ctx.query.answer()
 
 
-async def _handle_dir_page(ctx: CallbackContext) -> None:
+async def handle_dir_page(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale browser (topic mismatch)")
     if not ok:
         return
@@ -629,7 +582,7 @@ async def _handle_dir_page(ctx: CallbackContext) -> None:
     await ctx.query.answer()
 
 
-async def _handle_dir_confirm(ctx: CallbackContext) -> None:
+async def handle_dir_confirm(ctx: CallbackContext) -> None:
     user_data = ctx.context.user_data
     pending_thread_id = _pending_thread_id(ctx)
     if pending_thread_id is None:
@@ -661,7 +614,7 @@ async def _handle_dir_confirm(ctx: CallbackContext) -> None:
     await ctx.deps._show_agent_profile_picker(ctx.query, ctx.context)
 
 
-async def _handle_dir_cancel(ctx: CallbackContext) -> None:
+async def handle_dir_cancel(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale browser (topic mismatch)")
     if not ok:
         return
@@ -675,7 +628,7 @@ async def _handle_dir_cancel(ctx: CallbackContext) -> None:
 # --- Session Picker ---
 
 
-async def _handle_session_select(ctx: CallbackContext) -> None:
+async def handle_session_select(ctx: CallbackContext) -> None:
     ok, pending_tid = await _ensure_matching_topic(
         ctx, "Stale picker (topic mismatch)", fallback_to_current=True
     )
@@ -751,7 +704,7 @@ async def _handle_session_select(ctx: CallbackContext) -> None:
     )
 
 
-async def _handle_session_new(ctx: CallbackContext) -> None:
+async def handle_session_new(ctx: CallbackContext) -> None:
     ok, pending_tid = await _ensure_matching_topic(
         ctx, "Stale picker (topic mismatch)", fallback_to_current=True
     )
@@ -788,7 +741,7 @@ async def _handle_session_new(ctx: CallbackContext) -> None:
     )
 
 
-async def _handle_session_cancel(ctx: CallbackContext) -> None:
+async def handle_session_cancel(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale picker (topic mismatch)")
     if not ok:
         return
@@ -812,7 +765,7 @@ async def _handle_session_cancel(ctx: CallbackContext) -> None:
 # --- Window Picker ---
 
 
-async def _handle_window_bind(ctx: CallbackContext) -> None:
+async def handle_window_bind(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale picker (topic mismatch)")
     if not ok:
         return
@@ -905,7 +858,7 @@ async def _handle_window_bind(ctx: CallbackContext) -> None:
     await ctx.query.answer("Bound")
 
 
-async def _handle_window_new(ctx: CallbackContext) -> None:
+async def handle_window_new(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale picker (topic mismatch)")
     if not ok:
         return
@@ -914,7 +867,7 @@ async def _handle_window_new(ctx: CallbackContext) -> None:
     await ctx.query.answer()
 
 
-async def _handle_window_cancel(ctx: CallbackContext) -> None:
+async def handle_window_cancel(ctx: CallbackContext) -> None:
     ok, _ = await _ensure_matching_topic(ctx, "Stale picker (topic mismatch)")
     if not ok:
         return
@@ -928,7 +881,7 @@ async def _handle_window_cancel(ctx: CallbackContext) -> None:
 # --- Screenshot, Quick Keys & Interactive UI ---
 
 
-async def _handle_screenshot_refresh(ctx: CallbackContext) -> None:
+async def handle_screenshot_refresh(ctx: CallbackContext) -> None:
     window_id = ctx.data[len(CB_SCREENSHOT_REFRESH) :]
     capture = await ctx.deps.capture_agent_output(
         ctx.user.id,
@@ -960,11 +913,11 @@ async def _handle_screenshot_refresh(ctx: CallbackContext) -> None:
         await ctx.query.answer("Failed to refresh", show_alert=True)
 
 
-async def _handle_noop(ctx: CallbackContext) -> None:
+async def handle_noop(ctx: CallbackContext) -> None:
     await ctx.query.answer()
 
 
-_ASK_REFRESH_ACTIONS: dict[str, tuple[str, str | None]] = {
+_ASK_REFRESH_ACTIONS_MAP: dict[str, tuple[str, str | None]] = {
     CB_ASK_UP: ("Up", None),
     CB_ASK_DOWN: ("Down", None),
     CB_ASK_LEFT: ("Left", None),
@@ -974,10 +927,11 @@ _ASK_REFRESH_ACTIONS: dict[str, tuple[str, str | None]] = {
     CB_ASK_TAB: ("Tab", "⇥ Tab"),
     CB_ASK_TRUST: ("t", "Trusted hooks"),
 }
+ASK_REFRESH_ACTIONS: tuple[str, ...] = tuple(_ASK_REFRESH_ACTIONS_MAP)
 
 
-async def _handle_ask_control(ctx: CallbackContext) -> None:
-    for prefix, (tmux_key, toast) in _ASK_REFRESH_ACTIONS.items():
+async def handle_ask_control(ctx: CallbackContext) -> None:
+    for prefix, (tmux_key, toast) in _ASK_REFRESH_ACTIONS_MAP.items():
         if not ctx.data.startswith(prefix):
             continue
         window_id = ctx.data[len(prefix) :]
@@ -997,7 +951,7 @@ async def _handle_ask_control(ctx: CallbackContext) -> None:
         return
 
 
-async def _handle_ask_esc(ctx: CallbackContext) -> None:
+async def handle_ask_esc(ctx: CallbackContext) -> None:
     window_id = ctx.data[len(CB_ASK_ESC) :]
     thread_id = ctx.deps._get_thread_id(ctx.update)
     ok, message = await ctx.deps._send_control_to_agent(
@@ -1011,7 +965,7 @@ async def _handle_ask_esc(ctx: CallbackContext) -> None:
     await ctx.query.answer("⎋ Esc")
 
 
-async def _handle_ask_refresh(ctx: CallbackContext) -> None:
+async def handle_ask_refresh(ctx: CallbackContext) -> None:
     window_id = ctx.data[len(CB_ASK_REFRESH) :]
     thread_id = ctx.deps._get_thread_id(ctx.update)
     await ctx.deps.handle_interactive_ui(
@@ -1020,7 +974,7 @@ async def _handle_ask_refresh(ctx: CallbackContext) -> None:
     await ctx.query.answer("🔄")
 
 
-async def _handle_quick_keys(ctx: CallbackContext) -> None:
+async def handle_quick_keys(ctx: CallbackContext) -> None:
     rest = ctx.data[len(CB_KEYS_PREFIX) :]
     colon_idx = rest.find(":")
     if colon_idx < 0:
@@ -1065,54 +1019,3 @@ async def _handle_quick_keys(ctx: CallbackContext) -> None:
             )
         except Exception:
             pass  # Screenshot unchanged or message too old
-
-
-def build_default_callback_registry() -> CallbackRegistry:
-    """Create the default callback registry across all bot interaction domains."""
-    registry = CallbackRegistry()
-
-    registry.register_exact(CB_CODEX_UPDATE_APPLY, _handle_codex_update_apply)
-    registry.register_exact(CB_CODEX_UPDATE_DISMISS, _handle_codex_update_dismiss)
-    registry.register_prefix(CB_INPUT_ROUTE, _handle_input_route)
-
-    registry.register_prefix(CB_HISTORY_PREV, _handle_history_page)
-    registry.register_prefix(CB_HISTORY_NEXT, _handle_history_page)
-    registry.register_prefix(CB_OUTPUT_MODE, _handle_output_mode)
-
-    registry.register_prefix(CB_ROOT_SELECT, _handle_root_select)
-    registry.register_exact(CB_ROOT_CANCEL, _handle_root_cancel)
-
-    registry.register_prefix(CB_PROFILE_AGENT, _handle_profile_agent)
-    registry.register_prefix(CB_PROFILE_MODEL, _handle_profile_model)
-    registry.register_prefix(CB_PROFILE_EFFORT, _handle_profile_effort)
-    registry.register_prefix(CB_PROFILE_FAST, _handle_profile_fast)
-    registry.register_prefix(CB_PROFILE_PERMISSION, _handle_profile_permission)
-    registry.register_exact(CB_PROFILE_CONFIRM, _handle_profile_confirm)
-    registry.register_exact(CB_PROFILE_CANCEL, _handle_profile_cancel)
-
-    registry.register_prefix(CB_DIR_SELECT, _handle_dir_select)
-    registry.register_exact(CB_DIR_UP, _handle_dir_up)
-    registry.register_prefix(CB_DIR_PAGE, _handle_dir_page)
-    registry.register_exact(CB_DIR_CONFIRM, _handle_dir_confirm)
-    registry.register_exact(CB_DIR_CANCEL, _handle_dir_cancel)
-
-    registry.register_prefix(CB_SESSION_SELECT, _handle_session_select)
-    registry.register_exact(CB_SESSION_NEW, _handle_session_new)
-    registry.register_exact(CB_SESSION_CANCEL, _handle_session_cancel)
-
-    registry.register_prefix(CB_WIN_BIND, _handle_window_bind)
-    registry.register_exact(CB_WIN_NEW, _handle_window_new)
-    registry.register_exact(CB_WIN_CANCEL, _handle_window_cancel)
-
-    registry.register_prefix(CB_SCREENSHOT_REFRESH, _handle_screenshot_refresh)
-    registry.register_exact("noop", _handle_noop)
-    for prefix in _ASK_REFRESH_ACTIONS:
-        registry.register_prefix(prefix, _handle_ask_control)
-    registry.register_prefix(CB_ASK_ESC, _handle_ask_esc)
-    registry.register_prefix(CB_ASK_REFRESH, _handle_ask_refresh)
-    registry.register_prefix(CB_KEYS_PREFIX, _handle_quick_keys)
-
-    return registry
-
-
-DEFAULT_CALLBACK_REGISTRY = build_default_callback_registry()
