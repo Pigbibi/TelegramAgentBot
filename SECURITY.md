@@ -13,7 +13,9 @@ when it is safe to do so.
 
 ## Reporting a vulnerability
 
-Report security vulnerabilities through [GitHub private vulnerability reporting](https://github.com/Pigbibi/TelegramAgentBot/security/advisories/new). Do not post exploit details, credentials, private sessions or personal data in public issues or PRs. Include the affected version, impact and minimal redacted reproduction. The maintainer handles reports on a best-effort basis; no bounty or response-time guarantee is implied.
+Report security vulnerabilities through [GitHub private vulnerability reporting](https://github.com/Pigbibi/TelegramAgentBot/security/advisories/new). Do not post exploit details, credentials, private sessions or personal data in public issues or PRs.
+
+Include the affected version, impact and minimal redacted reproduction. The maintainer handles reports on a best-effort basis; no bounty or response-time guarantee is implied.
 
 ## Scope
 

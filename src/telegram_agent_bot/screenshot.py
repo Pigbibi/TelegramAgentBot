@@ -3,16 +3,18 @@
 Converts captured tmux pane text (with optional ANSI color codes) into a
 dark-background PNG image. Supports full ANSI color parsing (16/256/RGB)
 and a three-tier font fallback chain:
-  1. JetBrains Mono — Latin, symbols, box-drawing
-  2. Noto Sans Mono CJK SC — CJK characters
-  3. Symbola — remaining special symbols
+  1. JetBrains Mono (bundled) — Latin, symbols, box-drawing
+  2. Optional system/user CJK font (or bundled fallback) — CJK characters
+  3. Optional system/user symbol font (or bundled fallback) — special symbols
 
 Key function: text_to_image(text, font_size, with_ansi) → PNG bytes.
 """
 
 import asyncio
+from collections.abc import Mapping
 import io
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,16 +24,139 @@ from PIL import Image, ImageDraw, ImageFont
 logger = logging.getLogger(__name__)
 
 _FONTS_DIR = Path(__file__).parent / "fonts"
+_PRIMARY_FONT_PATH = _FONTS_DIR / "JetBrainsMono-Regular.ttf"
+
+_CJK_ENV_VAR = "TELEGRAM_AGENT_BOT_CJK_FONT"
+_EMOJI_ENV_VAR = "TELEGRAM_AGENT_BOT_EMOJI_FONT"
+
+_CJK_CANDIDATE_NAMES = (
+    "NotoSansMonoCJKsc-Regular.otf",
+    "NotoSansCJKsc-Regular.otf",
+    "NotoSansMonoCJK-Regular.ttc",
+    "NotoSansCJK-Regular.ttc",
+    "PingFang.ttc",
+    "Hiragino Sans GB.ttc",
+    "STHeiti Light.ttc",
+    "Arial Unicode.ttf",
+    "wqy-zenhei.ttc",
+    "WenQuanYiMicroHei.ttf",
+)
+_CJK_GLOB_PATTERNS = (
+    "NotoSans*CJK*.*",
+    "*CJK*.ttc",
+    "*CJK*.otf",
+)
+
+_EMOJI_CANDIDATE_NAMES = (
+    "Symbola.ttf",
+    "NotoEmoji-Regular.ttf",
+    "Apple Symbols.ttf",
+    "DejaVuSansMono.ttf",
+    "DejaVuSans.ttf",
+    "Arial Unicode.ttf",
+    "FreeMono.ttf",
+    "FreeSans.ttf",
+)
+_EMOJI_GLOB_PATTERNS = (
+    "*Symbola*.ttf",
+    "Noto*Emoji*.ttf",
+)
+
+
+def _system_font_dirs() -> tuple[Path, ...]:
+    """Return standard user and OS font directories in search priority order."""
+    home = Path.home()
+    return (
+        home / ".local" / "share" / "fonts",
+        home / "Library" / "Fonts",
+        Path("/usr/share/fonts"),
+        Path("/usr/local/share/fonts"),
+        Path("/System/Library/Fonts"),
+        Path("/System/Library/Fonts/Supplemental"),
+        Path("/Library/Fonts"),
+    )
+
+
+def _discover_font_path(
+    env_var: str,
+    candidate_names: tuple[str, ...],
+    glob_patterns: tuple[str, ...],
+    *,
+    env: Mapping[str, str] | None = None,
+    search_dirs: tuple[Path, ...] | None = None,
+    fallback: Path = _PRIMARY_FONT_PATH,
+) -> Path:
+    """Find an optional font via env override or standard directories, falling back cleanly."""
+    env_map = os.environ if env is None else env
+    override = env_map.get(env_var, "").strip()
+    if override:
+        candidate = Path(override).expanduser()
+        if candidate.is_file():
+            return candidate
+        logger.warning(
+            "Configured font override %s=%s does not exist; falling back to discovery",
+            env_var,
+            override,
+        )
+
+    dirs = [
+        d
+        for d in (_system_font_dirs() if search_dirs is None else search_dirs)
+        if d.is_dir()
+    ]
+    for directory in dirs:
+        for name in candidate_names:
+            direct = directory / name
+            if direct.is_file():
+                return direct
+    for directory in dirs:
+        for name in candidate_names:
+            try:
+                for match in directory.rglob(name):
+                    if match.is_file():
+                        return match
+            except OSError:
+                continue
+        for pattern in glob_patterns:
+            try:
+                for match in sorted(directory.rglob(pattern)):
+                    if match.is_file():
+                        return match
+            except OSError:
+                continue
+    return fallback
+
+
+def _resolve_font_paths(
+    *,
+    env: Mapping[str, str] | None = None,
+    search_dirs: tuple[Path, ...] | None = None,
+) -> list[Path]:
+    """Resolve tier 0 (primary), tier 1 (CJK), and tier 2 (symbol) font paths."""
+    return [
+        _PRIMARY_FONT_PATH,
+        _discover_font_path(
+            _CJK_ENV_VAR,
+            _CJK_CANDIDATE_NAMES,
+            _CJK_GLOB_PATTERNS,
+            env=env,
+            search_dirs=search_dirs,
+        ),
+        _discover_font_path(
+            _EMOJI_ENV_VAR,
+            _EMOJI_CANDIDATE_NAMES,
+            _EMOJI_GLOB_PATTERNS,
+            env=env,
+            search_dirs=search_dirs,
+        ),
+    ]
+
 
 # Font fallback chain (highest priority first):
-#   1. JetBrains Mono (OFL-1.1) — Latin, symbols, box-drawing, blocks
-#   2. Noto Sans Mono CJK SC (OFL-1.1) — CJK, additional symbols
-#   3. Symbola (free license) — remaining miscellaneous symbols, dingbats
-_FONT_PATHS: list[Path] = [
-    _FONTS_DIR / "JetBrainsMono-Regular.ttf",
-    _FONTS_DIR / "NotoSansMonoCJKsc-Regular.otf",
-    _FONTS_DIR / "Symbola.ttf",
-]
+#   1. JetBrains Mono (OFL-1.1, bundled) — Latin, symbols, box-drawing, blocks
+#   2. System/user CJK font (optional) — CJK, additional symbols
+#   3. System/user symbol font (optional) — remaining miscellaneous symbols
+_FONT_PATHS: list[Path] = _resolve_font_paths()
 
 # Pre-computed codepoint sets for characters NOT in JetBrains Mono.
 # Tier 2: present in Noto Sans Mono CJK SC (CJK ideographs, fullwidth punctuation, etc.)
@@ -90,10 +215,18 @@ class StyledSegment:
 
 
 def _load_font(path: Path, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Load a TrueType/OpenType font, falling back to Pillow default."""
+    """Load a TrueType/OpenType font, falling back to primary then Pillow default."""
     try:
         return ImageFont.truetype(str(path), size)
     except OSError:
+        if path != _PRIMARY_FONT_PATH:
+            logger.warning(
+                "Failed to load font %s, falling back to %s", path, _PRIMARY_FONT_PATH
+            )
+            try:
+                return ImageFont.truetype(str(_PRIMARY_FONT_PATH), size)
+            except OSError:
+                pass
         logger.warning("Failed to load font %s, using Pillow default", path)
         return ImageFont.load_default()
 
@@ -271,7 +404,7 @@ async def text_to_image(
     """
 
     def _render_image() -> bytes:
-        fonts = [_load_font(p, font_size) for p in _FONT_PATHS]
+        fonts = [_load_font(p, font_size) for p in _resolve_font_paths()]
 
         lines = text.split("\n")
         padding = 16

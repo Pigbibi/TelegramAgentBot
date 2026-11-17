@@ -23,17 +23,12 @@ Key methods for thread binding access:
 """
 
 import asyncio
-import fcntl
-import json
 import logging
-import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Iterator
 from typing import Any, Callable
-
-import aiofiles
 
 from .account_manager import ACCOUNT_HOME_DIR, list_account_homes
 from .agent_profile import normalize_agent_type
@@ -46,13 +41,43 @@ from .durable_state import (
     DurableRuntimeStore,
 )
 from .output_mode import normalize_output_mode
+from .session_storage import (
+    WindowState,
+    canonical_session_id as _canonical_session_id,
+    is_window_id,
+    load_state_file,
+    mutate_session_map,
+    read_session_map_async,
+    save_state_file,
+    serialize_state_payload,
+    session_ids_match as _session_ids_match,
+    target_from_dict,
+    target_to_dict,
+)
 from .terminal_parser import (
     extract_auth_error_message,
     is_codex_input_ready,
     parse_status_update,
 )
 from .tmux_manager import tmux_manager
-from .transcript_parser import TranscriptParser
+from .transcript_reader import (
+    CodexSession,
+    build_session_file_path,
+    collect_transcript_files,
+    cursor_projects_root as _cursor_projects_root,
+    cursor_transcript_dir,
+    encode_cwd,
+    file_has_usage_limit_exceeded,
+    find_session_file,
+    normalize_path as _normalize_path,
+    normalize_transcript_text,
+    read_recent_messages,
+    read_session_from_file,
+    read_session_preview_from_file,
+    transcript_tail_contains_resume_ready,
+    transcript_tail_contains_user_text,
+    user_text_matches,
+)
 from .utils import atomic_write_json, is_subagent_transcript, read_cwd_from_jsonl
 
 logger = logging.getLogger(__name__)
@@ -68,11 +93,7 @@ def is_shell_pane_command(command: str) -> bool:
 
 
 _is_shell_pane_command = is_shell_pane_command
-
-
-_UUID_SUFFIX_RE = re.compile(
-    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
-)
+_cursor_transcript_dir = cursor_transcript_dir
 
 
 def _iter_transcript_roots(preferred_account_name: str = "") -> list[Path]:
@@ -101,145 +122,6 @@ def _iter_transcript_roots(preferred_account_name: str = "") -> list[Path]:
         seen.add(key)
         roots.append(path)
     return roots
-
-
-def _cursor_projects_root() -> Path:
-    return Path.home() / ".cursor" / "projects"
-
-
-def _cursor_transcript_dir(cwd: str, *, root: Path | None = None) -> Path:
-    project_slug = Path(cwd).as_posix().lstrip("/").replace("/", "-")
-    return (root or _cursor_projects_root()) / project_slug / "agent-transcripts"
-
-
-def _canonical_session_id(session_id: str) -> str:
-    """Normalize bare UUID and rollout-prefixed ids to one comparable form."""
-    if not session_id:
-        return ""
-    match = _UUID_SUFFIX_RE.search(session_id)
-    if match:
-        return match.group(1)
-    return session_id
-
-
-def _session_ids_match(left: str, right: str) -> bool:
-    """Return whether two session ids refer to the same Codex session."""
-    return bool(
-        left and right and _canonical_session_id(left) == _canonical_session_id(right)
-    )
-
-
-def _normalize_path(path_str: str) -> str:
-    """Normalize cwd values for stable comparisons."""
-    try:
-        return str(Path(path_str).resolve())
-    except OSError:
-        return path_str
-
-
-def _extract_user_text(data: dict[str, Any]) -> str:
-    """Extract user text from both legacy and rollout transcript entries."""
-    if TranscriptParser.is_user_message(data):
-        parsed = TranscriptParser.parse_message(data)
-        if parsed and parsed.text.strip():
-            return parsed.text.strip()
-
-    payload = data.get("payload")
-    if isinstance(payload, dict):
-        if payload.get("type") == "user_message":
-            message = payload.get("message", "")
-            if isinstance(message, str):
-                return message.strip()
-
-        if payload.get("type") == "message" and payload.get("role") == "user":
-            content = payload.get("content", [])
-            texts: list[str] = []
-            if isinstance(content, list):
-                for item in content:
-                    if isinstance(item, str) and item.strip():
-                        texts.append(item.strip())
-                    elif isinstance(item, dict):
-                        text = item.get("text", "")
-                        if isinstance(text, str) and text.strip():
-                            texts.append(text.strip())
-            text = "\n".join(texts).strip()
-            if text.startswith("<environment_context>") or text.startswith(
-                "# AGENTS.md instructions for "
-            ):
-                return ""
-            return text
-
-    return ""
-
-
-@dataclass
-class WindowState:
-    """Persistent state for a tmux window."""
-
-    session_id: str = ""
-    cwd: str = ""
-    window_name: str = ""
-    account_name: str = ""
-    usage_limit_exceeded: bool = False
-    launch_started_at: float = 0.0
-    agent_type: str = ""
-    model: str = ""
-    reasoning_effort: str = ""
-    fast_mode: bool = False
-    hibernated_at: float = 0.0
-
-    def to_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {
-            "session_id": self.session_id,
-            "cwd": self.cwd,
-        }
-        if self.window_name:
-            d["window_name"] = self.window_name
-        if self.account_name:
-            d["account_name"] = self.account_name
-        if self.usage_limit_exceeded:
-            d["usage_limit_exceeded"] = True
-        if self.launch_started_at:
-            d["launch_started_at"] = self.launch_started_at
-        if self.agent_type:
-            d["agent_type"] = normalize_agent_type(self.agent_type)
-        if self.model:
-            d["model"] = self.model
-        if self.reasoning_effort:
-            d["reasoning_effort"] = self.reasoning_effort
-        if self.fast_mode:
-            d["fast_mode"] = True
-        if self.hibernated_at:
-            d["hibernated_at"] = self.hibernated_at
-        return d
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "WindowState":
-        return cls(
-            session_id=data.get("session_id", ""),
-            cwd=data.get("cwd", ""),
-            window_name=data.get("window_name", ""),
-            account_name=data.get("account_name", ""),
-            usage_limit_exceeded=bool(data.get("usage_limit_exceeded", False)),
-            launch_started_at=float(data.get("launch_started_at", 0.0) or 0.0),
-            agent_type=normalize_agent_type(data.get("agent_type", ""), default="")
-            if data.get("agent_type")
-            else "",
-            model=str(data.get("model") or ""),
-            reasoning_effort=str(data.get("reasoning_effort") or ""),
-            fast_mode=bool(data.get("fast_mode", False)),
-            hibernated_at=float(data.get("hibernated_at", 0.0) or 0.0),
-        )
-
-
-@dataclass
-class CodexSession:
-    """Information about a Codex session."""
-
-    session_id: str
-    summary: str
-    message_count: int
-    file_path: str
 
 
 class GroupChatRouteConflict(ValueError):
@@ -305,30 +187,11 @@ class SessionManager:
 
     @staticmethod
     def _target_to_dict(target: AgentTarget) -> dict[str, str]:
-        data: dict[str, str] = {
-            "backend_id": target.backend_id,
-            "node_id": target.node_id,
-        }
-        if target.session_id:
-            data["session_id"] = target.session_id
-        if target.window_id:
-            data["window_id"] = target.window_id
-        return data
+        return target_to_dict(target)
 
     @staticmethod
     def _target_from_dict(data: Any) -> AgentTarget | None:
-        if not isinstance(data, dict):
-            return None
-        backend_id = str(data.get("backend_id") or "").strip()
-        node_id = str(data.get("node_id") or "").strip()
-        if not backend_id or not node_id:
-            return None
-        return AgentTarget(
-            backend_id=backend_id,
-            node_id=node_id,
-            session_id=str(data.get("session_id") or ""),
-            window_id=str(data.get("window_id") or ""),
-        )
+        return target_from_dict(data)
 
     @staticmethod
     def _local_target(window_id: str, *, session_id: str = "") -> AgentTarget:
@@ -341,34 +204,19 @@ class SessionManager:
 
     def _save_state(self) -> None:
         self._sync_durable_registry()
-        state: dict[str, Any] = {
-            "window_states": {k: v.to_dict() for k, v in self.window_states.items()},
-            "user_window_offsets": {
-                str(uid): offsets for uid, offsets in self.user_window_offsets.items()
-            },
-            "user_window_offset_sessions": {
-                str(uid): sessions
-                for uid, sessions in self.user_window_offset_sessions.items()
-            },
-            "thread_bindings": {
-                str(uid): {str(tid): wid for tid, wid in bindings.items()}
-                for uid, bindings in self.thread_bindings.items()
-            },
-            "thread_targets": {
-                str(uid): {
-                    str(tid): self._target_to_dict(target)
-                    for tid, target in targets.items()
-                }
-                for uid, targets in self.thread_targets.items()
-            },
-            "window_display_names": self.window_display_names,
-            "group_chat_ids": self.group_chat_ids,
-            "thread_output_modes": self.thread_output_modes,
-            "hidden_session_ids": sorted(self.hidden_session_ids),
-            "topic_managed_session_ids": sorted(self.topic_managed_session_ids),
-        }
-        atomic_write_json(config.state_file, state)
-        logger.debug("State saved to %s", config.state_file)
+        state = serialize_state_payload(
+            window_states=self.window_states,
+            user_window_offsets=self.user_window_offsets,
+            user_window_offset_sessions=self.user_window_offset_sessions,
+            thread_bindings=self.thread_bindings,
+            thread_targets=self.thread_targets,
+            window_display_names=self.window_display_names,
+            group_chat_ids=self.group_chat_ids,
+            thread_output_modes=self.thread_output_modes,
+            hidden_session_ids=self.hidden_session_ids,
+            topic_managed_session_ids=self.topic_managed_session_ids,
+        )
+        save_state_file(config.state_file, state, writer=atomic_write_json)
 
     def _conversation_registry_routes(self) -> list[ConversationRoute]:
         """Project current topic targets into the durable routing schema."""
@@ -529,7 +377,7 @@ class SessionManager:
 
     def _is_window_id(self, key: str) -> bool:
         """Check if a key looks like a tmux window ID (e.g. '@0', '@12')."""
-        return key.startswith("@") and len(key) > 1 and key[1:].isdigit()
+        return is_window_id(key)
 
     def _load_state(self) -> None:
         """Load state synchronously during initialization.
@@ -537,96 +385,27 @@ class SessionManager:
         Detects old-format state (window_name keys without '@' prefix) and
         marks for migration on next startup re-resolution.
         """
-        if config.state_file.exists():
-            try:
-                state = json.loads(config.state_file.read_text())
-                self.window_states = {
-                    k: WindowState.from_dict(v)
-                    for k, v in state.get("window_states", {}).items()
-                }
-                self.user_window_offsets = {
-                    int(uid): offsets
-                    for uid, offsets in state.get("user_window_offsets", {}).items()
-                }
-                self.user_window_offset_sessions = {
-                    int(uid): {
-                        str(window_id): str(session_id)
-                        for window_id, session_id in sessions.items()
-                        if isinstance(session_id, str) and session_id
-                    }
-                    for uid, sessions in state.get(
-                        "user_window_offset_sessions", {}
-                    ).items()
-                    if isinstance(sessions, dict)
-                }
-                self.thread_bindings = {
-                    int(uid): {int(tid): wid for tid, wid in bindings.items()}
-                    for uid, bindings in state.get("thread_bindings", {}).items()
-                }
-                self.thread_targets = {}
-                for uid, targets in state.get("thread_targets", {}).items():
-                    parsed_targets: dict[int, AgentTarget] = {}
-                    for tid, target_data in targets.items():
-                        target = self._target_from_dict(target_data)
-                        if target is not None:
-                            parsed_targets[int(tid)] = target
-                    if parsed_targets:
-                        self.thread_targets[int(uid)] = parsed_targets
-                self.window_display_names = state.get("window_display_names", {})
-                self.group_chat_ids = {
-                    k: int(v) for k, v in state.get("group_chat_ids", {}).items()
-                }
-                self.thread_output_modes = {
-                    str(key): normalize_output_mode(value)
-                    for key, value in state.get("thread_output_modes", {}).items()
-                    if isinstance(key, str) and isinstance(value, str)
-                }
-                self.hidden_session_ids = {
-                    _canonical_session_id(session_id)
-                    for session_id in state.get("hidden_session_ids", [])
-                    if isinstance(session_id, str) and session_id
-                }
-                self.topic_managed_session_ids = {
-                    _canonical_session_id(session_id)
-                    for session_id in state.get("topic_managed_session_ids", [])
-                    if isinstance(session_id, str) and session_id
-                }
-
-                # Detect old format: keys that don't look like window IDs
-                needs_migration = False
-                for k in self.window_states:
-                    if not self._is_window_id(k):
-                        needs_migration = True
-                        break
-                if not needs_migration:
-                    for bindings in self.thread_bindings.values():
-                        for wid in bindings.values():
-                            if not self._is_window_id(wid):
-                                needs_migration = True
-                                break
-                        if needs_migration:
-                            break
-
-                if needs_migration:
-                    logger.info(
-                        "Detected old-format state (window_name keys), "
-                        "will re-resolve on startup"
-                    )
-                    pass
-
-            except (json.JSONDecodeError, ValueError) as e:
-                logger.warning("Failed to load state: %s", e)
-                self.window_states = {}
-                self.user_window_offsets = {}
-                self.user_window_offset_sessions = {}
-                self.thread_bindings = {}
-                self.thread_targets = {}
-                self.window_display_names = {}
-                self.group_chat_ids = {}
-                self.thread_output_modes = {}
-                self.hidden_session_ids = set()
-                self.topic_managed_session_ids = set()
-                pass
+        loaded = load_state_file(
+            config.state_file,
+            default_output_mode=config.output_mode_default,
+        )
+        if loaded is None:
+            return
+        self.window_states = loaded.window_states
+        self.user_window_offsets = loaded.user_window_offsets
+        self.user_window_offset_sessions = loaded.user_window_offset_sessions
+        self.thread_bindings = loaded.thread_bindings
+        self.thread_targets = loaded.thread_targets
+        self.window_display_names = loaded.window_display_names
+        self.group_chat_ids = loaded.group_chat_ids
+        self.thread_output_modes = loaded.thread_output_modes
+        self.hidden_session_ids = loaded.hidden_session_ids
+        self.topic_managed_session_ids = loaded.topic_managed_session_ids
+        if loaded.needs_migration:
+            logger.info(
+                "Detected old-format state (window_name keys), "
+                "will re-resolve on startup"
+            )
 
     async def resolve_stale_ids(self) -> None:
         """Re-resolve persisted window IDs against live tmux windows.
@@ -1113,38 +892,31 @@ class SessionManager:
         key = f"{config.tmux_session_name}:{window_id}"
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
-            try:
-                if config.session_map_file.exists():
-                    async with aiofiles.open(config.session_map_file, "r") as f:
-                        content = await f.read()
-                    session_map = json.loads(content)
-                    info = session_map.get(key, {})
-                    mapped_session_id = info.get("session_id", "")
-                    expected_matches = not expected_session_id or (
-                        _canonical_session_id(mapped_session_id)
+            session_map = await read_session_map_async(config.session_map_file)
+            if session_map is not None:
+                info = session_map.get(key, {})
+                mapped_session_id = info.get("session_id", "")
+                expected_matches = not expected_session_id or (
+                    _canonical_session_id(mapped_session_id)
+                    == _canonical_session_id(expected_session_id)
+                )
+                if mapped_session_id and expected_matches:
+                    if not apply:
+                        return True
+                    # Found — load into window_states immediately
+                    logger.debug("session_map entry found for window_id %s", window_id)
+                    await self.load_session_map()
+                    state = self.get_window_state(window_id)
+                    state_matches = not expected_session_id or (
+                        _canonical_session_id(state.session_id)
                         == _canonical_session_id(expected_session_id)
                     )
-                    if mapped_session_id and expected_matches:
-                        if not apply:
-                            return True
-                        # Found — load into window_states immediately
-                        logger.debug(
-                            "session_map entry found for window_id %s", window_id
-                        )
-                        await self.load_session_map()
-                        state = self.get_window_state(window_id)
-                        state_matches = not expected_session_id or (
-                            _canonical_session_id(state.session_id)
-                            == _canonical_session_id(expected_session_id)
-                        )
-                        if state.session_id and state_matches:
-                            return True
-                        logger.debug(
-                            "session_map entry for window_id %s was ignored during load",
-                            window_id,
-                        )
-            except (json.JSONDecodeError, OSError):
-                pass
+                    if state.session_id and state_matches:
+                        return True
+                    logger.debug(
+                        "session_map entry for window_id %s was ignored during load",
+                        window_id,
+                    )
             await asyncio.sleep(interval)
         logger.warning(
             "Timed out waiting for session_map entry: window_id=%s", window_id
@@ -1153,7 +925,7 @@ class SessionManager:
 
     @staticmethod
     def _normalize_transcript_text(text: str) -> str:
-        return "\n".join(line.rstrip() for line in text.strip().splitlines())
+        return normalize_transcript_text(text)
 
     async def transcript_confirmation_baseline(
         self,
@@ -1189,15 +961,7 @@ class SessionManager:
 
     @classmethod
     def _user_text_matches(cls, actual: str, expected: str) -> bool:
-        actual_norm = cls._normalize_transcript_text(actual)
-        expected_norm = cls._normalize_transcript_text(expected)
-        if not actual_norm or not expected_norm:
-            return False
-        if actual_norm == expected_norm:
-            return True
-        if len(expected_norm) <= 120:
-            return expected_norm in actual_norm
-        return expected_norm[:80] in actual_norm and expected_norm[-80:] in actual_norm
+        return user_text_matches(actual, expected)
 
     @classmethod
     def _transcript_tail_contains_user_text(
@@ -1209,90 +973,22 @@ class SessionManager:
         max_bytes: int = 262_144,
     ) -> bool:
         """Return whether new transcript bytes contain the expected user input."""
-        try:
-            with file_path.open("rb") as f:
-                f.seek(0, 2)
-                size = f.tell()
-                if after_offset is not None and size < after_offset:
-                    return False
-                start = max(0, size - max_bytes)
-                if after_offset is not None:
-                    # Cursor may have started a JSONL user record while the
-                    # pre-submit size was captured. Include that partial line,
-                    # but never accept matching text written before the cursor.
-                    start = max(start, after_offset - 8192)
-                f.seek(start)
-                raw = f.read()
-        except OSError:
-            return False
-
-        line_start = start
-        for encoded_line in raw.splitlines(keepends=True):
-            line_end = line_start + len(encoded_line)
-            if after_offset is not None and line_end <= after_offset:
-                line_start = line_end
-                continue
-            if after_offset is not None and line_start < after_offset:
-                suffix = encoded_line[after_offset - line_start :]
-                encoded_text = (
-                    json.dumps(expected_text, ensure_ascii=False)[1:-1].encode(),
-                    json.dumps(expected_text, ensure_ascii=True)[1:-1].encode(),
-                )
-                if not any(value in suffix for value in encoded_text):
-                    line_start = line_end
-                    continue
-            line_start = line_end
-            line = encoded_line.decode("utf-8", errors="replace").strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            normalized = TranscriptParser.parse_line(line)
-            user_text = _extract_user_text(normalized or data)
-            if user_text and cls._user_text_matches(user_text, expected_text):
-                return True
-        return False
+        return transcript_tail_contains_user_text(
+            file_path,
+            expected_text,
+            after_offset=after_offset,
+            max_bytes=max_bytes,
+        )
 
     @staticmethod
     def _transcript_tail_contains_resume_ready(
         file_path: Path, *, after_offset: int
     ) -> bool:
         """Check for Codex's post-resume settings event after the saved cursor."""
-        try:
-            with file_path.open("rb") as transcript:
-                transcript.seek(0, 2)
-                size = transcript.tell()
-                if size <= after_offset:
-                    return False
-                start = max(0, after_offset - 8192, size - 262_144)
-                transcript.seek(start)
-                raw = transcript.read()
-        except OSError:
-            return False
-
-        line_start = start
-        for encoded_line in raw.splitlines(keepends=True):
-            line_end = line_start + len(encoded_line)
-            if line_end <= after_offset:
-                line_start = line_end
-                continue
-            line_start = line_end
-            try:
-                data = json.loads(encoded_line)
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                continue
-            if not isinstance(data, dict):
-                continue
-            payload = data.get("payload")
-            if (
-                data.get("type") == "event_msg"
-                and isinstance(payload, dict)
-                and payload.get("type") == "thread_settings_applied"
-            ):
-                return True
-        return False
+        return transcript_tail_contains_resume_ready(
+            file_path,
+            after_offset=after_offset,
+        )
 
     async def wait_for_transcript_resume_ready(
         self,
@@ -1370,13 +1066,8 @@ class SessionManager:
         Also cleans up window_states entries not in current session_map.
         Updates window_display_names from the "window_name" field in values.
         """
-        if not config.session_map_file.exists():
-            return
-        try:
-            async with aiofiles.open(config.session_map_file, "r") as f:
-                content = await f.read()
-            session_map = json.loads(content)
-        except (json.JSONDecodeError, OSError):
+        session_map = await read_session_map_async(config.session_map_file)
+        if session_map is None:
             return
 
         prefix = f"{config.tmux_session_name}:"
@@ -1496,25 +1187,12 @@ class SessionManager:
         create_if_missing: bool = False,
     ) -> bool:
         """Update the hook map under the same lock used by the hook process."""
-        map_file = config.session_map_file
-        if not create_if_missing and not map_file.exists():
-            return True
-        try:
-            map_file.parent.mkdir(parents=True, exist_ok=True)
-            with map_file.with_suffix(".lock").open("w") as lock_file:
-                fcntl.flock(lock_file, fcntl.LOCK_EX)
-                session_map = (
-                    json.loads(map_file.read_text()) if map_file.exists() else {}
-                )
-                if not isinstance(session_map, dict):
-                    logger.warning("session_map must be a JSON object: %s", map_file)
-                    return False
-                if mutate(session_map):
-                    atomic_write_json(map_file, session_map)
-            return True
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("Failed to update session_map: %s", exc)
-            return False
+        return mutate_session_map(
+            config.session_map_file,
+            mutate,
+            create_if_missing=create_if_missing,
+            writer=atomic_write_json,
+        )
 
     async def remove_session_map_entry(self, window_id: str) -> bool:
         """Remove one window entry without overwriting concurrent hook updates."""
@@ -1848,12 +1526,8 @@ class SessionManager:
 
     @staticmethod
     def _encode_cwd(cwd: str) -> str:
-        """Encode a cwd path to match Codex's project directory naming.
-
-        Replaces all non-alphanumeric characters (except dash) with dashes.
-        E.g. /home/user_name/Code/project -> -home-user-name-Code-project
-        """
-        return re.sub(r"[^a-zA-Z0-9-]", "-", cwd)
+        """Encode a cwd path to match Codex's project directory naming."""
+        return encode_cwd(cwd)
 
     def _build_session_file_path(
         self,
@@ -1863,11 +1537,8 @@ class SessionManager:
         root: Path | None = None,
     ) -> Path | None:
         """Build the direct file path for a session from session_id and cwd."""
-        if not session_id or not cwd:
-            return None
-        encoded_cwd = self._encode_cwd(cwd)
         base_root = root if root is not None else config.codex_projects_path
-        return base_root / encoded_cwd / f"{session_id}.jsonl"
+        return build_session_file_path(session_id, cwd, root=base_root)
 
     def _find_session_file(
         self,
@@ -1876,35 +1547,12 @@ class SessionManager:
         *,
         account_name: str = "",
     ) -> Path | None:
-        if not session_id or not cwd:
-            return None
-        cursor_root = _cursor_transcript_dir(cwd)
-        cursor_candidate = cursor_root / session_id / f"{session_id}.jsonl"
-        if cursor_candidate.exists():
-            return cursor_candidate
-        try:
-            cursor_matches = list(cursor_root.rglob(f"{session_id}.jsonl"))
-        except OSError:
-            cursor_matches = []
-        if cursor_matches:
-            return cursor_matches[0]
-
-        for root in _iter_transcript_roots(account_name):
-            candidate = self._build_session_file_path(session_id, cwd, root=root)
-            if candidate and candidate.exists():
-                return candidate
-
-        canonical_id = _canonical_session_id(session_id)
-        for root in _iter_transcript_roots(account_name):
-            try:
-                matches = list(root.rglob(f"{session_id}.jsonl"))
-                if not matches and canonical_id:
-                    matches = list(root.rglob(f"*{canonical_id}.jsonl"))
-            except OSError:
-                continue
-            if matches:
-                return matches[0]
-        return None
+        return find_session_file(
+            session_id,
+            cwd,
+            roots=_iter_transcript_roots(account_name),
+            cursor_root=_cursor_projects_root(),
+        )
 
     def _is_subagent_session(
         self,
@@ -1941,43 +1589,7 @@ class SessionManager:
         session_id: str,
     ) -> CodexSession | None:
         """Read one transcript file and build a lightweight session summary."""
-        # Single pass: read file once, extract summary + count messages
-        summary = ""
-        last_user_msg = ""
-        message_count = 0
-        try:
-            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
-                async for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    message_count += 1
-                    try:
-                        data = json.loads(line)
-                        # Check for summary
-                        if data.get("type") == "summary":
-                            s = data.get("summary", "")
-                            if s:
-                                summary = s
-                        # Track last user message as fallback
-                        else:
-                            user_text = _extract_user_text(data)
-                            if user_text:
-                                last_user_msg = user_text
-                    except json.JSONDecodeError:
-                        continue
-        except OSError:
-            return None
-
-        if not summary:
-            summary = last_user_msg[:50] if last_user_msg else "Untitled"
-
-        return CodexSession(
-            session_id=session_id,
-            summary=summary,
-            message_count=message_count,
-            file_path=str(file_path),
-        )
+        return await read_session_from_file(file_path, session_id=session_id)
 
     async def _read_session_preview_from_file(
         self,
@@ -1987,45 +1599,10 @@ class SessionManager:
         max_lines: int = 80,
     ) -> CodexSession | None:
         """Read enough transcript metadata for the resume picker without full scans."""
-        summary = ""
-        last_user_msg = ""
-        scanned_lines = 0
-
-        try:
-            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
-                async for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    scanned_lines += 1
-                    try:
-                        data = json.loads(line)
-                        if data.get("type") == "summary":
-                            s = data.get("summary", "")
-                            if s:
-                                summary = s
-                                break
-                        else:
-                            user_text = _extract_user_text(data)
-                            if user_text:
-                                last_user_msg = user_text
-                                break
-                    except json.JSONDecodeError:
-                        continue
-
-                    if scanned_lines >= max_lines:
-                        break
-        except OSError:
-            return None
-
-        if not summary:
-            summary = last_user_msg[:50] if last_user_msg else "Untitled"
-
-        return CodexSession(
+        return await read_session_preview_from_file(
+            file_path,
             session_id=session_id,
-            summary=summary,
-            message_count=0,
-            file_path=str(file_path),
+            max_lines=max_lines,
         )
 
     # --- Directory session listing ---
@@ -2033,26 +1610,8 @@ class SessionManager:
     async def list_sessions_for_directory(self, cwd: str) -> list[CodexSession]:
         """List existing Codex sessions for a directory from recursive logs."""
         started_at = time.perf_counter()
-        try:
-            target_cwd = str(Path(cwd).resolve())
-        except OSError:
-            target_cwd = cwd
-
-        deduped_files: dict[str, Path] = {}
-        for root in _iter_transcript_roots():
-            if not root.exists():
-                continue
-            for path in root.rglob("*.jsonl"):
-                if not path.is_file() or path.stem == "sessions-index":
-                    continue
-                key = str(path.resolve())
-                deduped_files.setdefault(key, path)
-
-        jsonl_files = sorted(
-            deduped_files.values(),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
+        target_cwd = _normalize_path(cwd)
+        jsonl_files = collect_transcript_files(_iter_transcript_roots())
 
         sessions: list[CodexSession] = []
         for f in jsonl_files:
@@ -2566,40 +2125,7 @@ class SessionManager:
         max_bytes: int = 128 * 1024,
     ) -> bool:
         """Check recent transcript tail for a usage_limit_exceeded event."""
-
-        def _is_usage_limit_payload(payload: dict[str, Any]) -> bool:
-            if payload.get("type") == "error":
-                return payload.get("codex_error_info") == "usage_limit_exceeded"
-
-            if payload.get("type") == "token_count":
-                rate_limits = payload.get("rate_limits")
-                if isinstance(rate_limits, dict):
-                    rate_limit_reached_type = rate_limits.get("rate_limit_reached_type")
-                    if (
-                        isinstance(rate_limit_reached_type, str)
-                        and rate_limit_reached_type
-                    ):
-                        return True
-
-            return False
-
-        try:
-            size = file_path.stat().st_size
-            with file_path.open("rb") as handle:
-                if size > max_bytes:
-                    handle.seek(size - max_bytes)
-                chunk = handle.read().decode("utf-8", errors="ignore")
-        except OSError:
-            return False
-
-        for line in reversed(chunk.splitlines()):
-            try:
-                payload = json.loads(line).get("payload", {})
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict) and _is_usage_limit_payload(payload):
-                return True
-        return False
+        return file_has_usage_limit_exceeded(file_path, max_bytes=max_bytes)
 
     async def window_has_usage_limit_exceeded(self, window_id: str) -> bool:
         """Return True when a window's session already exhausted its quota."""
@@ -2638,50 +2164,11 @@ class SessionManager:
         if not session or not session.file_path:
             return [], 0
 
-        file_path = Path(session.file_path)
-        if not file_path.exists():
-            return [], 0
-
-        # Read JSONL entries (optionally filtered by byte range)
-        entries: list[dict] = []
-        try:
-            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
-                if start_byte > 0:
-                    await f.seek(start_byte)
-
-                while True:
-                    # Check byte limit before reading
-                    if end_byte is not None:
-                        current_pos = await f.tell()
-                        if current_pos >= end_byte:
-                            break
-
-                    line = await f.readline()
-                    if not line:
-                        break
-
-                    data = TranscriptParser.parse_line(line)
-                    if data:
-                        entries.append(data)
-        except OSError as e:
-            logger.error("Error reading session file %s: %s", file_path, e)
-            return [], 0
-
-        parsed_entries, _ = TranscriptParser.parse_entries(entries)
-        # Model reasoning is an internal implementation detail and must not be
-        # exposed through Telegram history, even when commentary is enabled.
-        all_messages = [
-            {
-                "role": e.role,
-                "text": e.text,
-                "content_type": e.content_type,
-                "timestamp": e.timestamp,
-            }
-            for e in parsed_entries
-            if e.content_type != "thinking"
-        ]
-
-        return all_messages, len(all_messages)
+        return await read_recent_messages(
+            Path(session.file_path),
+            start_byte=start_byte,
+            end_byte=end_byte,
+        )
 
 
 session_manager = SessionManager()

@@ -62,6 +62,7 @@ sets the initial default. `claude` is Claude Code API mode and may load
 `TELEGRAM_AGENT_BOT_CLAUDE_ENV_FILE` for a provider such as DeepSeek.
 `claudeofficial` is Claude Code's official subscription mode and deliberately
 skips that file so its official login and model defaults remain authoritative.
+
 Permission settings affect new sessions only. Existing tmux sessions keep their
 current mode. Use `TELEGRAM_AGENT_BOT_CURSOR_PERMISSION_MODE=full` when the VPS-wide
 Cursor CLI is set to unrestricted, so the Telegram picker matches its effective
@@ -75,9 +76,11 @@ or when operators need a fixed picker.
 To follow new Codex model releases automatically, set
 `TELEGRAM_AGENT_BOT_CODEX_MODEL=auto` and leave model discovery enabled. At startup
 and whenever Codex is selected in the topic setup picker, the bot uses the visible
-model marked `isDefault` by the installed CLI's `model/list` response. It follows
-the account's official default rather than guessing from model names or list order.
-An explicit model picker list still limits which default can be selected.
+model marked `isDefault` by the installed CLI's `model/list` response.
+
+It follows the account's official default rather than guessing from model names
+or list order. An explicit model picker list still limits which default can be
+selected.
 
 Existing topic selections stay unchanged. If discovery fails or returns no default
 metadata, the last resolved default is retained. Before the first successful

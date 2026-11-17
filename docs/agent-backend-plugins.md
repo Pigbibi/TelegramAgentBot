@@ -1,7 +1,5 @@
 # Agent backend plugins
 
-English | [简体中文](agent-backend-plugins.zh-CN.md)
-
 TelegramAgentBot routes session operations through an agent backend. The
 built-in `local` backend controls tmux and transcript files on the same machine
 as the Telegram bot. A plugin can route those operations to another transport
@@ -89,10 +87,12 @@ rely only on Telegram callback data for path authorization.
 A backend may implement `AgentInputRouter.send_input(target, text, mode=...)` to
 support native active-turn behavior. The local backend maps `steer` to Enter and
 Codex `queue` to Tab; Claude Code next-turn text stays in the durable AgentBot
-FIFO because its CLI has no equivalent ordinary-text queue key. The base
-`AgentBackend.send_message()` signature remains unchanged. Backends that do not
-implement this optional capability continue to use the durable AgentBot FIFO
-and are not offered controls that would imply unsupported semantics.
+FIFO because its CLI has no equivalent ordinary-text queue key.
+
+The base `AgentBackend.send_message()` signature remains unchanged. Backends
+that do not implement this optional capability continue to use the durable
+AgentBot FIFO and are not offered controls that would imply unsupported
+semantics.
 
 ## Included socket backend
 
