@@ -15,12 +15,33 @@ import difflib
 import json
 import logging
 import re
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from .config import config
 
 logger = logging.getLogger(__name__)
+
+
+def _as_dict(value: Any) -> dict[str, Any] | None:
+    """Return value when it is a dict, otherwise None."""
+    return value if isinstance(value, dict) else None
+
+
+def _as_str(value: Any) -> str | None:
+    """Return value when it is a str, otherwise None."""
+    return value if isinstance(value, str) else None
+
+
+def _as_nonempty_str(value: Any) -> str | None:
+    """Return value when it is a non-empty str, otherwise None."""
+    return value if isinstance(value, str) and value else None
+
+
+def _as_nonblank_str(value: Any) -> str | None:
+    """Return value when it is a str with non-whitespace characters, otherwise None."""
+    return value if isinstance(value, str) and value.strip() else None
 
 
 @dataclass
@@ -62,6 +83,67 @@ class PendingToolInfo:
     input_data: Any = None  # Tool input parameters (for Edit to generate diff)
 
 
+@dataclass
+class _EntryParseState:
+    """Mutable traversal state shared across entries in one parse_entries call."""
+
+    pending_tools: dict[str, PendingToolInfo]
+    result: list[ParsedEntry] = field(default_factory=list)
+    last_cmd_name: str | None = None
+    current_source_offset: int = 0
+
+    def append(self, entry: ParsedEntry) -> None:
+        if self.current_source_offset and entry.source_offset <= 0:
+            entry.source_offset = self.current_source_offset
+        self.result.append(entry)
+
+
+@dataclass
+class _AssistantEntryContext:
+    """Per-entry context while scanning blocks of one assistant message."""
+
+    timestamp: str | None
+    is_agent_error: bool
+    error_code: str | None
+    has_text: bool = False
+
+
+def _summarize_first_string_value(input_data: dict[str, Any]) -> str:
+    for value in input_data.values():
+        text = _as_nonempty_str(value)
+        if text is not None:
+            return text
+    return ""
+
+
+def _summarize_todo_write(input_data: dict[str, Any]) -> str:
+    todos = input_data.get("todos", [])
+    return f"{len(todos)} item(s)" if isinstance(todos, list) else ""
+
+
+def _summarize_ask_user_question(input_data: dict[str, Any]) -> str:
+    questions = input_data.get("questions", [])
+    if not isinstance(questions, list) or not questions:
+        return ""
+    first = _as_dict(questions[0])
+    if first is None:
+        return ""
+    question = first.get("question", "")
+    return question if isinstance(question, str) else ""
+
+
+def _count_nonempty_lines(text: str) -> int:
+    return sum(1 for line in text.split("\n") if line.strip())
+
+
+def _wrap_stats_quote(
+    stats: str,
+    text: str,
+    format_quote: Callable[[str], str],
+) -> str:
+    return f"{stats}\n{format_quote(text)}"
+
+
 class TranscriptParser:
     """Parser for Codex and Cursor Agent JSONL session files.
 
@@ -101,6 +183,19 @@ class TranscriptParser:
     _AUTH_ERROR_HINT = "Use /agentlogin to start an agent device login from Telegram."
     _ENCRYPTED_REASONING_PLACEHOLDER = "Working on it…"
 
+    EXPANDABLE_QUOTE_START = "\x02EXPQUOTE_START\x02"
+    EXPANDABLE_QUOTE_END = "\x02EXPQUOTE_END\x02"
+
+    _RE_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+    _RE_COMMAND_NAME = re.compile(r"<command-name>(.*?)</command-name>")
+    _RE_LOCAL_STDOUT = re.compile(
+        r"<local-command-stdout>(.*?)</local-command-stdout>", re.DOTALL
+    )
+    _RE_SYSTEM_TAGS = re.compile(
+        r"<(bash-input|bash-stdout|bash-stderr|codex_internal_context|"
+        r"local-command-caveat|system-reminder)"
+    )
+
     @classmethod
     def is_encrypted_reasoning_placeholder(cls, text: str) -> bool:
         """Return whether text is the synthetic encrypted-reasoning placeholder."""
@@ -125,9 +220,9 @@ class TranscriptParser:
         """Collect text from both old and new Codex content blocks."""
         texts: list[str] = []
 
-        if isinstance(content, str):
-            if content:
-                texts.append(content)
+        text_value = _as_nonempty_str(content)
+        if text_value is not None:
+            texts.append(text_value)
             return texts
 
         if isinstance(content, list):
@@ -135,14 +230,15 @@ class TranscriptParser:
                 texts.extend(TranscriptParser._extract_nested_text(item))
             return texts
 
-        if not isinstance(content, dict):
+        block = _as_dict(content)
+        if block is None:
             return texts
 
-        text = content.get("text")
-        if isinstance(text, str) and text:
+        text = _as_nonempty_str(block.get("text"))
+        if text is not None:
             texts.append(text)
 
-        nested_content = content.get("content")
+        nested_content = block.get("content")
         if nested_content is not None:
             texts.extend(TranscriptParser._extract_nested_text(nested_content))
 
@@ -184,14 +280,16 @@ class TranscriptParser:
     @staticmethod
     def _load_function_arguments(arguments: Any) -> dict:
         """Decode Codex response_item function_call arguments."""
-        if isinstance(arguments, dict):
-            return arguments
-        if isinstance(arguments, str) and arguments.strip():
+        arg_dict = _as_dict(arguments)
+        if arg_dict is not None:
+            return arg_dict
+        arg_str = _as_nonblank_str(arguments)
+        if arg_str is not None:
             try:
-                parsed = json.loads(arguments)
+                parsed = json.loads(arg_str)
             except json.JSONDecodeError:
                 return {"arguments": arguments}
-            return parsed if isinstance(parsed, dict) else {"arguments": parsed}
+            return _as_dict(parsed) or {"arguments": parsed}
         return {}
 
     @staticmethod
@@ -204,13 +302,16 @@ class TranscriptParser:
 
     @classmethod
     def _is_internal_tool_name(cls, name: str | None) -> bool:
-        if not isinstance(name, str):
+        tool_name = _as_str(name)
+        if tool_name is None:
             return False
         # Codex connector/app tools are exposed in transcripts with private
         # underscore-prefixed names (for example _list_repositories). These are
         # implementation details and should stay behind the Thinking status
         # instead of becoming persistent Telegram bubbles.
-        return name.startswith("_") or name.lower() in cls._INTERNAL_TOOL_NAMES
+        return (
+            tool_name.startswith("_") or tool_name.lower() in cls._INTERNAL_TOOL_NAMES
+        )
 
     @staticmethod
     def _clean_runtime_tool_output(output: str) -> str:
@@ -235,8 +336,8 @@ class TranscriptParser:
         ).strip()
 
         if not thinking_text:
-            encrypted_content = payload.get("encrypted_content")
-            if not isinstance(encrypted_content, str) or not encrypted_content:
+            encrypted_content = _as_nonempty_str(payload.get("encrypted_content"))
+            if encrypted_content is None:
                 return None
             thinking_text = cls._ENCRYPTED_REASONING_PLACEHOLDER
 
@@ -259,14 +360,15 @@ class TranscriptParser:
     def _normalize_function_call(
         cls, payload: dict, timestamp: str | None
     ) -> dict | None:
-        call_id = payload.get("call_id") or payload.get("id")
-        raw_name = payload.get("name")
-        if not isinstance(call_id, str) or not isinstance(raw_name, str):
+        call_id = _as_str(payload.get("call_id") or payload.get("id"))
+        raw_name = _as_str(payload.get("name"))
+        if call_id is None or raw_name is None:
             return None
 
         input_data = cls._load_function_arguments(payload.get("arguments"))
-        if raw_name == "exec_command" and isinstance(input_data.get("cmd"), str):
-            input_data = {**input_data, "command": input_data["cmd"]}
+        cmd = _as_str(input_data.get("cmd"))
+        if raw_name == "exec_command" and cmd is not None:
+            input_data = {**input_data, "command": cmd}
         elif raw_name == "write_stdin":
             chars = input_data.get("chars")
             input_data = {
@@ -295,12 +397,15 @@ class TranscriptParser:
     def _normalize_function_call_output(
         cls, payload: dict, timestamp: str | None
     ) -> dict | None:
-        call_id = payload.get("call_id")
-        if not isinstance(call_id, str):
+        call_id = _as_str(payload.get("call_id"))
+        if call_id is None:
             return None
-        output = payload.get("output", "")
-        if not isinstance(output, str):
-            output = json.dumps(output, ensure_ascii=False)
+        raw_output = payload.get("output", "")
+        output = (
+            raw_output
+            if isinstance(raw_output, str)
+            else json.dumps(raw_output, ensure_ascii=False)
+        )
         output = cls._clean_runtime_tool_output(output)
         return {
             "type": "user",
@@ -319,130 +424,202 @@ class TranscriptParser:
         }
 
     @classmethod
-    def parse_line(cls, line: str) -> dict | None:
-        """Parse one JSONL line and normalize new Codex transcript formats."""
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
+    def _normalize_response_message(
+        cls, payload: dict, timestamp: str | None
+    ) -> dict | None:
+        role = payload.get("role")
+        if role not in ("assistant", "user"):
             return None
 
-        if not isinstance(data, dict):
+        if (
+            role == "assistant"
+            and payload.get("phase") == "commentary"
+            and not config.show_commentary_messages
+        ):
             return None
 
-        entry_type = data.get("type")
-        timestamp = data.get("timestamp")
+        return cls._build_message_entry(
+            role=role,
+            timestamp=timestamp,
+            content=payload.get("content"),
+        )
 
-        if entry_type in ("assistant", "user"):
-            return data
+    @classmethod
+    def _normalize_task_complete(
+        cls, payload: dict, timestamp: str | None
+    ) -> dict | None:
+        # Codex already emits assistant output as response_item/message.
+        # When last_agent_message is present, task_complete repeats the
+        # final answer, so skip it to avoid duplicate Telegram notifications
+        # and duplicate history entries. A null last_agent_message means
+        # Codex ended without a final assistant message; emit a small
+        # completion notice so Telegram topics do not look silently stuck.
+        if _as_nonblank_str(payload.get("last_agent_message")) is not None:
+            return None
 
+        error = _as_dict(payload.get("error"))
+        if error is not None:
+            raw_message = _as_nonblank_str(error.get("message"))
+            message = (
+                raw_message.strip()
+                if raw_message is not None
+                else "The agent stopped before completing the task."
+            )
+            entry = cls._build_message_entry(
+                role="assistant",
+                timestamp=timestamp,
+                content=f"⚠️ Agent stopped before completing the task: {message}",
+            )
+            if entry is not None:
+                entry["agent_error"] = True
+                error_code = _as_nonempty_str(error.get("codex_error_info"))
+                if error_code is not None:
+                    entry["agent_error_code"] = error_code
+            return entry
+
+        return cls._build_message_entry(
+            role="assistant",
+            timestamp=timestamp,
+            content="✅ Agent finished. No additional final message was emitted.",
+        )
+
+    @classmethod
+    def _normalize_error_event(
+        cls, payload: dict, timestamp: str | None
+    ) -> tuple[bool, dict | None]:
+        if payload.get("codex_error_info") == "usage_limit_exceeded":
+            return True, None
+        message = _as_nonblank_str(payload.get("message"))
+        if message is not None:
+            return True, cls._build_message_entry(
+                role="assistant",
+                timestamp=timestamp,
+                content=cls._format_error_message(message),
+            )
+        return False, None
+
+    @classmethod
+    def _parse_passthrough_line(
+        cls, data: dict, timestamp: str | None
+    ) -> tuple[bool, dict | None]:
+        del timestamp
+        return True, data
+
+    @classmethod
+    def _parse_response_item_line(
+        cls, data: dict, timestamp: str | None
+    ) -> tuple[bool, dict | None]:
+        payload = _as_dict(data.get("payload"))
+        if payload is None:
+            return True, None
+        payload_type = _as_str(payload.get("type"))
+        handler = (
+            cls._RESPONSE_ITEM_HANDLERS.get(payload_type)
+            if payload_type is not None
+            else None
+        )
+        return True, (handler(cls, payload, timestamp) if handler is not None else None)
+
+    @classmethod
+    def _parse_event_msg_line(
+        cls, data: dict, timestamp: str | None
+    ) -> tuple[bool, dict | None]:
+        payload = _as_dict(data.get("payload"))
+        if payload is None:
+            return True, None
+        payload_type = _as_str(payload.get("type"))
+        handler = (
+            cls._EVENT_MSG_HANDLERS.get(payload_type)
+            if payload_type is not None
+            else None
+        )
+        if handler is None:
+            return False, None
+        return handler(cls, payload, timestamp)
+
+    @classmethod
+    def _parse_fallback_line(
+        cls, data: dict, entry_type: Any, timestamp: str | None
+    ) -> dict | None:
         # Cursor Agent stores JSONL records with role/message fields instead
         # of Codex's top-level type field. Normalize the shared message shape.
         role = data.get("role")
         if (
             entry_type is None
             and role in ("assistant", "user")
-            and isinstance(data.get("message"), dict)
+            and _as_dict(data.get("message")) is not None
         ):
             data["type"] = role
             return data
 
-        if entry_type == "response_item":
-            payload = data.get("payload")
-            if not isinstance(payload, dict):
-                return None
-
-            payload_type = payload.get("type")
-            if payload_type == "reasoning":
-                return cls._normalize_reasoning(payload, timestamp)
-            if payload_type == "function_call":
-                return cls._normalize_function_call(payload, timestamp)
-            if payload_type == "function_call_output":
-                return cls._normalize_function_call_output(payload, timestamp)
-            if payload_type != "message":
-                return None
-
-            role = payload.get("role")
-            if role not in ("assistant", "user"):
-                return None
-
-            if (
-                role == "assistant"
-                and payload.get("phase") == "commentary"
-                and not config.show_commentary_messages
-            ):
-                return None
-
+        if "role" in data and "text" in data and role in ("assistant", "user"):
             return cls._build_message_entry(
                 role=role,
                 timestamp=timestamp,
-                content=payload.get("content"),
+                content=data.get("text"),
             )
 
-        if entry_type == "event_msg":
-            payload = data.get("payload")
-            if not isinstance(payload, dict):
-                return None
-
-            # Codex already emits assistant output as response_item/message.
-            # When last_agent_message is present, task_complete repeats the
-            # final answer, so skip it to avoid duplicate Telegram notifications
-            # and duplicate history entries.  A null last_agent_message means
-            # Codex ended without a final assistant message; emit a small
-            # completion notice so Telegram topics do not look silently stuck.
-            if payload.get("type") == "task_complete":
-                last_agent_message = payload.get("last_agent_message")
-                if isinstance(last_agent_message, str) and last_agent_message.strip():
-                    return None
-
-                error = payload.get("error")
-                if isinstance(error, dict):
-                    message = error.get("message")
-                    if not isinstance(message, str) or not message.strip():
-                        message = "The agent stopped before completing the task."
-                    entry = cls._build_message_entry(
-                        role="assistant",
-                        timestamp=timestamp,
-                        content=(
-                            "⚠️ Agent stopped before completing the task: "
-                            f"{message.strip()}"
-                        ),
-                    )
-                    if entry is not None:
-                        entry["agent_error"] = True
-                        error_code = error.get("codex_error_info")
-                        if isinstance(error_code, str) and error_code:
-                            entry["agent_error_code"] = error_code
-                    return entry
-
-                return cls._build_message_entry(
-                    role="assistant",
-                    timestamp=timestamp,
-                    content=(
-                        "✅ Agent finished. No additional final message was emitted."
-                    ),
-                )
-
-            if payload.get("type") == "error":
-                if payload.get("codex_error_info") == "usage_limit_exceeded":
-                    return None
-                message = payload.get("message")
-                if isinstance(message, str) and message.strip():
-                    return cls._build_message_entry(
-                        role="assistant",
-                        timestamp=timestamp,
-                        content=cls._format_error_message(message),
-                    )
-
-        if "role" in data and "text" in data:
-            role = data.get("role")
-            if role in ("assistant", "user"):
-                return cls._build_message_entry(
-                    role=role,
-                    timestamp=timestamp,
-                    content=data.get("text"),
-                )
-
         return None
+
+    _RESPONSE_ITEM_HANDLERS: dict[
+        str, Callable[[Any, dict, str | None], dict | None]
+    ] = {
+        "reasoning": lambda cls, payload, ts: cls._normalize_reasoning(payload, ts),
+        "function_call": lambda cls, payload, ts: cls._normalize_function_call(
+            payload, ts
+        ),
+        "function_call_output": lambda cls, payload, ts: (
+            cls._normalize_function_call_output(payload, ts)
+        ),
+        "message": lambda cls, payload, ts: cls._normalize_response_message(
+            payload, ts
+        ),
+    }
+
+    _EVENT_MSG_HANDLERS: dict[
+        str, Callable[[Any, dict, str | None], tuple[bool, dict | None]]
+    ] = {
+        "task_complete": lambda cls, payload, ts: (
+            True,
+            cls._normalize_task_complete(payload, ts),
+        ),
+        "error": lambda cls, payload, ts: cls._normalize_error_event(payload, ts),
+    }
+
+    _LINE_TYPE_HANDLERS: dict[
+        str, Callable[[Any, dict, str | None], tuple[bool, dict | None]]
+    ] = {
+        "assistant": lambda cls, data, ts: cls._parse_passthrough_line(data, ts),
+        "user": lambda cls, data, ts: cls._parse_passthrough_line(data, ts),
+        "response_item": lambda cls, data, ts: cls._parse_response_item_line(data, ts),
+        "event_msg": lambda cls, data, ts: cls._parse_event_msg_line(data, ts),
+    }
+
+    @classmethod
+    def parse_line(cls, line: str) -> dict | None:
+        """Parse one JSONL line and normalize new Codex transcript formats."""
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+
+        data = _as_dict(raw)
+        if data is None:
+            return None
+
+        entry_type = data.get("type")
+        timestamp = data.get("timestamp")
+        handler = (
+            cls._LINE_TYPE_HANDLERS.get(entry_type)
+            if isinstance(entry_type, str)
+            else None
+        )
+        if handler is not None:
+            handled, normalized = handler(cls, data, timestamp)
+            if handled:
+                return normalized
+
+        return cls._parse_fallback_line(data, entry_type, timestamp)
 
     @staticmethod
     def get_message_type(data: dict) -> str | None:
@@ -472,32 +649,20 @@ class TranscriptParser:
             Combined text content only
         """
         if not isinstance(content_list, list):
-            if isinstance(content_list, str):
-                return content_list
-            return ""
+            return content_list if isinstance(content_list, str) else ""
 
-        texts = []
+        texts: list[str] = []
         for item in content_list:
             if isinstance(item, str):
                 texts.append(item)
-            elif isinstance(item, dict):
-                if item.get("type") == "text":
-                    text = item.get("text", "")
-                    if text:
-                        texts.append(text)
+                continue
+            block = _as_dict(item)
+            if block is not None and block.get("type") == "text":
+                text = block.get("text", "")
+                if text:
+                    texts.append(text)
 
         return "\n".join(texts)
-
-    _RE_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
-
-    _RE_COMMAND_NAME = re.compile(r"<command-name>(.*?)</command-name>")
-    _RE_LOCAL_STDOUT = re.compile(
-        r"<local-command-stdout>(.*?)</local-command-stdout>", re.DOTALL
-    )
-    _RE_SYSTEM_TAGS = re.compile(
-        r"<(bash-input|bash-stdout|bash-stderr|codex_internal_context|"
-        r"local-command-caveat|system-reminder)"
-    )
 
     @staticmethod
     def _format_edit_diff(old_string: str, new_string: str) -> str:
@@ -514,6 +679,27 @@ class TranscriptParser:
             result_lines.append(line.rstrip("\n"))
         return "\n".join(result_lines)
 
+    _TOOL_SUMMARY_EXTRACTORS: dict[str, Callable[[dict[str, Any]], str]] = {
+        "Read": lambda inp: inp.get("file_path") or inp.get("pattern", ""),
+        "Glob": lambda inp: inp.get("file_path") or inp.get("pattern", ""),
+        "Write": lambda inp: inp.get("file_path", ""),
+        "Edit": lambda inp: inp.get("file_path") or inp.get("notebook_path", ""),
+        "NotebookEdit": lambda inp: (
+            inp.get("file_path") or inp.get("notebook_path", "")
+        ),
+        "Bash": lambda inp: inp.get("command", ""),
+        "Wait": lambda inp: inp.get("summary", ""),
+        "Grep": lambda inp: inp.get("pattern", ""),
+        "Task": lambda inp: inp.get("description", ""),
+        "WebFetch": lambda inp: inp.get("url", ""),
+        "WebSearch": lambda inp: inp.get("query", ""),
+        "TodoWrite": _summarize_todo_write,
+        "TodoRead": lambda _inp: "",
+        "AskUserQuestion": _summarize_ask_user_question,
+        "ExitPlanMode": lambda _inp: "",
+        "Skill": lambda inp: inp.get("skill", ""),
+    }
+
     @classmethod
     def format_tool_use_summary(cls, name: str, input_data: dict | Any) -> str:
         """Format a tool_use block into a brief summary line.
@@ -525,53 +711,14 @@ class TranscriptParser:
         Returns:
             Formatted string like "**Read**(file.py)"
         """
-        if not isinstance(input_data, dict):
+        data = _as_dict(input_data)
+        if data is None:
             return f"**{name}**"
 
-        # Pick a meaningful short summary based on tool name
-        summary = ""
-        if name in ("Read", "Glob"):
-            summary = input_data.get("file_path") or input_data.get("pattern", "")
-        elif name == "Write":
-            summary = input_data.get("file_path", "")
-        elif name in ("Edit", "NotebookEdit"):
-            summary = input_data.get("file_path") or input_data.get("notebook_path", "")
-            # Note: Edit/Update diff and stats are generated in tool_result stage,
-            # not here. We just show the tool name and file path.
-        elif name == "Bash":
-            summary = input_data.get("command", "")
-        elif name == "Wait":
-            summary = input_data.get("summary", "")
-        elif name == "Grep":
-            summary = input_data.get("pattern", "")
-        elif name == "Task":
-            summary = input_data.get("description", "")
-        elif name == "WebFetch":
-            summary = input_data.get("url", "")
-        elif name == "WebSearch":
-            summary = input_data.get("query", "")
-        elif name == "TodoWrite":
-            todos = input_data.get("todos", [])
-            if isinstance(todos, list):
-                summary = f"{len(todos)} item(s)"
-        elif name == "TodoRead":
-            summary = ""
-        elif name == "AskUserQuestion":
-            questions = input_data.get("questions", [])
-            if isinstance(questions, list) and questions:
-                q = questions[0]
-                if isinstance(q, dict):
-                    summary = q.get("question", "")
-        elif name == "ExitPlanMode":
-            summary = ""
-        elif name == "Skill":
-            summary = input_data.get("skill", "")
-        else:
-            # Generic: show first string value
-            for v in input_data.values():
-                if isinstance(v, str) and v:
-                    summary = v
-                    break
+        extractor = cls._TOOL_SUMMARY_EXTRACTORS.get(
+            name, _summarize_first_string_value
+        )
+        summary = extractor(data)
 
         if summary:
             if len(summary) > cls._MAX_SUMMARY_LENGTH:
@@ -584,17 +731,19 @@ class TranscriptParser:
         """Extract text from a tool_result content block."""
         if isinstance(content, str):
             return content
-        if isinstance(content, list):
-            parts = []
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    t = item.get("text", "")
-                    if t:
-                        parts.append(t)
-                elif isinstance(item, str):
-                    parts.append(item)
-            return "\n".join(parts)
-        return ""
+        if not isinstance(content, list):
+            return ""
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            block = _as_dict(item)
+            if block is not None and block.get("type") == "text":
+                text = block.get("text", "")
+                if text:
+                    parts.append(text)
+        return "\n".join(parts)
 
     @staticmethod
     def extract_tool_result_images(
@@ -608,10 +757,11 @@ class TranscriptParser:
             return None
         images: list[tuple[str, bytes]] = []
         for item in content:
-            if not isinstance(item, dict) or item.get("type") != "image":
+            block = _as_dict(item)
+            if block is None or block.get("type") != "image":
                 continue
-            source = item.get("source")
-            if not isinstance(source, dict) or source.get("type") != "base64":
+            source = _as_dict(block.get("source"))
+            if source is None or source.get("type") != "base64":
                 continue
             media_type = source.get("media_type", "image/png")
             data_str = source.get("data", "")
@@ -635,19 +785,19 @@ class TranscriptParser:
             ParsedMessage or None if not a parseable message
         """
         msg_type = cls.get_message_type(data)
-
         if msg_type not in ("user", "assistant"):
             return None
 
-        message = data.get("message")
-        if not isinstance(message, dict):
+        message = _as_dict(data.get("message"))
+        if message is None:
             return None
         content = message.get("content", "")
 
-        if isinstance(content, list):
-            text = cls.extract_text_only(content)
-        else:
-            text = str(content) if content else ""
+        text = (
+            cls.extract_text_only(content)
+            if isinstance(content, list)
+            else (str(content) if content else "")
+        )
         text = cls._RE_ANSI_ESCAPE.sub("", text)
 
         # Detect local command responses in user messages.
@@ -682,9 +832,6 @@ class TranscriptParser:
         """Extract timestamp from message data."""
         return data.get("timestamp")
 
-    EXPANDABLE_QUOTE_START = "\x02EXPQUOTE_START\x02"
-    EXPANDABLE_QUOTE_END = "\x02EXPQUOTE_END\x02"
-
     @classmethod
     def _format_expandable_quote(cls, text: str) -> str:
         """Format text as a Telegram expandable blockquote.
@@ -694,6 +841,29 @@ class TranscriptParser:
         telegramify processes the surrounding content.
         """
         return f"{cls.EXPANDABLE_QUOTE_START}{text}{cls.EXPANDABLE_QUOTE_END}"
+
+    _TOOL_RESULT_FORMATTERS: dict[str, Callable[[str, Callable[[str], str]], str]] = {
+        "Read": lambda text, _q: f"  ⎿  Read {text.count(chr(10)) + 1} lines",
+        "Write": lambda text, _q: f"  ⎿  Wrote {text.count(chr(10)) + 1} lines",
+        "Bash": lambda text, q: _wrap_stats_quote(
+            f"  ⎿  Output {text.count(chr(10)) + 1} lines", text, q
+        ),
+        "Grep": lambda text, q: _wrap_stats_quote(
+            f"  ⎿  Found {_count_nonempty_lines(text)} matches", text, q
+        ),
+        "Glob": lambda text, q: _wrap_stats_quote(
+            f"  ⎿  Found {_count_nonempty_lines(text)} files", text, q
+        ),
+        "Task": lambda text, q: _wrap_stats_quote(
+            f"  ⎿  Agent output {text.count(chr(10)) + 1} lines", text, q
+        ),
+        "WebFetch": lambda text, q: _wrap_stats_quote(
+            f"  ⎿  Fetched {len(text)} characters", text, q
+        ),
+        "WebSearch": lambda text, q: _wrap_stats_quote(
+            f"  ⎿  {text.count(chr(10) * 2) + 1} search results", text, q
+        ),
+    }
 
     @classmethod
     def _format_tool_result_text(cls, text: str, tool_name: str | None = None) -> str:
@@ -706,59 +876,365 @@ class TranscriptParser:
         """
         if not text:
             return ""
-
-        line_count = text.count("\n") + 1 if text else 0
-
-        # Tool-specific statistics
-        if tool_name == "Read":
-            # Read: show line count instead of full content
-            return f"  ⎿  Read {line_count} lines"
-
-        elif tool_name == "Write":
-            # Write: show lines written
-            stats = f"  ⎿  Wrote {line_count} lines"
-            return stats
-
-        elif tool_name == "Bash":
-            # Bash: show output line count
-            if line_count > 0:
-                stats = f"  ⎿  Output {line_count} lines"
-                return stats + "\n" + cls._format_expandable_quote(text)
-            return cls._format_expandable_quote(text)
-
-        elif tool_name == "Grep":
-            # Grep: show match count (count non-empty lines)
-            matches = len([line for line in text.split("\n") if line.strip()])
-            stats = f"  ⎿  Found {matches} matches"
-            return stats + "\n" + cls._format_expandable_quote(text)
-
-        elif tool_name == "Glob":
-            # Glob: show file count
-            files = len([line for line in text.split("\n") if line.strip()])
-            stats = f"  ⎿  Found {files} files"
-            return stats + "\n" + cls._format_expandable_quote(text)
-
-        elif tool_name == "Task":
-            # Task: show output length
-            if line_count > 0:
-                stats = f"  ⎿  Agent output {line_count} lines"
-                return stats + "\n" + cls._format_expandable_quote(text)
-            return cls._format_expandable_quote(text)
-
-        elif tool_name == "WebFetch":
-            # WebFetch: show content length
-            char_count = len(text)
-            stats = f"  ⎿  Fetched {char_count} characters"
-            return stats + "\n" + cls._format_expandable_quote(text)
-
-        elif tool_name == "WebSearch":
-            # WebSearch: show results count (estimate by sections)
-            results = text.count("\n\n") + 1 if text else 0
-            stats = f"  ⎿  {results} search results"
-            return stats + "\n" + cls._format_expandable_quote(text)
-
-        # Default: expandable quote without stats
+        formatter = (
+            cls._TOOL_RESULT_FORMATTERS.get(tool_name)
+            if tool_name is not None
+            else None
+        )
+        if formatter is not None:
+            return formatter(text, cls._format_expandable_quote)
         return cls._format_expandable_quote(text)
+
+    @classmethod
+    def _handle_local_command_message(
+        cls,
+        parsed: ParsedMessage | None,
+        entry_timestamp: str | None,
+        state: _EntryParseState,
+    ) -> bool:
+        if parsed is None:
+            return False
+        if parsed.message_type == "local_command_invoke":
+            state.last_cmd_name = parsed.tool_name
+            return True
+        if parsed.message_type != "local_command":
+            return False
+
+        cmd = parsed.tool_name or state.last_cmd_name or ""
+        text = parsed.text
+        if cmd:
+            formatted = (
+                f"❯ `{cmd}`\n```\n{text}\n```"
+                if "\n" in text
+                else f"❯ `{cmd}`\n`{text}`"
+            )
+        else:
+            formatted = f"```\n{text}\n```" if "\n" in text else f"`{text}`"
+        state.append(
+            ParsedEntry(
+                role="assistant",
+                text=formatted,
+                content_type="local_command",
+                timestamp=entry_timestamp,
+            )
+        )
+        state.last_cmd_name = None
+        return True
+
+    @classmethod
+    def _handle_assistant_text_block(
+        cls,
+        block: dict[str, Any],
+        state: _EntryParseState,
+        ctx: _AssistantEntryContext,
+    ) -> None:
+        text = block.get("text", "").strip()
+        if not text or text == cls._NO_CONTENT_PLACEHOLDER:
+            return
+        state.append(
+            ParsedEntry(
+                role="assistant",
+                text=text,
+                content_type="agent_error" if ctx.is_agent_error else "text",
+                timestamp=ctx.timestamp,
+                error_code=ctx.error_code,
+            )
+        )
+        ctx.has_text = True
+
+    @classmethod
+    def _handle_assistant_tool_use_block(
+        cls,
+        block: dict[str, Any],
+        state: _EntryParseState,
+        ctx: _AssistantEntryContext,
+    ) -> None:
+        tool_id = block.get("id", "")
+        name = block.get("name", "unknown")
+        inp = block.get("input", {})
+        summary = cls.format_tool_use_summary(name, inp)
+        should_emit_tool = not cls._is_internal_tool_name(name) and (
+            name != "Bash" or config.show_bash_tool_calls
+        )
+
+        # ExitPlanMode: emit plan content as text before tool_use entry
+        inp_dict = _as_dict(inp)
+        if name == "ExitPlanMode" and inp_dict is not None:
+            plan = inp_dict.get("plan", "")
+            if plan:
+                state.append(
+                    ParsedEntry(
+                        role="assistant",
+                        text=plan,
+                        content_type="text",
+                        timestamp=ctx.timestamp,
+                    )
+                )
+
+        if tool_id:
+            # Edit tool needs input_data to generate diff in tool_result stage
+            input_data = inp if name in ("Edit", "NotebookEdit") else None
+            state.pending_tools[tool_id] = PendingToolInfo(
+                summary=summary,
+                tool_name=name,
+                input_data=input_data,
+            )
+
+        if should_emit_tool:
+            state.append(
+                ParsedEntry(
+                    role="assistant",
+                    text=summary,
+                    content_type="tool_use",
+                    tool_use_id=tool_id or None,
+                    timestamp=ctx.timestamp,
+                    tool_name=name,
+                )
+            )
+
+    @classmethod
+    def _handle_assistant_thinking_block(
+        cls,
+        block: dict[str, Any],
+        state: _EntryParseState,
+        ctx: _AssistantEntryContext,
+    ) -> None:
+        thinking_text = block.get("thinking", "")
+        if thinking_text:
+            state.append(
+                ParsedEntry(
+                    role="assistant",
+                    text=cls._format_expandable_quote(thinking_text),
+                    content_type="thinking",
+                    timestamp=ctx.timestamp,
+                )
+            )
+        elif not ctx.has_text:
+            state.append(
+                ParsedEntry(
+                    role="assistant",
+                    text="(thinking)",
+                    content_type="thinking",
+                    timestamp=ctx.timestamp,
+                )
+            )
+
+    _ASSISTANT_BLOCK_HANDLERS: dict[
+        str,
+        Callable[[Any, dict[str, Any], _EntryParseState, _AssistantEntryContext], None],
+    ] = {
+        "text": lambda cls, b, s, ctx: cls._handle_assistant_text_block(b, s, ctx),
+        "tool_use": lambda cls, b, s, ctx: cls._handle_assistant_tool_use_block(
+            b, s, ctx
+        ),
+        "thinking": lambda cls, b, s, ctx: cls._handle_assistant_thinking_block(
+            b, s, ctx
+        ),
+    }
+
+    @classmethod
+    def _process_assistant_entry(
+        cls,
+        data: dict,
+        content: list[Any],
+        entry_timestamp: str | None,
+        state: _EntryParseState,
+    ) -> None:
+        error_code = _as_nonempty_str(data.get("agent_error_code"))
+        ctx = _AssistantEntryContext(
+            timestamp=entry_timestamp,
+            is_agent_error=data.get("agent_error") is True,
+            error_code=error_code,
+        )
+        for raw_block in content:
+            block = _as_dict(raw_block)
+            if block is None:
+                continue
+            handler = cls._ASSISTANT_BLOCK_HANDLERS.get(block.get("type", ""))
+            if handler is not None:
+                handler(cls, block, state, ctx)
+
+    @classmethod
+    def _format_error_tool_result(
+        cls,
+        tool_summary: str | None,
+        result_text: str,
+    ) -> str:
+        entry_text = tool_summary or "**Error**"
+        if not result_text:
+            return entry_text + "\n  ⎿  Error"
+        error_summary = result_text.split("\n")[0]
+        if len(error_summary) > 100:
+            error_summary = error_summary[:100] + "…"
+        entry_text += f"\n  ⎿  Error: {error_summary}"
+        if "\n" in result_text:
+            entry_text += "\n" + cls._format_expandable_quote(result_text)
+        return entry_text
+
+    @classmethod
+    def _format_success_tool_result(
+        cls,
+        tool_summary: str,
+        tool_name: str | None,
+        tool_input_data: Any,
+        result_text: str,
+    ) -> str:
+        if tool_name == "Edit" and tool_input_data and result_text:
+            old_s = tool_input_data.get("old_string", "")
+            new_s = tool_input_data.get("new_string", "")
+            if old_s and new_s:
+                diff_text = cls._format_edit_diff(old_s, new_s)
+                if diff_text:
+                    added = sum(
+                        1
+                        for line in diff_text.split("\n")
+                        if line.startswith("+") and not line.startswith("+++")
+                    )
+                    removed = sum(
+                        1
+                        for line in diff_text.split("\n")
+                        if line.startswith("-") and not line.startswith("---")
+                    )
+                    stats = f"  ⎿  Added {added} lines, removed {removed} lines"
+                    return (
+                        f"{tool_summary}\n{stats}\n"
+                        f"{cls._format_expandable_quote(diff_text)}"
+                    )
+            return tool_summary
+
+        if result_text and cls.EXPANDABLE_QUOTE_START not in tool_summary:
+            return f"{tool_summary}\n{cls._format_tool_result_text(result_text, tool_name)}"
+        return tool_summary
+
+    @classmethod
+    def _handle_user_tool_result_block(
+        cls,
+        block: dict[str, Any],
+        entry_timestamp: str | None,
+        state: _EntryParseState,
+        _user_text_parts: list[str],
+    ) -> None:
+        tool_use_id = block.get("tool_use_id", "")
+        result_content = block.get("content", "")
+        result_text = cls.extract_tool_result_text(result_content)
+        result_images = cls.extract_tool_result_images(result_content)
+        tool_info = state.pending_tools.pop(tool_use_id, None)
+        tool_summary = tool_info.summary if tool_info is not None else None
+        tool_name = tool_info.tool_name if tool_info is not None else None
+        tool_input_data = tool_info.input_data if tool_info is not None else None
+
+        if cls._is_internal_tool_name(tool_name):
+            return
+        if tool_name == "Bash" and not config.show_bash_tool_calls:
+            return
+        if not result_text and not result_images:
+            return
+
+        tuid = tool_use_id or None
+        if result_text == cls._INTERRUPTED_TEXT:
+            entry_text = (
+                f"{tool_summary}\n⏹ Interrupted" if tool_summary else "⏹ Interrupted"
+            )
+            state.append(
+                ParsedEntry(
+                    role="assistant",
+                    text=entry_text,
+                    content_type="tool_result",
+                    tool_use_id=tuid,
+                    timestamp=entry_timestamp,
+                    tool_name=tool_name,
+                )
+            )
+            return
+
+        if block.get("is_error", False):
+            entry_text = cls._format_error_tool_result(tool_summary, result_text)
+        elif tool_summary:
+            entry_text = cls._format_success_tool_result(
+                tool_summary, tool_name, tool_input_data, result_text
+            )
+        else:
+            # If the matching tool_use was already skipped or the monitor
+            # resumed after it, the output has no context.
+            return
+
+        state.append(
+            ParsedEntry(
+                role="assistant",
+                text=entry_text,
+                content_type="tool_result",
+                tool_use_id=tuid,
+                timestamp=entry_timestamp,
+                tool_name=tool_name,
+                image_data=result_images,
+            )
+        )
+
+    @classmethod
+    def _handle_user_text_block(
+        cls,
+        block: dict[str, Any],
+        _entry_timestamp: str | None,
+        _state: _EntryParseState,
+        user_text_parts: list[str],
+    ) -> None:
+        text = block.get("text", "").strip()
+        if text and not cls._RE_SYSTEM_TAGS.search(text):
+            user_text_parts.append(text)
+
+    _USER_BLOCK_HANDLERS: dict[
+        str,
+        Callable[[Any, dict[str, Any], str | None, _EntryParseState, list[str]], None],
+    ] = {
+        "tool_result": lambda cls, b, ts, s, parts: cls._handle_user_tool_result_block(
+            b, ts, s, parts
+        ),
+        "text": lambda cls, b, ts, s, parts: cls._handle_user_text_block(
+            b, ts, s, parts
+        ),
+    }
+
+    @classmethod
+    def _process_user_entry(
+        cls,
+        _data: dict,
+        content: list[Any],
+        entry_timestamp: str | None,
+        state: _EntryParseState,
+    ) -> None:
+        user_text_parts: list[str] = []
+        for raw_block in content:
+            block = _as_dict(raw_block)
+            if block is None:
+                plain = _as_nonblank_str(raw_block)
+                if plain is not None:
+                    user_text_parts.append(plain.strip())
+                continue
+            handler = cls._USER_BLOCK_HANDLERS.get(block.get("type", ""))
+            if handler is not None:
+                handler(cls, block, entry_timestamp, state, user_text_parts)
+
+        if not user_text_parts:
+            return
+        combined = "\n".join(user_text_parts)
+        if not cls._RE_LOCAL_STDOUT.search(
+            combined
+        ) and not cls._RE_COMMAND_NAME.search(combined):
+            state.append(
+                ParsedEntry(
+                    role="user",
+                    text=combined,
+                    content_type="text",
+                    timestamp=entry_timestamp,
+                )
+            )
+
+    _ENTRY_ROLE_HANDLERS: dict[
+        str, Callable[[Any, dict, list[Any], str | None, _EntryParseState], None]
+    ] = {
+        "assistant": lambda cls, d, c, ts, s: cls._process_assistant_entry(d, c, ts, s),
+        "user": lambda cls, d, c, ts, s: cls._process_user_entry(d, c, ts, s),
+    }
 
     @classmethod
     def parse_entries(
@@ -781,357 +1257,54 @@ class TranscriptParser:
         Returns:
             Tuple of (parsed entries, remaining pending_tools state)
         """
-        result: list[ParsedEntry] = []
-        last_cmd_name: str | None = None
-        current_source_offset = 0
-
-        def append_result(entry: ParsedEntry) -> None:
-            if current_source_offset and entry.source_offset <= 0:
-                entry.source_offset = current_source_offset
-            result.append(entry)
-
-        # Pending tool_use blocks keyed by id
-        _carry_over = pending_tools is not None
-        if pending_tools is None:
-            pending_tools = {}
-        else:
-            pending_tools = dict(pending_tools)  # don't mutate caller's dict
+        carry_over = pending_tools is not None
+        state = _EntryParseState(
+            pending_tools=dict(pending_tools) if pending_tools is not None else {}
+        )
 
         for data in entries:
             raw_source_offset = data.get("_telegram_agent_bot_end_offset")
-            current_source_offset = (
+            state.current_source_offset = (
                 raw_source_offset
                 if isinstance(raw_source_offset, int) and raw_source_offset > 0
                 else 0
             )
             msg_type = cls.get_message_type(data)
-            if msg_type not in ("user", "assistant"):
+            entry_handler = (
+                cls._ENTRY_ROLE_HANDLERS.get(msg_type) if msg_type is not None else None
+            )
+            if entry_handler is None:
                 continue
 
-            # Extract timestamp for this entry
-            entry_timestamp = cls.get_timestamp(data)
-
-            message = data.get("message")
-            if not isinstance(message, dict):
+            message = _as_dict(data.get("message"))
+            if message is None:
                 continue
-            content = message.get("content", "")
-            if not isinstance(content, list):
-                content = [{"type": "text", "text": str(content)}] if content else []
-
-            parsed = cls.parse_message(data)
-
-            # Handle local command messages first
-            if parsed:
-                if parsed.message_type == "local_command_invoke":
-                    last_cmd_name = parsed.tool_name
-                    continue
-                if parsed.message_type == "local_command":
-                    cmd = parsed.tool_name or last_cmd_name or ""
-                    text = parsed.text
-                    if cmd:
-                        if "\n" in text:
-                            formatted = f"❯ `{cmd}`\n```\n{text}\n```"
-                        else:
-                            formatted = f"❯ `{cmd}`\n`{text}`"
-                    else:
-                        if "\n" in text:
-                            formatted = f"```\n{text}\n```"
-                        else:
-                            formatted = f"`{text}`"
-                    append_result(
-                        ParsedEntry(
-                            role="assistant",
-                            text=formatted,
-                            content_type="local_command",
-                            timestamp=entry_timestamp,
-                        )
-                    )
-                    last_cmd_name = None
-                    continue
-            last_cmd_name = None
-
-            if msg_type == "assistant":
-                # Process content blocks
-                has_text = False
-                is_agent_error = data.get("agent_error") is True
-                raw_error_code = data.get("agent_error_code")
-                error_code = (
-                    raw_error_code
-                    if isinstance(raw_error_code, str) and raw_error_code
-                    else None
+            raw_content = message.get("content", "")
+            content = (
+                raw_content
+                if isinstance(raw_content, list)
+                else (
+                    [{"type": "text", "text": str(raw_content)}] if raw_content else []
                 )
-                for block in content:
-                    if not isinstance(block, dict):
-                        continue
-                    btype = block.get("type", "")
+            )
 
-                    if btype == "text":
-                        t = block.get("text", "").strip()
-                        if t and t != cls._NO_CONTENT_PLACEHOLDER:
-                            append_result(
-                                ParsedEntry(
-                                    role="assistant",
-                                    text=t,
-                                    content_type=(
-                                        "agent_error" if is_agent_error else "text"
-                                    ),
-                                    timestamp=entry_timestamp,
-                                    error_code=error_code,
-                                )
-                            )
-                            has_text = True
+            entry_timestamp = cls.get_timestamp(data)
+            parsed = cls.parse_message(data)
+            if cls._handle_local_command_message(parsed, entry_timestamp, state):
+                continue
+            state.last_cmd_name = None
 
-                    elif btype == "tool_use":
-                        tool_id = block.get("id", "")
-                        name = block.get("name", "unknown")
-                        inp = block.get("input", {})
-                        summary = cls.format_tool_use_summary(name, inp)
-                        is_internal_tool = cls._is_internal_tool_name(name)
-                        should_emit_tool = not is_internal_tool and (
-                            name != "Bash" or config.show_bash_tool_calls
-                        )
-
-                        # ExitPlanMode: emit plan content as text before tool_use entry
-                        if name == "ExitPlanMode" and isinstance(inp, dict):
-                            plan = inp.get("plan", "")
-                            if plan:
-                                append_result(
-                                    ParsedEntry(
-                                        role="assistant",
-                                        text=plan,
-                                        content_type="text",
-                                        timestamp=entry_timestamp,
-                                    )
-                                )
-                        if tool_id:
-                            # Store tool info for later tool_result formatting
-                            # Edit tool needs input_data to generate diff in tool_result stage
-                            input_data = (
-                                inp if name in ("Edit", "NotebookEdit") else None
-                            )
-                            pending_tools[tool_id] = PendingToolInfo(
-                                summary=summary,
-                                tool_name=name,
-                                input_data=input_data,
-                            )
-                            # Also emit tool_use entry with tool_name for immediate handling
-                            if should_emit_tool:
-                                append_result(
-                                    ParsedEntry(
-                                        role="assistant",
-                                        text=summary,
-                                        content_type="tool_use",
-                                        tool_use_id=tool_id,
-                                        timestamp=entry_timestamp,
-                                        tool_name=name,
-                                    )
-                                )
-                        elif should_emit_tool:
-                            append_result(
-                                ParsedEntry(
-                                    role="assistant",
-                                    text=summary,
-                                    content_type="tool_use",
-                                    tool_use_id=tool_id or None,
-                                    timestamp=entry_timestamp,
-                                    tool_name=name,
-                                )
-                            )
-
-                    elif btype == "thinking":
-                        thinking_text = block.get("thinking", "")
-                        if thinking_text:
-                            quoted = cls._format_expandable_quote(thinking_text)
-                            append_result(
-                                ParsedEntry(
-                                    role="assistant",
-                                    text=quoted,
-                                    content_type="thinking",
-                                    timestamp=entry_timestamp,
-                                )
-                            )
-                        elif not has_text:
-                            append_result(
-                                ParsedEntry(
-                                    role="assistant",
-                                    text="(thinking)",
-                                    content_type="thinking",
-                                    timestamp=entry_timestamp,
-                                )
-                            )
-
-            elif msg_type == "user":
-                # Check for tool_result blocks and merge with pending tools
-                user_text_parts: list[str] = []
-
-                for block in content:
-                    if not isinstance(block, dict):
-                        if isinstance(block, str) and block.strip():
-                            user_text_parts.append(block.strip())
-                        continue
-                    btype = block.get("type", "")
-
-                    if btype == "tool_result":
-                        tool_use_id = block.get("tool_use_id", "")
-                        result_content = block.get("content", "")
-                        result_text = cls.extract_tool_result_text(result_content)
-                        result_images = cls.extract_tool_result_images(result_content)
-                        is_error = block.get("is_error", False)
-                        is_interrupted = result_text == cls._INTERRUPTED_TEXT
-                        tool_info = pending_tools.pop(tool_use_id, None)
-                        _tuid = tool_use_id or None
-
-                        # Extract tool info from PendingToolInfo object
-                        if tool_info is None:
-                            tool_summary = None
-                            tool_name = None
-                            tool_input_data = None
-                        else:
-                            tool_summary = tool_info.summary
-                            tool_name = tool_info.tool_name
-                            tool_input_data = tool_info.input_data
-
-                        if cls._is_internal_tool_name(tool_name):
-                            continue
-
-                        if tool_name == "Bash" and not config.show_bash_tool_calls:
-                            continue
-
-                        if not result_text and not result_images:
-                            continue
-
-                        if is_interrupted:
-                            # Show interruption inline with tool summary
-                            entry_text = tool_summary or ""
-                            if entry_text:
-                                entry_text += "\n⏹ Interrupted"
-                            else:
-                                entry_text = "⏹ Interrupted"
-                            append_result(
-                                ParsedEntry(
-                                    role="assistant",
-                                    text=entry_text,
-                                    content_type="tool_result",
-                                    tool_use_id=_tuid,
-                                    timestamp=entry_timestamp,
-                                    tool_name=tool_name,
-                                )
-                            )
-                        elif is_error:
-                            # Show error in stats line
-                            if tool_summary:
-                                entry_text = tool_summary
-                            else:
-                                entry_text = "**Error**"
-                            # Add error message in stats format
-                            if result_text:
-                                # Take first line of error as summary
-                                error_summary = result_text.split("\n")[0]
-                                if len(error_summary) > 100:
-                                    error_summary = error_summary[:100] + "…"
-                                entry_text += f"\n  ⎿  Error: {error_summary}"
-                                # If multi-line error, add expandable quote
-                                if "\n" in result_text:
-                                    entry_text += "\n" + cls._format_expandable_quote(
-                                        result_text
-                                    )
-                            else:
-                                entry_text += "\n  ⎿  Error"
-                            append_result(
-                                ParsedEntry(
-                                    role="assistant",
-                                    text=entry_text,
-                                    content_type="tool_result",
-                                    tool_use_id=_tuid,
-                                    timestamp=entry_timestamp,
-                                    tool_name=tool_name,
-                                    image_data=result_images,
-                                )
-                            )
-                        elif tool_summary:
-                            entry_text = tool_summary
-                            # For Edit tool, generate diff stats and expandable quote
-                            if tool_name == "Edit" and tool_input_data and result_text:
-                                old_s = tool_input_data.get("old_string", "")
-                                new_s = tool_input_data.get("new_string", "")
-                                if old_s and new_s:
-                                    diff_text = cls._format_edit_diff(old_s, new_s)
-                                    if diff_text:
-                                        added = sum(
-                                            1
-                                            for line in diff_text.split("\n")
-                                            if line.startswith("+")
-                                            and not line.startswith("+++")
-                                        )
-                                        removed = sum(
-                                            1
-                                            for line in diff_text.split("\n")
-                                            if line.startswith("-")
-                                            and not line.startswith("---")
-                                        )
-                                        stats = f"  ⎿  Added {added} lines, removed {removed} lines"
-                                        entry_text += (
-                                            "\n"
-                                            + stats
-                                            + "\n"
-                                            + cls._format_expandable_quote(diff_text)
-                                        )
-                            # For other tools, append formatted result text
-                            elif (
-                                result_text
-                                and cls.EXPANDABLE_QUOTE_START not in tool_summary
-                            ):
-                                entry_text += "\n" + cls._format_tool_result_text(
-                                    result_text, tool_name
-                                )
-                            append_result(
-                                ParsedEntry(
-                                    role="assistant",
-                                    text=entry_text,
-                                    content_type="tool_result",
-                                    tool_use_id=_tuid,
-                                    timestamp=entry_timestamp,
-                                    tool_name=tool_name,
-                                    image_data=result_images,
-                                )
-                            )
-                        elif result_text or result_images:
-                            # If the matching tool_use was already skipped or the
-                            # monitor resumed after it, the output has no context.
-                            # Do not send anonymous raw output as a persistent
-                            # expandable quote in Telegram.
-                            continue
-
-                    elif btype == "text":
-                        t = block.get("text", "").strip()
-                        if t and not cls._RE_SYSTEM_TAGS.search(t):
-                            user_text_parts.append(t)
-
-                # Add user text if present (skip if message was only tool_results)
-                if user_text_parts:
-                    combined = "\n".join(user_text_parts)
-                    # Skip if it looks like local command XML
-                    if not cls._RE_LOCAL_STDOUT.search(
-                        combined
-                    ) and not cls._RE_COMMAND_NAME.search(combined):
-                        append_result(
-                            ParsedEntry(
-                                role="user",
-                                text=combined,
-                                content_type="text",
-                                timestamp=entry_timestamp,
-                            )
-                        )
+            entry_handler(cls, data, content, entry_timestamp, state)
 
         # Flush remaining pending tools at end.
         # In carry-over mode (monitor), keep them pending for the next call
         # without emitting entries. In one-shot mode (history), emit them.
-        remaining_pending = dict(pending_tools)
-        if not _carry_over:
-            for tool_id, tool_info in pending_tools.items():
+        remaining_pending = dict(state.pending_tools)
+        if not carry_over:
+            for tool_id, tool_info in state.pending_tools.items():
                 if cls._is_internal_tool_name(tool_info.tool_name):
                     continue
-                append_result(
+                state.append(
                     ParsedEntry(
                         role="assistant",
                         text=tool_info.summary,
@@ -1141,8 +1314,7 @@ class TranscriptParser:
                     )
                 )
 
-        # Strip whitespace
-        for entry in result:
+        for entry in state.result:
             entry.text = entry.text.strip()
 
-        return result, remaining_pending
+        return state.result, remaining_pending

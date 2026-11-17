@@ -22,9 +22,10 @@ import contextlib
 import json
 import logging
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, overload
 
 from telegram import Bot
 from telegram.constants import ChatAction
@@ -1404,11 +1405,53 @@ async def _check_and_send_status(
         await _do_clear_status_message(bot, user_id, tid)
 
 
+@dataclass(frozen=True)
+class ContentMessageRequest:
+    """Parameters describing a content message to enqueue for delivery."""
+
+    bot: Bot
+    user_id: int
+    window_id: str
+    parts: Sequence[str]
+    tool_use_id: str | None = None
+    tool_name: str | None = None
+    content_type: str = "text"
+    role: str = "assistant"
+    text: str | None = None
+    thread_id: int | None = None
+    image_data: list[tuple[str, bytes]] | None = None
+    wait_until_sent: bool = False
+
+
+@overload
+async def enqueue_content_message(request: ContentMessageRequest) -> bool: ...
+
+
+@overload
 async def enqueue_content_message(
+    *,
     bot: Bot,
     user_id: int,
     window_id: str,
-    parts: list[str],
+    parts: Sequence[str],
+    tool_use_id: str | None = None,
+    tool_name: str | None = None,
+    content_type: str = "text",
+    role: str = "assistant",
+    text: str | None = None,
+    thread_id: int | None = None,
+    image_data: list[tuple[str, bytes]] | None = None,
+    wait_until_sent: bool = False,
+) -> bool: ...
+
+
+async def enqueue_content_message(
+    request: ContentMessageRequest | None = None,
+    *,
+    bot: Bot | None = None,
+    user_id: int | None = None,
+    window_id: str | None = None,
+    parts: Sequence[str] | None = None,
     tool_use_id: str | None = None,
     tool_name: str | None = None,
     content_type: str = "text",
@@ -1419,35 +1462,78 @@ async def enqueue_content_message(
     wait_until_sent: bool = False,
 ) -> bool:
     """Enqueue a content message task."""
+    if request is None:
+        if bot is None or user_id is None or window_id is None or parts is None:
+            raise TypeError(
+                "enqueue_content_message requires a ContentMessageRequest or "
+                "bot, user_id, window_id, and parts keyword arguments"
+            )
+        request = ContentMessageRequest(
+            bot=bot,
+            user_id=user_id,
+            window_id=window_id,
+            parts=parts,
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            content_type=content_type,
+            role=role,
+            text=text,
+            thread_id=thread_id,
+            image_data=image_data,
+            wait_until_sent=wait_until_sent,
+        )
+    elif (
+        any(
+            value is not None
+            for value in (
+                bot,
+                user_id,
+                window_id,
+                parts,
+                tool_use_id,
+                tool_name,
+                text,
+                thread_id,
+                image_data,
+            )
+        )
+        or content_type != "text"
+        or role != "assistant"
+        or wait_until_sent
+    ):
+        raise TypeError(
+            "Pass either a ContentMessageRequest or keyword fields, not both"
+        )
+
     logger.debug(
         "Enqueue content: user=%d, thread=%s, window_id=%s, content_type=%s",
-        user_id,
-        thread_id,
-        window_id,
-        content_type,
+        request.user_id,
+        request.thread_id,
+        request.window_id,
+        request.content_type,
     )
-    permanent_error = _permanent_delivery_error_for(user_id, thread_id)
+    permanent_error = _permanent_delivery_error_for(request.user_id, request.thread_id)
     if permanent_error is not None:
         raise permanent_error
-    queue = get_or_create_queue(bot, user_id, thread_id)
+    queue = get_or_create_queue(request.bot, request.user_id, request.thread_id)
     delivery_future: asyncio.Future[bool] | None = None
-    if wait_until_sent:
+    if request.wait_until_sent:
         delivery_future = asyncio.get_running_loop().create_future()
 
     route_identity = session_manager.get_route_delivery_identity(
-        user_id, thread_id, window_id
+        request.user_id, request.thread_id, request.window_id
     )
     task = MessageTask(
         task_type="content",
-        text=text,
-        window_id=window_id,
-        parts=parts,
-        tool_use_id=tool_use_id,
-        tool_name=tool_name,
-        content_type=content_type,
-        role=role,
-        thread_id=thread_id,
-        image_data=image_data,
+        text=request.text,
+        window_id=request.window_id,
+        parts=list(request.parts),
+        tool_use_id=request.tool_use_id,
+        tool_name=request.tool_name,
+        content_type=request.content_type,
+        role=request.role,
+        thread_id=request.thread_id,
+        image_data=request.image_data,
         delivery_future=delivery_future,
         route_generation=(
             route_identity.generation if route_identity is not None else None

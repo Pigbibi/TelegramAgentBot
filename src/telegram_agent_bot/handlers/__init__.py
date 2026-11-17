@@ -9,4 +9,7 @@ This package contains the Telegram bot handlers split by functionality:
   - interactive_ui: Interactive UI (AskUserQuestion, Permission Prompt, etc.)
   - status_polling: Terminal status line polling
   - response_builder: Build paginated response messages
+  - agent_login: Agent device login and account management commands
+  - native_input: Native steer/queue input routing, queues, and confirmations
+  - window_lifecycle: Agent/window launch specs, creation, binding, and recovery
 """
