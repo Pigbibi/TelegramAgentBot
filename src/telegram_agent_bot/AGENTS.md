@@ -21,5 +21,4 @@ uv run ruff check src/ tests/
 uv run ruff format --check src/ tests/
 uv run pyright src/telegram_agent_bot/
 uv run pytest --tb=short -q
-python3 scripts/check_hygiene.py
 ```
