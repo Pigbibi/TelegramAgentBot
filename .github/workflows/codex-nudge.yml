@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Request
-        uses: Pigbibi/PrGovernance/pr-governance@18ad203d889f7ebea267afacaf48c9c204718b42
+        uses: Pigbibi/PrGovernance/pr-governance@70f8e8227338e3849c2e80c2e447357e60cb4959
         env:
           GOVERNANCE_REVIEWERS_JSON: ${{ vars.GOVERNANCE_REVIEWERS_JSON }}
           GOVERNANCE_DISPATCH_MENTIONS_JSON: ${{ vars.GOVERNANCE_DISPATCH_MENTIONS_JSON }}
