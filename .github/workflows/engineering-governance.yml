@@ -19,7 +19,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Scan added commits
-        uses: Pigbibi/PrGovernance/pr-governance@18ad203d889f7ebea267afacaf48c9c204718b42
+        uses: Pigbibi/PrGovernance/pr-governance@967f6c97ff041e0545768ee6a4315ef80b228d54
         with:
           mode: scan
 
