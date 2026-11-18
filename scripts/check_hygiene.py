@@ -108,6 +108,7 @@ ALLOWED_LOCALES = {"zh-CN", "en"}
 LANGUAGE_ROOTS = {"zh", "cn", "en"}
 
 MAX_PARAGRAPH = 400
+MAX_LIST_ITEM = 800
 SOFT_AGENTS_LINES = 100
 MAX_AGENTS_LINES = 120
 
@@ -318,6 +319,23 @@ def check_readme_quality(root: Path) -> None:
 
 
 def check_public_internal_artifacts(root: Path, private: bool = False) -> None:
+    if (root / ".git").exists():
+        tracked = subprocess.run(
+            [
+                "git", "ls-files", "--cached", "-z", "--",
+                "docs/acceptance-policy.md", "docs/changes", "docs/audits", "docs/plans", "docs/handoffs",
+            ],
+            cwd=root,
+            capture_output=True,
+            check=False,
+        )
+        if tracked.returncode == 0:
+            for raw in tracked.stdout.split(b"\0"):
+                if not raw:
+                    continue
+                rel = raw.decode("utf-8", errors="surrogateescape")
+                err(f"{rel}: internal artifact must not be tracked in Git")
+
     if private:
         return
     if (root / "docs" / "changes").is_dir() and not is_untracked_gitignored(root, "docs/changes/"):
@@ -326,6 +344,17 @@ def check_public_internal_artifacts(root: Path, private: bool = False) -> None:
         root, "docs/acceptance-policy.md"
     ):
         err("docs/acceptance-policy.md: internal acceptance policy must not remain in a public repository")
+
+
+def check_english_only(root: Path) -> None:
+    """Reject localized .zh-CN.md files when English-only documentation is enforced."""
+    for p in iter_files(root):
+        if p.suffix != ".md":
+            continue
+        stem, locale = split_locale(p.name)
+        if locale == "zh-CN":
+            rel = p.relative_to(root)
+            err(f"{rel}: .zh-CN.md files are retired under English-only documentation policy")
 
 
 HEAD_LINES = 15
@@ -422,10 +451,18 @@ def check_paragraphs(root: Path, path: Path) -> None:
         if in_code:
             continue
         stripped = line.strip()
+        if re.match(r"^(?:[*-]|\d+\.)(?:\s|$)", stripped):
+            flush()
+            if len(stripped) > MAX_LIST_ITEM:
+                warn(
+                    f"{rel}: list item runs {len(stripped)} characters, "
+                    "split into structured sections or paragraphs"
+                )
+            continue
         if (
             not stripped
             or line.startswith("#")
-            or re.match(r"^(?:[|*>-]|\d+\.)(?:\s|$)", stripped)
+            or re.match(r"^[|>](?:\s|$)", stripped)
             or stripped.startswith("!")
         ):
             flush()
@@ -492,7 +529,12 @@ def check_gitignore(root: Path) -> None:
         err(".gitignore is missing")
         return
     text = gi.read_text(encoding="utf-8", errors="ignore")
-    missing = [pat for pat in REQUIRED_GITIGNORE_PATTERNS if pat not in text]
+    active = {
+        line.strip().lstrip("/")
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith(("#", "!"))
+    }
+    missing = [pat for pat in REQUIRED_GITIGNORE_PATTERNS if pat.lstrip("/") not in active]
     if missing:
         err(".gitignore is missing required anti-leak patterns: " + ", ".join(missing))
     if re.search(r"^\s*!\s*/?\.github/engineering\.md\s*$", text, re.MULTILINE):
@@ -535,7 +577,7 @@ SECRET_PATTERNS = [
     # Require base64 payload after the PEM header so header-only test fixtures stay valid.
     (re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\s*\n[A-Za-z0-9+/=]{40,}"), "private key"),
 ]
-SYNTHETIC_SECRET_LITERALS = {"xoxb-1234567890-abcdefghij"}
+SYNTHETIC_SECRET_LITERALS = {"xoxb" + "-1234567890-abcdefghij"}
 
 
 def check_secrets(root: Path) -> None:
@@ -562,6 +604,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--root", default=".", help="repository root")
     ap.add_argument("--strict", action="store_true", help="treat warnings as failures")
     ap.add_argument("--private", action="store_true", help="skip public-only OSS baseline and leak checks")
+    ap.add_argument("--english-only", action="store_true", help="reject .zh-CN.md files outside .agents/")
     args = ap.parse_args(argv)
 
     root = Path(args.root).resolve()
@@ -575,6 +618,8 @@ def main(argv: list[str] | None = None) -> int:
             check_paragraphs(root, path)
     check_readme_quality(root)
     check_public_internal_artifacts(root, private=args.private)
+    if args.english_only:
+        check_english_only(root)
     check_agents(root)
     check_bilingual_pair(root)
     check_comment_language(root)

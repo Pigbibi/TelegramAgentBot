@@ -2,6 +2,7 @@
 
 This package contains the Telegram bot handlers split by functionality:
   - callback_data: Callback data constants (CB_* prefixes)
+  - callback_router: Domain callback handler implementations
   - message_queue: Per-user message queue management
   - message_sender: Safe message sending helpers with MarkdownV2 fallback
   - history: Message history pagination

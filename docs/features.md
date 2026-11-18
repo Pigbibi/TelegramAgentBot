@@ -39,11 +39,13 @@ The bot accepts:
 When a local agent session is working, a text message offers
 **Guide current turn**, **Queue next turn**, **Interrupt and send**, and
 **Cancel** actions when that runtime supports them. Guidance maps to each CLI's
-Enter behavior. Codex and Cursor next-turn input maps to native Tab; because
-Claude Code has no equivalent ordinary-text key, its next-turn action uses the
-durable AgentBot FIFO. `/steer <message>` and `/queue <message>` provide the
-same routing without the picker. If the agent becomes idle before the action is
-selected, the message safely starts a normal new turn.
+Enter behavior.
+
+Codex and Cursor next-turn input maps to native Tab; because Claude Code has no
+equivalent ordinary-text key, its next-turn action uses the durable AgentBot
+FIFO. `/steer <message>` and `/queue <message>` provide the same routing without
+the picker. If the agent becomes idle before the action is selected, the message
+safely starts a normal new turn.
 
 The Telegram command menu exposes common native commands including `/skills`,
 `/plugins`, `/status`, `/permissions`, `/mcp`, `/plan`, and `/init`. `/plugins`

@@ -49,6 +49,17 @@ tail -n 100 ~/.telegram-agent-bot/logs/telegram-agent-bot.err.log
 The service should run as the user who owns the agent CLI credentials, project
 files, tmux session, and transcript directory.
 
+### Optional screenshot fonts
+
+Terminal `/screenshot` rendering bundles `JetBrainsMono-Regular.ttf` for Latin
+and box-drawing output, and searches system and user font directories (such as
+`/usr/share/fonts`, `/System/Library/Fonts`, and `~/.local/share/fonts`) for
+CJK and symbol fonts before falling back to JetBrains Mono.
+
+On Debian/Ubuntu, install `fonts-noto-cjk` to render CJK characters in
+screenshots. Set `TELEGRAM_AGENT_BOT_CJK_FONT` or
+`TELEGRAM_AGENT_BOT_EMOJI_FONT` to override discovery with explicit font paths.
+
 ## macOS
 
 ```bash
@@ -125,10 +136,11 @@ messages in flight should still be allowed to settle first.
 
 If the tmux server itself was replaced, AgentBot deliberately does not reconnect
 a persisted `@window_id` to another window with the same display name. Run
-`telegram-agent-bot doctor` first. Restore the original tmux socket when
-possible; otherwise unbind the affected topic and explicitly resume or create
-the intended session. This prevents a stale topic from sending input to a new
-conversation with the same project name.
+`telegram-agent-bot doctor` first.
+
+Restore the original tmux socket when possible; otherwise unbind the affected
+topic and explicitly resume or create the intended session. This prevents a stale
+topic from sending input to a new conversation with the same project name.
 
 `runtime.sqlite3` stores topic routes, route generations, and transcript offsets.
 `state.json` stores window metadata and UI settings. Back up and restore both
@@ -142,6 +154,7 @@ message only if the agent did not receive it.
 An idle session may be paused to free VPS memory. The next topic message starts
 its agent CLI again with the saved session settings. The original topic stays
 bound if startup fails, so it can be retried without creating a new session.
+
 If AgentBot reports that the message was **not sent**, retry after checking the
 CLI in tmux. If it reports **submitted but unconfirmed**, check the agent
 transcript before sending the text again.
