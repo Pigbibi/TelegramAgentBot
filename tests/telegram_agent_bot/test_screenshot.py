@@ -12,6 +12,10 @@ from telegram_agent_bot import screenshot
 class TestFontDiscovery:
     def test_bundled_primary_font_exists(self) -> None:
         assert screenshot._PRIMARY_FONT_PATH.is_file()
+        assert sorted(p.name for p in screenshot._FONTS_DIR.iterdir()) == [
+            "JetBrainsMono-Regular.ttf",
+            "LICENSE-JetBrainsMono.txt",
+        ]
 
     def test_env_override_takes_precedence(self, tmp_path: Path) -> None:
         custom_cjk = tmp_path / "CustomCJK.otf"
