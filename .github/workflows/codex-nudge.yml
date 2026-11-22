@@ -7,7 +7,7 @@ name: Review request
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '15 2,14 * * *'
   workflow_dispatch:
 
 permissions:
@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Request
-        uses: Pigbibi/PrGovernance/pr-governance@70f8e8227338e3849c2e80c2e447357e60cb4959
+        uses: Pigbibi/PrGovernance/pr-governance@7fe2ee20a3ee144ea944619e1c56f7ed5edc9152
         env:
           GOVERNANCE_REVIEWERS_JSON: ${{ vars.GOVERNANCE_REVIEWERS_JSON }}
           GOVERNANCE_DISPATCH_MENTIONS_JSON: ${{ vars.GOVERNANCE_DISPATCH_MENTIONS_JSON }}
