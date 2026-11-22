@@ -46,9 +46,26 @@ target-version = ["py312"]
 target-version = "py312"
 
 [tool.ruff.lint]
-# Keep the pre-0.16 default rules explicit so Ruff upgrades do not silently
-# broaden the project's lint policy and break CI on unrelated legacy code.
-select = ["E4", "E7", "E9", "F"]
+# Keep core rules explicit and enforce bugbear + complexity <= 15 on new code.
+select = ["E4", "E7", "E9", "F", "B", "C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.per-file-ignores]
+# Frozen legacy complexity hotspots; new modules extracted from bot.py must stay <= 15.
+"src/telegram_agent_bot/bot.py" = ["C901"]
+"src/telegram_agent_bot/config.py" = ["C901"]
+"src/telegram_agent_bot/handlers/history.py" = ["C901"]
+"src/telegram_agent_bot/handlers/message_queue.py" = ["C901"]
+"src/telegram_agent_bot/handlers/status_polling.py" = ["C901"]
+"src/telegram_agent_bot/hook.py" = ["C901"]
+"src/telegram_agent_bot/screenshot.py" = ["C901"]
+"src/telegram_agent_bot/session.py" = ["C901"]
+"src/telegram_agent_bot/session_monitor.py" = ["C901"]
+"src/telegram_agent_bot/tmux_manager.py" = ["C901"]
+"src/telegram_agent_bot/transcript_parser.py" = ["C901"]
+"tests/*.py" = ["B", "C901"]
 
 [tool.pytest.ini_options]
 addopts = ["-p", "no:libtmux"]

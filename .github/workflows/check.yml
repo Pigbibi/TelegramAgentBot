@@ -30,6 +30,8 @@ jobs:
           uv run ruff format --check src/ tests/
       - name: Lint
         run: uv run pyright src/telegram_agent_bot/
+      - name: Architecture contract
+        run: PYTHONPATH=src uvx --from import-linter lint-imports
       - name: Test
         run: uv run pytest --tb=short -q
   test-summary:
