@@ -1,0 +1,16 @@
+[importlinter]
+root_package = telegram_agent_bot
+
+[importlinter:contract:core-independent-of-bot-handlers]
+name = Core config, utils, and backends do not import bot or handlers
+type = forbidden
+source_modules =
+    telegram_agent_bot.config
+    telegram_agent_bot.utils
+    telegram_agent_bot.backends
+forbidden_modules =
+    telegram_agent_bot.bot
+    telegram_agent_bot.handlers
+ignore_imports =
+    # Frozen legacy dependency; new imports from core/backends into handlers/bot are blocked.
+    telegram_agent_bot.session_monitor -> telegram_agent_bot.handlers.delivery_errors

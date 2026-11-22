@@ -86,8 +86,8 @@ async def _transcribe_google(ogg_data: bytes) -> str:
     data = response.json()
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except (KeyError, IndexError):
-        raise TranscriptionError("Google provider: empty transcription")
+    except (KeyError, IndexError) as exc:
+        raise TranscriptionError("Google provider: empty transcription") from exc
     if not text:
         raise TranscriptionError("Google provider: empty transcription")
     return text
